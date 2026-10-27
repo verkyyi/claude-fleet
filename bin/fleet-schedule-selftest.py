@@ -40,6 +40,16 @@ class ScheduleTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 self.schedule.validate(self.sup,dict(self.doc,**change))
         self.assertEqual(self.schedule.validate(self.sup,dict(self.doc,at='',cron='0 */2 * * 1-5')),12)
+    def test_agent_registry_and_runner_environment(self):
+        self.paths.log=self.tmp.name
+        for index,agent in enumerate(('claude','codex','')):
+            doc=dict(self.doc,revision=index+1,agent=agent)
+            svc=self.schedule.apply(self.sup,self.paths,'alice',doc)
+            self.assertEqual(svc.get('agent',''),agent)
+            entry=self.sup.task_entry(self.paths,svc,(1000,1000,self.tmp.name),'2026-10-27',1)
+            self.assertEqual(entry['env'].get('FLEET_TASK_AGENT',''),agent)
+        with self.assertRaises(ValueError):
+            self.schedule.apply(self.sup,self.paths,'alice',dict(self.doc,revision=4,agent='other'))
     def test_delete_preserves_entry_and_prevents_revival(self):
         self.schedule.apply(self.sup,self.paths,'alice',self.doc)
         dead=dict(self.doc,revision=2,deleted=True,enabled=False)
@@ -60,12 +70,15 @@ class ScheduleTests(unittest.TestCase):
         directory=pathlib.Path(self.tmp.name)/'alice/services'
         directory.mkdir(parents=True)
         old={'name':'daily','login':'alice','kind':'task','state':'stopped','prompt':self.doc['prompt'],
-             'schedule':{'at':'07:00','tz':'Asia/Shanghai'},'done_when':{'file':'~/daily.done'}}
+             'schedule':{'at':'07:00','tz':'Asia/Shanghai'},'done_when':{'file':'~/daily.done'},'agent':'claude'}
         (directory/'daily.json').write_text(json.dumps(old))
         doc=dict(self.doc,entry='daily')
+        with self.assertRaises(ValueError):self.schedule.apply(self.sup,self.paths,'alice',doc)
+        doc['agent']='claude'
         svc=self.schedule.apply(self.sup,self.paths,'alice',doc)
         self.assertEqual(svc['name'],'daily')
         self.assertEqual(svc['done_when'],old['done_when'])
+        self.assertEqual(svc['agent'],'claude')
         self.assertEqual(len(list(directory.glob('*.json'))),1)
         with self.assertRaises(ValueError):self.schedule.apply(self.sup,self.paths,'alice',dict(doc,id='schedule-other'))
     def test_managed_window_matches_runner_id(self):
@@ -77,9 +90,9 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(entry['window'],want)
     def test_paused_deferred_attempt_uses_frozen_spec(self):
         from unittest.mock import patch
-        svc=self.schedule.apply(self.sup,self.paths,'alice',self.doc)
+        svc=self.schedule.apply(self.sup,self.paths,'alice',dict(self.doc,agent='claude'))
         ts={'state':'waiting','managed_snapshot':svc,'next_try':0,'slot':'2026-10-27','attempt':1}
-        paused=dict(svc,state='stopped',managed_schedule=dict(self.doc,revision=2,enabled=False))
+        paused=dict(svc,state='stopped',agent='codex',managed_schedule=dict(self.doc,revision=2,enabled=False,agent='codex'))
         daemon=self.sup.Supervisor.__new__(self.sup.Supervisor)
         daemon.p=self.paths;daemon.state={'agent_tasks':{'alice/schedule-abc':ts}};daemon.agent_running={}
         seen=[]
@@ -113,6 +126,10 @@ class FinalTests(unittest.TestCase):
 
 class RunnerTests(unittest.TestCase):
     def test_finish_outage_replays_upload_without_spawning(self):
+        for agent in ('', 'claude', 'codex'):
+            with self.subTest(agent=agent):self.check_replay(agent)
+
+    def check_replay(self,agent):
         import json,os,time,subprocess
         from unittest.mock import patch,Mock
         run=module('fleet_schedule_run')
@@ -120,7 +137,7 @@ class RunnerTests(unittest.TestCase):
             home=pathlib.Path(d)
             script=home/'.claude/fleet/bin/dash-raw-session.sh'
             script.parent.mkdir(parents=True);script.touch();script.chmod(0o700)
-            env={'FLEET_CONF_DIR':d,'FLEET_TASK_FLEET':'test','FLEET_MANAGED_SCHEDULE':json.dumps({'id':'schedule-a','revision':1}),
+            env={'FLEET_CONF_DIR':d,'FLEET_TASK_FLEET':'test','FLEET_MANAGED_SCHEDULE':json.dumps({'id':'schedule-a','revision':1,'agent':agent}),
                  'FLEET_MANAGED_SLOT':'manual-one','FLEET_TASK_ATTEMPT':'1','FLEET_TASK_PROMPT':'summary'}
             calls=[];fail=[True]
             def http(path,body):
@@ -131,6 +148,9 @@ class RunnerTests(unittest.TestCase):
             with patch.dict(os.environ,env),patch.object(run.Path,'home',return_value=home),patch.object(run,'http',side_effect=http),patch.object(run,'attempt_window',return_value=''),patch.object(run.subprocess,'run',spawn),patch.object(run,'native',return_value={'fid':'fid','sid':'sid','state':'idle','path':'p'}),patch.object(run,'conclusion',return_value='the final answer'),patch.object(run,'busy',return_value=False):
                 with self.assertRaises(run.Unreachable):run.run()
                 self.assertEqual(spawn.call_count,1)
+                argv=spawn.call_args.args[0]
+                if agent:self.assertEqual(argv[argv.index('--agent')+1],agent)
+                else:self.assertNotIn('--agent',argv)
                 fail[0]=False
                 self.assertEqual(run.run(),0)
                 self.assertEqual(spawn.call_count,1)

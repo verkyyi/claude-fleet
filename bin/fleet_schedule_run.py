@@ -152,6 +152,7 @@ def run():
             # cause a second session, even if stdout was lost or renamed.
             rec.update(launch_intent=True,started=ans['started'],fid=str(uuid.uuid5(uuid.NAMESPACE_URL,doc['id']+':'+slot+':'+str(attempt))));atomic(local,rec)
             args=[str(spawn),'--origin','hub','--reap-origin','probe','--reap','done:15m','--print','--fid',rec['fid'],'--name',name,'--prompt',os.environ['FLEET_TASK_PROMPT']]
+            if doc.get('agent'):args+=['--agent',doc['agent']]
             args+=['--repo',doc['repo']] if doc.get('repo') else ['--no-repo']
             try:
                 p=subprocess.run(args+[session],text=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=120)

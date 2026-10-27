@@ -10,7 +10,7 @@ import os
 import re
 
 ID = re.compile(r'^schedule-[a-z0-9-]{1,38}$')
-FIELDS = {'id','revision','name','prompt','at','cron','timezone','enabled','deleted','delivery','repo','entry'}
+FIELDS = {'id','revision','name','prompt','at','cron','timezone','enabled','deleted','delivery','repo','entry','agent'}
 
 def validate(sup, doc):
     if not isinstance(doc, dict) or set(doc) - FIELDS:
@@ -25,6 +25,8 @@ def validate(sup, doc):
             raise ValueError('invalid '+field)
     if type(doc.get('enabled')) is not bool or type(doc.get('deleted')) is not bool:
         raise ValueError('enabled and deleted must be booleans')
+    if doc.get('agent','') not in ('','claude','codex'):
+        raise ValueError('agent must be claude or codex (empty uses fleet default)')
     delivery=doc.get('delivery') or {}
     if not isinstance(delivery,dict) or set(delivery)-{'wechat','livepage'} or any(type(v) is not bool for v in delivery.values()):
         raise ValueError('invalid delivery')
@@ -59,6 +61,8 @@ def apply(sup, paths, login, doc):
                 raise ValueError('pause the existing task and wait for its run to finish before adopting')
             if old.get('prompt')!=doc['prompt'] or sup.task_cron(old.get('schedule'))!=sup.task_cron({'at':doc['at']} if doc.get('at') else {'cron':doc['cron']}) or (old.get('schedule') or {}).get('tz')!=doc['timezone']:
                 raise ValueError('adoption must preserve the existing prompt, recurrence and timezone')
+            if old.get('agent','')!=doc.get('agent',''):
+                raise ValueError('adoption must preserve the existing agent')
         if not old and doc.get('entry'):raise ValueError('existing task not found in this login')
         if previous:
             if previous['id']!=doc['id']:raise ValueError('existing task is already managed')
@@ -73,7 +77,7 @@ def apply(sup, paths, login, doc):
         sched['at' if doc.get('at') else 'cron']=doc.get('at') or doc.get('cron')
         now=sup.task_clock()
         svc=dict(old or {},name=name,login=login,kind='task',exec=None,
-                 prompt=doc['prompt'],schedule=sched,managed_schedule=doc,
+                 prompt=doc['prompt'],agent=doc.get('agent',''),schedule=sched,managed_schedule=doc,
                  state='enabled' if doc['enabled'] and not doc['deleted'] else 'stopped',
                  retries=2,retry_delay=300,timeout=3600,idle=600,changed=now,
                  added=(old or {}).get('added',now))

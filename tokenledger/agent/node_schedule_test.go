@@ -17,7 +17,7 @@ func TestScheduleLaneAndStdin(t *testing.T) {
 	seen := filepath.Join(d, "seen")
 	_ = os.WriteFile(script, []byte("import sys,json\nopen("+quoted(seen)+",'w').write(json.dumps({'argv':sys.argv[1:],'body':json.load(sys.stdin)}))\nprint('{}')\n"), 0600)
 	a := &Agent{cfg: Config{RunAs: &RunAs{Login: "alice"}, ServiceCtl: script}}
-	spec := schedule.Spec{ID: "schedule-test", Revision: 1, Name: "daily", Prompt: "do not put me in argv", At: "07:00", Timezone: "Asia/Shanghai", Enabled: true}
+	spec := schedule.Spec{ID: "schedule-test", Revision: 1, Name: "daily", Prompt: "do not put me in argv", Agent: "claude", At: "07:00", Timezone: "Asia/Shanghai", Enabled: true}
 	send := func(login string) string {
 		env, _ := json.Marshal(map[string]any{"operation_id": "op1", "action": "schedule_control", "params": map[string]any{"login": login, "action": "apply", "schedule": spec}})
 		m, _ := control.New(control.TypeWrite, control.Request{Method: "submit", Params: env})
@@ -47,6 +47,13 @@ func TestScheduleLaneAndStdin(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), spec.Prompt) {
 		t.Fatal("prompt did not travel on stdin")
+	}
+	if got.Body["schedule"].(map[string]any)["agent"] != "claude" {
+		t.Fatal("node dropped the selected agent", got.Body)
+	}
+	spec.Agent = "other"
+	if out := send("alice"); !strings.Contains(out, "failed") {
+		t.Fatal(out)
 	}
 }
 func quoted(s string) string { b, _ := json.Marshal(s); return string(b) }

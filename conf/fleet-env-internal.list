@@ -692,6 +692,7 @@ FLEET_SERVICE                      handoff: the register entry's name, set by co
 FLEET_MANAGED_SCHEDULE             handoff: owner-scoped schedule definition frozen for the daemon attempt; no credentials (T1121)
 FLEET_MANAGED_SLOT                 handoff: the daemon occurrence epoch or authorized manual id for durable admission (T1121)
 FLEET_TASK_PROMPT                  handoff: an agent task's prompt ({date} filled), com.claude-fleet.node → fleet-task-run.sh (#2529)
+FLEET_TASK_AGENT                   handoff: scheduled agent claude/codex, empty = fleet default; daemon → runner → spawner --agent
 FLEET_TASK_WINDOW                  handoff: the session's window name for this attempt (-<n> on a retry), daemon → fleet-task-run.sh (#2529)
 FLEET_TASK_DONE_FILE               handoff: done_when.file, the output a run must leave (empty = opening the session is success), daemon → fleet-task-run.sh (#2529)
 FLEET_TASK_TIMEOUT                 handoff: the entry's timeout (s) for a run with a done file, daemon → fleet-task-run.sh (#2529)

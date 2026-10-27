@@ -8,7 +8,7 @@ import { lang, tr } from "@/shared/i18n";
 import { getJSON, sendJSON } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
 
-type Spec = { id: string; revision: number; name: string; prompt: string; at?: string; cron?: string; timezone: string; enabled: boolean; deleted: boolean; delivery: { wechat: boolean; livepage: boolean }; repo?: string };
+type Spec = { id: string; revision: number; name: string; prompt: string; agent?: "" | "claude" | "codex"; at?: string; cron?: string; timezone: string; enabled: boolean; deleted: boolean; delivery: { wechat: boolean; livepage: boolean }; repo?: string };
 type Row = { spec: Spec; sync_state: string; sync_note: string; observed: { status?: string; last_run?: number; next_run?: number; last_result?: string; last_line?: string; last_error?: string; stale?: boolean } };
 type Run = { id: string; state: string; started: number; ended: number; summary: string; error: string; delivery: { wechat?: string; wechat_channel?: string; livepage?: string; url?: string }; session_id: string };
 type Reply = { schedule?: Row; runs?: Run[] };
@@ -63,7 +63,7 @@ export default function SchedulesPage() {
   useEffect(() => { setRuns(null); void readRuns(); const timer = setInterval(() => { if (!document.hidden) void readRuns(); }, 15000); return () => clearInterval(timer); }, [readRuns]);
   async function act(action: string, spec: Spec) {
     if (busy || readOnly) return;
-    const body = action === "create" || action === "update" ? { action, ...(spec.id ? { id: spec.id, revision: spec.revision } : {}), name: spec.name, prompt: spec.prompt, ...(spec.cron ? { cron: spec.cron } : { at: spec.at }), timezone: spec.timezone, delivery: spec.delivery, repo: spec.repo ?? "" } : { action, id: spec.id, revision: spec.revision };
+    const body = action === "create" || action === "update" ? { action, ...(spec.id ? { id: spec.id, revision: spec.revision } : {}), name: spec.name, prompt: spec.prompt, agent: spec.agent ?? "", ...(spec.cron ? { cron: spec.cron } : { at: spec.at }), timezone: spec.timezone, delivery: spec.delivery, repo: spec.repo ?? "" } : { action, id: spec.id, revision: spec.revision };
     const signature = JSON.stringify(body);
     if (!idem.current || idem.current.signature !== signature) idem.current = { signature, key: crypto.randomUUID() };
     setBusy(true); setError("");
@@ -81,6 +81,7 @@ export default function SchedulesPage() {
       <h2 className="font-semibold">{edit.id ? tr("编辑任务", "Edit schedule") : tr("新建任务", "New schedule")}</h2>
       <label className="block space-y-1"><span>{tr("名称", "Name")}</span><Input required maxLength={120} value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></label>
       <label className="block space-y-1"><span>{tr("要做什么", "What should it do?")}</span><Textarea required maxLength={16000} rows={4} value={edit.prompt} onChange={e => setEdit({ ...edit, prompt: e.target.value })} /></label>
+      <label className="block space-y-1"><span>{tr("Agent 类型", "Agent type")}</span><select className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={edit.agent ?? ""} onChange={e => setEdit({ ...edit, agent: e.target.value as Spec["agent"] })}><option value="">{tr("跟随 fleet 默认", "Fleet default")}</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
       <div className="grid gap-3 sm:grid-cols-2"><label className="block space-y-1"><span>{tr("每天的时间", "Daily time")}</span><Input type="time" disabled={!!edit.cron} value={edit.at ?? "07:00"} onChange={e => setEdit({ ...edit, at: e.target.value })} /></label><label className="block space-y-1"><span>{tr("时区", "Timezone")}</span><Input required value={edit.timezone} onChange={e => setEdit({ ...edit, timezone: e.target.value })} /></label></div>
       <details><summary className="cursor-pointer py-2 text-sm">{tr("自定义重复时间", "Custom recurrence")}</summary><label className="block space-y-1"><span className="text-sm">{tr("五段 cron，留空则每天运行", "Five-field cron; leave empty for daily")}</span><Input value={edit.cron ?? ""} placeholder="0 7 * * 1-5" onChange={e => setEdit({ ...edit, cron: e.target.value })} /></label></details>
       <p className="text-sm">{edit.cron || tr("每天", "Every day") + " " + edit.at} · {edit.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : edit.timezone}</p>
@@ -95,6 +96,7 @@ export default function SchedulesPage() {
     {rows === null ? <p role="status">{tr("正在读取…", "Loading…")}</p> : rows.length === 0 ? <div className={panel}><h2 className="font-semibold">{tr("创建第一个定时任务", "Create your first schedule")}</h2><p>{tr("例如：每天早上 7 点整理群日报。首次使用会自动准备你的运行环境。", "For example: summarize the group chat every morning at 7. Your runtime is prepared automatically.")}</p></div> : rows.map(row => { const s = row.spec; const o = row.observed; const state = row.sync_state !== "synced" ? "pending" : !s.enabled ? "stopped" : o.status ?? "scheduled"; return <article className={panel} key={s.id}>
       <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold">{s.name}</h2><span className={state === "failed" ? "text-destructive" : "text-muted-foreground"}>{words[state] ?? state}</span></div>
       <p className="text-sm">{s.cron || tr("每天", "Daily") + " " + s.at} · {s.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : s.timezone}</p>
+      <p className="text-sm">{tr("Agent 类型", "Agent type")}: {s.agent === "claude" ? "Claude" : s.agent === "codex" ? "Codex" : tr("跟随 fleet 默认", "Fleet default")}</p>
       <p className="text-sm">{tr("上次", "Last")}: {date(o.last_run, s.timezone)} · {tr("下次", "Next")}: {date(s.enabled ? o.next_run : undefined, s.timezone)}</p>
       {o.stale && <p className="text-sm text-muted-foreground">{tr("运行状态尚未更新，显示上次记录。", "Runtime status is stale; showing the last observation.")}</p>}
       {(row.sync_note || o.last_error || o.last_line) && <p className="break-words text-sm text-muted-foreground">{row.sync_note || o.last_error || o.last_line}</p>}

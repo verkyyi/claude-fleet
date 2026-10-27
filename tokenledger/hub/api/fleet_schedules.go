@@ -28,6 +28,7 @@ type scheduleRequest struct {
 	Revision int64              `json:"revision,omitempty"`
 	Name     *string            `json:"name,omitempty"`
 	Prompt   *string            `json:"prompt,omitempty"`
+	Agent    *string            `json:"agent,omitempty"`
 	At       *string            `json:"at,omitempty"`
 	Cron     *string            `json:"cron,omitempty"`
 	Timezone *string            `json:"timezone,omitempty"`
@@ -247,6 +248,9 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 	if in.Prompt != nil {
 		row.Spec.Prompt = *in.Prompt
 	}
+	if in.Agent != nil {
+		row.Spec.Agent = *in.Agent
+	}
 	if in.At != nil {
 		row.Spec.At = *in.At
 		row.Spec.Cron = ""
@@ -351,10 +355,10 @@ func (s *Server) scheduleTarget(ctx context.Context, row store.Schedule) (store.
 		return store.FleetRow{}, errors.New("schedule login no longer belongs to you")
 	}
 	if c := s.nodes.get(row.Endpoint); c != nil {
-		if !c.canSchedule {
+		if !c.canSchedule || (row.Spec.Agent != "" && !c.canScheduleAgent) {
 			return store.FleetRow{}, errors.New("runtime upgrade pending")
 		}
-	} else if peer, ok := s.peerOf(ctx, row.Endpoint); !ok || !peer.HasCap(schedule.Capability) {
+	} else if peer, ok := s.peerOf(ctx, row.Endpoint); !ok || !peer.HasCap(schedule.Capability) || (row.Spec.Agent != "" && !peer.HasCap(schedule.AgentCapability)) {
 		return store.FleetRow{}, errors.New("runtime offline or upgrade pending")
 	}
 	return store.FleetRow{EndpointID: row.Endpoint, Hostname: row.Hostname, OSUser: row.Login, Present: true}, nil

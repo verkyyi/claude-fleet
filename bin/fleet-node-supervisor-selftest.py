@@ -2485,6 +2485,32 @@ class K_AgentTasks(Sandbox):
         self.assertTrue(until(10, lambda: len(self.ncalls()) == 2), self.ncalls())
         self.assertIn("--name|daily-2026-10-11|", self.ncalls()[1])
 
+    def test_agent_choice_front_registry_daemon_and_reschedule(self):
+        front = lambda *args: self.front("fleet-task.sh", "alice", *args)
+        args = ("add", "daily", "--at", "07:00", "--tz", "UTC", "--fleet", "fns-sandbox", "--prompt", "hi",
+                "--env", "FLEET_TASK_SPAWN=%s" % self.spawner, "--env", "CALLS=%s" % self.calls,
+                "--env", "FLEET_AGENT=codex")
+        self.assertEqual(front(*(args + ("--agent", "invalid"))).returncode, 2)
+        r = front(*(args + ("--agent", "claude")))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.row()["agent"], "claude")
+        self.start()
+        self.set_clock("07:00:05")
+        self.assertTrue(until(10, lambda: self.agent().get("state") == "ok"), self.agent())
+        self.assertIn("--agent|claude|", self.ncalls()[0])
+        self.assertIn("Agent claude", front("ls").stdout)
+        self.assertEqual(front("schedule", "daily", "--agent", "invalid").returncode, 2)
+        self.assertEqual(self.row()["agent"], "claude")
+        r = front("schedule", "daily", "--agent", "codex")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.row()["schedule"], {"at":"07:00", "tz":"UTC"})
+        r = front("schedule", "daily", "--at", "08:00")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.row()["agent"], "codex", "schedule edit lost the explicit agent")
+        self.set_clock("08:00:05")
+        self.assertTrue(until(10, lambda: len(self.ncalls()) == 2), self.ncalls())
+        self.assertIn("--agent|codex|", self.ncalls()[1])
+
     def test_failures_exhaust_then_alert(self):
         self.spawner_rc(2)        # at capacity, every time
         self.assertEqual(self.add("--retries", "1", "--retry-delay", "0").returncode, 0)

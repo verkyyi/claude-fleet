@@ -17,6 +17,7 @@ const MaxTasks = 10
 const MaxDailySlots = 24
 const MaxDailyStarts = 30
 const Capability = "schedule_v1"
+const AgentCapability = "schedule_agent_v1"
 
 type Delivery struct {
 	WeChat   bool `json:"wechat"`
@@ -27,6 +28,7 @@ type Spec struct {
 	Revision int64    `json:"revision"`
 	Name     string   `json:"name"`
 	Prompt   string   `json:"prompt"`
+	Agent    string   `json:"agent,omitempty"`
 	At       string   `json:"at,omitempty"`
 	Cron     string   `json:"cron,omitempty"`
 	Timezone string   `json:"timezone"`
@@ -91,6 +93,9 @@ func field(s string, lo, hi int) ([]int, error) {
 // Validate returns a conservative per-day slot reservation. Calendar restrictions
 // do not buy extra burst capacity; all tasks together reserve at most 24/day.
 func Validate(s Spec) (int, error) {
+	if s.Agent != "" && s.Agent != "claude" && s.Agent != "codex" {
+		return 0, errors.New("agent must be claude or codex (empty uses fleet default)")
+	}
 	if !ID.MatchString(s.ID) || s.Revision < 1 {
 		return 0, errors.New("invalid id or revision")
 	}

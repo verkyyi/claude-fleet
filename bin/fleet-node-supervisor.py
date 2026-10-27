@@ -2204,6 +2204,8 @@ def task_time(t, sched):
 
 def task_check(svc):
     """Why a `kind: task` entry is not a valid one, or None."""
+    if svc.get("agent", "") not in ("", "claude", "codex"):
+        return "agent must be claude or codex (omit for fleet default)"
     if not isinstance(svc.get("prompt"), str) or not svc["prompt"].strip():
         return "a task needs a prompt"
     sched = svc.get("schedule")
@@ -2257,7 +2259,8 @@ def task_entry(paths, svc, ident, day, attempt, manual=None, slot_t=None):
              FLEET_CONF_DIR=os.path.join(home, ".config", "claude-fleet"),
              FLEET_TASK_PROMPT=task_fill(svc["prompt"], day), FLEET_TASK_WINDOW=win, FLEET_TASK_DONE_FILE=done,
              FLEET_TASK_TIMEOUT=str(svc.get("timeout") or 3600), FLEET_TASK_IDLE=str(svc.get("idle") or 600),
-             FLEET_TASK_FLEET=svc.get("fleet") or "", FLEET_TASK_ATTEMPT=str(attempt), FLEET_TASK_SLOT=day)
+             FLEET_TASK_FLEET=svc.get("fleet") or "", FLEET_TASK_AGENT=svc.get("agent") or "",
+             FLEET_TASK_ATTEMPT=str(attempt), FLEET_TASK_SLOT=day)
     if svc.get("managed_schedule"):
         e["FLEET_MANAGED_SCHEDULE"] = json.dumps(svc["managed_schedule"])
         e["FLEET_MANAGED_SLOT"] = str(manual) if manual else str(int(slot_t or 0))
@@ -2300,6 +2303,7 @@ def task_summary(paths, svc, ts):
         if st == "interrupted":
             st = "running"
     return {"status": st, "schedule": sched, "when": task_when(sched), "prompt": svc["prompt"][:SVC_LINE_MAX],
+            "agent": svc.get("agent") or "",
             "window": svc.get("window") or svc["name"] + "-{date}", "retries": svc.get("retries", 2),
             "done_when": svc.get("done_when"), "notify": svc.get("notify"),
             "last_run": ts.get("last_run"), "last_end": ts.get("last_end"), "last_result": ts.get("last_result"),
@@ -8473,6 +8477,10 @@ def task_opts(opts, one):
     out = {"kind": "task", "exec": None, "prompt": one("--prompt") or "", "schedule": sched,
            "retries": 2 if num("--retries") is None else num("--retries"),
            "window": one("--window") or None}
+    if "--agent" in opts:
+        if one("--agent") not in ("claude", "codex"):
+            raise ValueError("--agent must be claude or codex")
+        out["agent"] = one("--agent")
     for flag, key in (("--retry-delay", "retry_delay"), ("--timeout", "timeout"), ("--idle", "idle")):
         if num(flag) is not None:
             out[key] = num(flag)
@@ -8490,9 +8498,9 @@ SERVICE_USAGE = ("usage: fleet-node-supervisor.py service add --login L --name N
                  "[--cred C]… [--path P]… -- <exec> [args…]\n"
                  "       fleet-node-supervisor.py service add --kind task --login L --name N --prompt P "
                  "(--at HH:MM | --cron 'm h dom mon dow') [--tz Z] [--retries N] [--retry-delay S] [--window W] "
-                 "[--done-file F] [--timeout S] [--idle S] [--fleet F] [--bark C] [--env K=V]… [--cred C]…\n"
+                 "[--done-file F] [--timeout S] [--idle S] [--fleet F] [--agent claude|codex] [--bark C] [--env K=V]… [--cred C]…\n"
                  "       fleet-node-supervisor.py service rm|stop|start|restart|run --login L --name N\n"
-                 "       fleet-node-supervisor.py service schedule --login L --name N (--at HH:MM | --cron '…') [--tz Z]\n"
+                 "       fleet-node-supervisor.py service schedule --login L --name N [--at HH:MM | --cron '…'] [--tz Z] [--agent claude|codex]\n"
                  "       fleet-node-supervisor.py service move --login L --name N --to L2\n"
                  "       fleet-node-supervisor.py service ensure --login L --name webchat [--wait TRIES]\n"
                  "       fleet-node-supervisor.py service drop-fleet --login L [--dry-run]   (its on-demand entries only)\n"
@@ -8567,8 +8575,9 @@ def service_cli(paths, rest):
         for r in rows:
             if r.get("kind") == "task":
                 sc = r.get("schedule") or {}
-                print("%-24s %-9s %s · 上次 %s %s · 下次 %s%s" % (
+                print("%-24s %-9s %s · Agent %s · 上次 %s %s · 下次 %s%s" % (
                     "%s/%s" % (r["login"], r["name"]), r["status"], r.get("when") or task_when(sc),
+                    r.get("agent") or "fleet 默认",
                     task_time(r.get("last_run"), sc), r.get("last_result") or "-", task_time(r.get("next_run"), sc),
                     ("  · %s" % r["last_error"]) if r.get("last_error") and r["status"] in ("failed", "retrying")
                     else ""))
@@ -8695,16 +8704,25 @@ def service_cli(paths, rest):
             print("fleet-node-supervisor: %s/%s is a service — only a task has a schedule" % (login, name),
                   file=sys.stderr)
             return 2
-        if not (one("--at") or one("--cron")):
+        if not (one("--at") or one("--cron") or "--agent" in opts):
             print(SERVICE_USAGE, file=sys.stderr)
             return 2
-        sched = {"at": one("--at")} if one("--at") else {"cron": one("--cron")}
+        sched = dict(svc["schedule"])
+        if one("--at") or one("--cron"):
+            sched = {"at": one("--at")} if one("--at") else {"cron": one("--cron")}
+        if "--agent" in opts:
+            if one("--agent") not in ("claude", "codex"):
+                print("fleet-node-supervisor: --agent must be claude or codex", file=sys.stderr)
+                return 2
+            svc["agent"] = one("--agent")
         tz = one("--tz") if "--tz" in opts else (svc.get("schedule") or {}).get("tz")
         if tz:
             sched["tz"] = tz
         if one("--at") and one("--cron"):
             sched["cron"] = one("--cron")      # task_check refuses both
-        svc.update(schedule=sched, rescheduled=task_clock(), changed=now())
+        if one("--at") or one("--cron"):
+            svc["rescheduled"] = task_clock()
+        svc.update(schedule=sched, changed=now())
         why = service_check(svc, login, name)
         if why:
             print("fleet-node-supervisor: %s" % why, file=sys.stderr)

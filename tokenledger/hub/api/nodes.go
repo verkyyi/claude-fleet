@@ -180,8 +180,9 @@ type nodeConn struct {
 	tokHash string
 	// canServiceLog is the hello's CapServiceLog: this machine program's lane
 	// reads its login's service logs (claude-fleet#2797).
-	canServiceLog bool
-	canSchedule   bool
+	canServiceLog    bool
+	canSchedule      bool
+	canScheduleAgent bool
 	// userPod is a machine link that is one person's pod (CapUserPod,
 	// claude-fleet#3550).
 	userPod bool
@@ -662,14 +663,15 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canPreview: hp.HasCap(control.CapPreview), canChat: hp.HasCap(control.CapChat), canTerm: hp.HasCap(control.CapTerm), tokHash: tokHash, canSvcRun: hp.HasCap(control.CapSvcRun),
 		canTeam: hp.HasCap(control.CapTeam), canPerson: hp.HasCap(control.CapPerson), canEntryKeys: hp.HasCap(control.CapEntryKeys), canRelease: hp.HasCap(control.CapRelease), canAttach: hp.HasCap(control.CapAttach),
 		canTest: hp.HasCap(control.CapTestIdentity), canTask: hp.HasCap(control.CapTask), canTaskExecution: hp.HasCap(control.CapTaskExecution), canTaskContinuation: hp.HasCap(control.CapTaskContinuation), canRepoAuthority: hp.HasCap(control.CapRepoAuthority), canCreds: hp.HasCap(control.CapCreds),
-		canCredsep:     hp.HasCap(control.CapCredsep),
-		canLoginJoin:   hp.HasCap(control.CapLoginJoin),
-		canRecycle:     hp.HasCap(control.CapRecycle),
-		canRecycleKeep: hp.HasCap(control.CapRecycleKeep),
-		adminSeat:      hp.HasCap(control.CapAdminSeat),
-		canServiceLog:  hp.HasCap(control.CapServiceLog),
-		canSchedule:    hp.HasCap("schedule_v1"),
-		computeOff:     !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
+		canCredsep:       hp.HasCap(control.CapCredsep),
+		canLoginJoin:     hp.HasCap(control.CapLoginJoin),
+		canRecycle:       hp.HasCap(control.CapRecycle),
+		canRecycleKeep:   hp.HasCap(control.CapRecycleKeep),
+		adminSeat:        hp.HasCap(control.CapAdminSeat),
+		canServiceLog:    hp.HasCap(control.CapServiceLog),
+		canSchedule:      hp.HasCap("schedule_v1"),
+		canScheduleAgent: hp.HasCap("schedule_agent_v1"),
+		computeOff:       !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
 		userPod:           hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
 		clusterOps:        hp.HasCap(control.CapClusterOps),
