@@ -111,9 +111,15 @@ const (
 	SessionCredOff = "session_cred_off"
 )
 
-// sessionCredProviders are what a pass can cover: the subscriptions. GitHub
-// stays each person's own login (EPIC #1967 «这批不做»).
-var sessionCredProviders = []string{credvault.Claude, credvault.Codex}
+// sessionCredProviders are what a pass can cover: the subscriptions, and a
+// DeepSeek API key (task J7BN — Claude Code pointed at DeepSeek's
+// Anthropic-compatible API through the cluster proxy). GitHub stays each
+// person's own login (EPIC #1967 «这批不做»).
+var sessionCredProviders = []string{credvault.Claude, credvault.Codex, credvault.DeepSeek}
+
+// nodeAgentNames are the coding agents a node may start: DeepSeek is not
+// one — its sessions are Claude Code — so the pickers never list it.
+var nodeAgentNames = []string{credvault.Claude, credvault.Codex}
 
 // sessionCredClaims is a pass's signed content.
 type sessionCredClaims struct {

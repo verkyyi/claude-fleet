@@ -32,6 +32,10 @@
 # Hermetic: a temp bin with the real script + lib symlinked, its own fleet.conf and
 # FLEET_CONF_DIR, and fake `claude` / `tmux` / `fleet-account.sh` on PATH. No tmux
 # server, no network, no real config touched. Exit 0 = pass.
+#
+#   J7BN — FLEET_MODEL deepseek / deepseek-pro: bin/fleet-claude.sh asks
+#          bin/fleet-session-cred.sh for a deepseek (central) pass and points Claude
+#          Code at the credential proxy's /deepseek road; no proxy ⇒ refused.
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -378,5 +382,57 @@ argv="$( (export FLEET_MCP=0; run) )"
 case "$argv" in *--mcp-config*) st_fail "#1807 FLEET_MCP=0 still mounted it" "$argv" ;; esac
 [ "$(cat "$WORK/mcpenv")" = "|" ] || st_fail "#1807 FLEET_MCP=0 still exported the mount env" "$(cat "$WORK/mcpenv")"
 st_pass "#1807 a caller's own MCP flag or FLEET_MCP=0: nothing mounted, nothing exported"
+
+# --- J7BN: a DeepSeek model profile (FLEET_MODEL deepseek / deepseek-pro) --------
+# Claude Code on DeepSeek's Anthropic-compatible API, through the credential proxy's
+# /deepseek road: the mint asks fleet-session-cred.sh for --provider deepseek (a hub
+# pass — central only), the base URL ends in /deepseek, every tier is a DeepSeek
+# model, no --model reaches claude; without the proxy it refuses with one line.
+cat > "$WORK/bin/fleet-session-cred.sh" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$WORK/mintargs"
+printf 'central\t4321\tfcp-h2.fake.pass\n'
+EOF
+chmod +x "$WORK/bin/fleet-session-cred.sh"
+cp "$WORK/fakebin/claude" "$WORK/claude.before"
+cat > "$WORK/fakebin/claude" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" > "$WORK/argv"
+env | grep -E '^(ANTHROPIC_|CLAUDE_CODE_(OAUTH_TOKEN|SUBAGENT_MODEL|AUTO_COMPACT_WINDOW|DISABLE_NONESSENTIAL_TRAFFIC)=)' | sort > "$WORK/env"
+exit 0
+EOF
+for prof in deepseek DeepSeek-Pro; do
+  printf 'FLEET_MODEL="%s"\n' "$prof" > "$WORK/conf/fleets/f1/conf"
+  rm -f "$WORK/env" "$WORK/mintargs"; : > "$WORK/tmuxlog"
+  # the first carries a caller's --model (a migrate's @cc_model) — ours, never claude's
+  ma=(); [ "$prof" = deepseek ] && ma=(--model deepseek)
+  argv="$( (export FLEET_CRED_SID=sid-ds; run ${ma[@]+"${ma[@]}"} /fleet-history) )"
+  case "$prof" in DeepSeek-Pro) m='deepseek-v4-pro[1m]' p=deepseek-pro ;; *) m='deepseek-flash[1m]' p=deepseek ;; esac
+  want="ANTHROPIC_BASE_URL=http://127.0.0.1:4321/deepseek
+ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-flash
+ANTHROPIC_DEFAULT_OPUS_MODEL=$m
+ANTHROPIC_DEFAULT_SONNET_MODEL=$m
+ANTHROPIC_MODEL=$m
+CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+CLAUDE_CODE_OAUTH_TOKEN=fcp-h2.fake.pass
+CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash"
+  [ "$(cat "$WORK/env" 2>/dev/null)" = "$want" ] || st_fail "J7BN $prof: the launch env" "$(cat "$WORK/env" 2>/dev/null)"
+  case "$argv" in *--model*) st_fail "J7BN $prof: a --model reached claude" "$argv" ;; esac
+  has "$argv" "/fleet-history" || st_fail "J7BN $prof: the seed was lost" "$argv"
+  grep -q -- '--provider deepseek' "$WORK/mintargs" && ! grep -q -- '--account' "$WORK/mintargs" \
+    || st_fail "J7BN $prof: the mint did not ask for a deepseek pass" "$(cat "$WORK/mintargs" 2>/dev/null)"
+  grep -q "@cc_model $p" "$WORK/tmuxlog" || st_fail "J7BN $prof: @cc_model not stamped $p" "$(cat "$WORK/tmuxlog")"
+done
+st_pass "J7BN FLEET_MODEL deepseek / deepseek-pro: proxy /deepseek base URL, the hub pass, DeepSeek tiers, no --model"
+rm -f "$WORK/argv"
+out=$(printf 'FLEET_MODEL="deepseek"\n' > "$WORK/conf/fleets/f1/conf"
+      unset FLEET_CRED_SID FLEET_MODEL; bash "$WORK/bin/fleet-claude.sh" /fleet-history 2>&1 >/dev/null); rc=$?
+[ "$rc" = 1 ] && [ ! -e "$WORK/argv" ] && [ "$(printf '%s\n' "$out" | grep -c 'only through the credential proxy')" = 1 ] \
+  || st_fail "J7BN deepseek without the proxy must refuse with one line (rc=$rc)" "$out"
+st_pass "J7BN deepseek without the credential proxy: refused, one line, claude never started"
+rm -f "$WORK/bin/fleet-session-cred.sh"
+printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
+mv "$WORK/claude.before" "$WORK/fakebin/claude"
 
 printf 'selftest OK: %s checks — the launcher reads the per-fleet conf, honours FLEET_MCP_CONFIG, and pre-trusts the checkout (issues #472, #473, #476, #563)\n' "$pass"

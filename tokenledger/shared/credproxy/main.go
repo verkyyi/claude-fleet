@@ -29,6 +29,8 @@ import (
 //	--direct     CCQUOTA_CREDPROXY_DIRECT=1   no relay: straight to the providers
 //	--anthropic  CCQUOTA_CREDPROXY_ANTHROPIC_URL (with --direct)
 //	--codex      CCQUOTA_CREDPROXY_CODEX_URL     (with --direct)
+//	--deepseek   CCQUOTA_CREDPROXY_DEEPSEEK_URL  DeepSeek's Anthropic API (always direct, never the relay;
+//	             default https://api.deepseek.com/anthropic)
 //	--cache      CCQUOTA_CREDPROXY_CACHE      one hub answer's life (≤ 30s)
 //	--stale      CCQUOTA_CREDPROXY_STALE      how long to ride out a hub that cannot answer
 //	--session-pub CCQUOTA_CREDPROXY_SESSION_PUB fcp-h2's key (base64; default: the hub's answer)
@@ -57,6 +59,7 @@ func Main(version string, args []string) error {
 	direct := fs.Bool("direct", env("CCQUOTA_CREDPROXY_DIRECT", "") == "1", "send straight to the providers, not through the relay")
 	anth := fs.String("anthropic", env("CCQUOTA_CREDPROXY_ANTHROPIC_URL", ""), "Anthropic's API (with --direct)")
 	codex := fs.String("codex", env("CCQUOTA_CREDPROXY_CODEX_URL", ""), "Codex's API (with --direct)")
+	deepseek := fs.String("deepseek", env("CCQUOTA_CREDPROXY_DEEPSEEK_URL", ""), "DeepSeek's Anthropic API (always direct)")
 	cache := fs.Duration("cache", envDur("CCQUOTA_CREDPROXY_CACHE", MaxCacheTTL), "how long one hub answer is used (≤ 30s)")
 	stale := fs.Duration("stale", envDur("CCQUOTA_CREDPROXY_STALE", 15*time.Minute), "how long an answer outlives --cache while the hub cannot answer")
 	spub := fs.String("session-pub", env("CCQUOTA_CREDPROXY_SESSION_PUB", ""), "the key fcp-h2 passes are verified with (base64; default: learned from the hub)")
@@ -83,6 +86,7 @@ func Main(version string, args []string) error {
 		Direct:       *direct,
 		AnthropicURL: *anth,
 		CodexURL:     *codex,
+		DeepSeekURL:  *deepseek,
 		CacheTTL:     *cache,
 		StaleFor:     *stale,
 		Audit:        func(l string) { fmt.Fprintln(os.Stdout, l) },

@@ -97,7 +97,7 @@ func (s *Server) handleCredProxyResolve(w http.ResponseWriter, r *http.Request) 
 	var req credproxy.ResolveRequest
 	if err := readOptionalJSON(r, &req); err != nil || req.Cred == "" || !hasString(sessionCredProviders, req.Provider) {
 		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument",
-			"body must be {\"cred\": \"fcp-h1.…|fcp-h2.…\", \"provider\": \"claude|codex\"}")
+			"body must be {\"cred\": \"fcp-h1.…|fcp-h2.…\", \"provider\": \"claude|codex|deepseek\"}")
 		return
 	}
 	if req.Rejected != nil && (req.Provider != credvault.Codex || !req.Rejected.Valid()) {
@@ -467,7 +467,7 @@ func (s *Server) handleSessionBind(w http.ResponseWriter, r *http.Request, ep *s
 		return
 	}
 	if !hasString(sessionCredProviders, req.Provider) || req.Account == "" {
-		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "provider (claude|codex) and account are required")
+		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "provider (claude|codex|deepseek) and account are required")
 		return
 	}
 	principal := live[0].PrincipalID

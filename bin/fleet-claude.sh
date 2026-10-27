@@ -116,11 +116,52 @@ elif [ -n "$_fc_agent" ] && [ "$_fc_agent" != "$LAUNCH_AGENT" ]; then
 fi
 unset _fc_agent _fc_explicit _fc_args _fc_want _fc_a
 
+# DeepSeek (task J7BN, P0): FLEET_MODEL (or a carried-over `--model`) deepseek /
+# deepseek-pro is a MODEL PROFILE, not a Claude model name. Claude Code talks to
+# DeepSeek's Anthropic-compatible API through this login's credential proxy, at
+# /deepseek on its port — the proxy's ONE road for it is the cluster's central
+# proxy with this session's hub pass (no machine holds the key). So it needs the
+# proxy (FLEET_CRED_SID): without it the launch refuses rather than quietly run
+# on an Anthropic account. No --model reaches claude; the account cap, a named
+# account and the subscription pick play no part.
+fleet_ds_profile() {   # <model> → deepseek | deepseek-pro, rc 1 = not a DeepSeek profile
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    deepseek)     printf deepseek ;;
+    deepseek-pro) printf deepseek-pro ;;
+    *) return 1 ;;
+  esac
+}
+_fc_ds=''; _fc_args=(); _fc_want=''
+for _fc_a in "$@"; do      # a caller's --model deepseek* (a migrate carrying @cc_model): ours
+  if [ "$_fc_want" = model ]; then
+    _fc_want=''
+    if _fc_p=$(fleet_ds_profile "$_fc_a"); then _fc_ds="$_fc_p"; continue; fi
+    _fc_args+=(--model "$_fc_a"); continue
+  fi
+  case "$_fc_a" in
+    --model) _fc_want=model ;;
+    --model=*) if _fc_p=$(fleet_ds_profile "${_fc_a#--model=}"); then _fc_ds="$_fc_p"; else _fc_args+=("$_fc_a"); fi ;;
+    *) _fc_args+=("$_fc_a") ;;
+  esac
+done
+[ "$_fc_want" = model ] && _fc_args+=(--model)
+set -- ${_fc_args[@]+"${_fc_args[@]}"}
+[ -z "$_fc_ds" ] && [ -n "${FLEET_MODEL:-}" ] && _fc_ds=$(fleet_ds_profile "$FLEET_MODEL")
+unset _fc_args _fc_want _fc_a _fc_p
+fleet_ds_need_proxy() {
+  [ -n "$_fc_ds" ] && [ -z "${FLEET_CRED_SID:-}" ] || return 0
+  printf 'fleet-claude: FLEET_MODEL=%s runs only through the credential proxy (FLEET_CRED_PROXY=1) — no DeepSeek key exists on this machine; refusing to start\n' "$_fc_ds" >&2
+  fleet_launch_refused deepseek; exit 1
+}
+fleet_ds_need_proxy
+[ -n "$_fc_ds" ] && _fc_sep=1   # no account of this login is named, picked or exported
+
 # The slow steps start now, beside everything below (T683, a cold start ≤ 5 s): the
 # session credential's mint and the folder trust — fleet_launch_early (the lib); the
 # mint further down reads its pipe, fleet_launch_settle waits for both before the exec.
 _fc_label="${FLEET_ACCOUNT_LABEL:-}"; [ "$_fc_sep" = 1 ] && _fc_label=''
-fleet_launch_early ${_fc_label:+--account "$_fc_label"}
+if [ -n "$_fc_ds" ]; then fleet_launch_early --provider deepseek
+else fleet_launch_early ${_fc_label:+--account "$_fc_label"}; fi
 unset _fc_label
 
 # The agent file's model is this launch's FLEET_MODEL default (issue #3122) — the
@@ -130,6 +171,13 @@ unset _fc_label
 fleet_as_resolve claude
 if [ -z "${FLEET_MODEL+x}" ]; then
   FLEET_MODEL="${_fc_as_model:-opus}"
+  # an agent file whose model is a DeepSeek profile: the early mint asked for
+  # Claude — drop its pipe, the mint below asks again for deepseek
+  if [ -z "$_fc_ds" ] && _fc_p=$(fleet_ds_profile "$FLEET_MODEL"); then
+    _fc_ds="$_fc_p"; fleet_ds_need_proxy; _fc_sep=1
+    [ "$_fl_mint_early" = 1 ] && { exec 7<&-; _fl_mint_early=0; }
+  fi
+  unset _fc_p
 fi
 fleet_as_stamp
 
@@ -152,7 +200,9 @@ label="${FLEET_ACCOUNT_LABEL:-}"
 [ "$_fc_sep" = 1 ] && label=''      # the proxy picks (issue #2412)
 model_flag=()
 launch_model=""
-if [ -n "$FLEET_MODEL" ]; then
+if [ -n "$_fc_ds" ]; then
+  : # a DeepSeek profile: the model rides ANTHROPIC_MODEL & co. (below), never --model
+elif [ -n "$FLEET_MODEL" ]; then
   case " $* " in
     *" --model "*|*" --model="*) : ;;               # caller already chose a model
     *)
@@ -165,8 +215,8 @@ fi
 # reads Claude off a blank @cc_agent (fleet-codex.sh stamps codex the same way).
 [ -n "${TMUX_PANE:-}" ] && tmux set-option -w -t "$TMUX_PANE" @cc_agent claude 2>/dev/null || true
 # The effective model, stamped so the dash / migrate can see what a pane runs.
-if [ -n "$launch_model" ] && [ -n "${TMUX_PANE:-}" ]; then
-  tmux set-option -w -t "$TMUX_PANE" @cc_model "$launch_model" 2>/dev/null || true
+if [ -n "${launch_model:-$_fc_ds}" ] && [ -n "${TMUX_PANE:-}" ]; then
+  tmux set-option -w -t "$TMUX_PANE" @cc_model "${launch_model:-$_fc_ds}" 2>/dev/null || true
 fi
 
 # Force the session's SUBAGENTS (Task/Agent spawns) onto the same tier — this is
@@ -177,6 +227,15 @@ fi
 # Subagents follow the EFFECTIVE model; an explicit FLEET_SUBAGENT_MODEL wins.
 if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="${launch_model:-$FLEET_MODEL}"; fi
 [ -n "$FLEET_SUBAGENT_MODEL" ] && export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_SUBAGENT_MODEL"
+# DeepSeek (task J7BN): every tier is a DeepSeek model — a Claude alias (opus, an
+# agent file's sonnet) resolves through these, a subagent rides the flash model
+if [ -n "$_fc_ds" ]; then
+  _fc_dsm='deepseek-flash[1m]'; [ "$_fc_ds" = deepseek-pro ] && _fc_dsm='deepseek-v4-pro[1m]'
+  export ANTHROPIC_MODEL="$_fc_dsm" ANTHROPIC_DEFAULT_OPUS_MODEL="$_fc_dsm" ANTHROPIC_DEFAULT_SONNET_MODEL="$_fc_dsm"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-flash CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash
+  export CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432
+  unset ANTHROPIC_SMALL_FAST_MODEL _fc_dsm
+fi
 
 # MCP: an allowlist (FLEET_MCP_CONFIG, issue #473 — every server costs start time and
 # resident children) and the fleet's own tool service + dispatch group (#1807, #3113),
@@ -236,12 +295,13 @@ unset _fc_ca
 # credential> + CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1, never
 # CLAUDE_SECURESTORAGE_CONFIG_DIR; a migrate is then the proxy's rebind of the sid.
 _fc_route=''
-if [ -n "${FLEET_CRED_SID:-}" ] && fleet_launch_mint ${label:+--account "$label"}; then
+_fc_mint=(${label:+--account "$label"}); [ -n "$_fc_ds" ] && _fc_mint=(--provider deepseek)
+if [ -n "${FLEET_CRED_SID:-}" ] && fleet_launch_mint ${_fc_mint[@]+"${_fc_mint[@]}"}; then
   # shellcheck disable=SC2154  # the lib's mint sets it
   _fc_route=$_fl_route
   unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR
   unset CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
-  export ANTHROPIC_BASE_URL="http://127.0.0.1:$_fl_port" CLAUDE_CODE_OAUTH_TOKEN="$_fl_cred"
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:$_fl_port${_fc_ds:+/deepseek}" CLAUDE_CODE_OAUTH_TOKEN="$_fl_cred"
   export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
   _fl_cred=''; _fl_port=''
   if [ -n "${TMUX_PANE:-}" ]; then
@@ -251,6 +311,12 @@ if [ -n "${FLEET_CRED_SID:-}" ] && fleet_launch_mint ${label:+--account "$label"
   fi
 fi
 
+unset _fc_mint
+if [ -n "$_fc_ds" ] && [ "$_fc_route" != central ]; then
+  # the mint answered «nothing to bind» (4): a DeepSeek session has no other road
+  echo "fleet-claude: FLEET_MODEL=$_fc_ds needs a hub pass for the central proxy and the mint gave none — refusing to start" >&2
+  fleet_launch_refused deepseek; exit 1
+fi
 if [ -n "$label" ] && [ -z "$_fc_route" ]; then          # a caller-named account (above)
   tok=$("$BIN/fleet-account.sh" token "$label" 2>/dev/null)
   if [ -n "$tok" ]; then

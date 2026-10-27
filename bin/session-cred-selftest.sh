@@ -24,6 +24,8 @@
 #   E  central (an untrusted machine): an fcp-h1. pass from the hub (node token +
 #      the session's assertion), no account needed; revoke DELETEs the pass; a hub
 #      with the relay key answers the node's ask with fcp-h2., which goes central too
+#   DS DeepSeek (task J7BN): FLEET_MODEL=deepseek on a trusted machine mints a
+#      deepseek hub pass and goes to the central /v1/proxy/deepseek road
 #   F  fleet-migrate.sh moves no account in place any more (T550): no
 #      migrate_rebind — a session's subscription is the pool's pick
 #   G  the Codex daemon a session leaves behind: a PPID=1 app-server holding a file
@@ -274,7 +276,23 @@ check "E: fcp-h2 — the session holds the hub's fcp-h2 pass" "fcp-h2.PASS-claud
 check "E: fcp-h2 — the request went central with it" "Bearer fcp-h2.PASS-claude.sig" "$(resp auth)"
 bash "$BIN/fleet-session-cred.sh" revoke --sid sE2
 rm -f "$SB/h2"
-echo trusted > "$SB/trust"; rm -f "$FLEET_CONF_DIR/node.env"
+# DeepSeek (task J7BN): on a TRUSTED machine a FLEET_MODEL=deepseek session still
+# borrows a hub pass (providers [deepseek]) and its request goes to the cluster's
+# /v1/proxy/deepseek road with it — never direct, never an account
+echo trusted > "$SB/trust"
+bash "$BIN/fleet-cred-proxy.sh" route --refresh >/dev/null 2>&1
+run_claude ds FLEET_CRED_SID=sDS FLEET_WORKER_ASSERT=fwa1.test.sig FLEET_MODEL=deepseek
+OUT="$SB/out/ds"
+check "DS: launch rc" 0 "$(cat "$OUT/rc")"
+check "DS: the session holds a deepseek hub pass" "fcp-h1.PASS-deepseek.sig" "$(envv CLAUDE_CODE_OAUTH_TOKEN)"
+case "$(envv ANTHROPIC_BASE_URL)" in http://127.0.0.1:[0-9]*/deepseek) pass "DS: ANTHROPIC_BASE_URL is the proxy's /deepseek road" ;; *) fail "DS: ANTHROPIC_BASE_URL=$(envv ANTHROPIC_BASE_URL) ($(cat "$OUT/stderr"))" ;; esac
+check "DS: ANTHROPIC_MODEL" "deepseek-flash[1m]" "$(envv ANTHROPIC_MODEL)"
+check "DS: the request reached the central deepseek road" "/central/v1/proxy/deepseek/v1/messages" "$(resp path)"
+check "DS: …carrying the pass" "Bearer fcp-h1.PASS-deepseek.sig" "$(resp auth)"
+check "DS: the record says central" route=central "$(grep '^route=' "$FLEET_CONF_DIR/cred-proxy/sessions/sDS")"
+check "DS: no --model reached claude" 0 "$(grep -c -- '^--model$' "$OUT/argv" | tr -d ' ')"
+bash "$BIN/fleet-session-cred.sh" revoke --sid sDS
+rm -f "$FLEET_CONF_DIR/node.env"
 bash "$BIN/fleet-cred-proxy.sh" route --refresh >/dev/null 2>&1
 
 # ── F: no account move in place (T550) ───────────────────────────────────────

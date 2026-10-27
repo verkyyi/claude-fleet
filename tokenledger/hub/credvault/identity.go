@@ -17,6 +17,9 @@ func credentialID(owner, provider string, s Secret) string {
 	if s.SetupToken != "" {
 		token = s.SetupToken
 	}
+	if s.APIKey != "" {
+		token = s.APIKey
+	}
 	if provider == GitHub || token == "" {
 		return ""
 	}
