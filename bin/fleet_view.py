@@ -2341,6 +2341,8 @@ def board_apply(board, groups, shut, gone, here, me):
         e["pending_start_explicit"] = r.get("pending_start") is True
         if "running" in r:
             e["running"] = r["running"] is True
+        if "active" in r:
+            e["active"] = r["active"] is True
         if "loop" in r:
             e["loop"] = r["loop"] is True
         if "native_wait" in r:
@@ -2399,9 +2401,23 @@ def counted_rows(items):
             and e.get("sec") != "gone"}
 
 
+ACTIVE_STATES = ("working", "looping", "needs", "blocked", "idle", "done", "landed")
+
+
+def active_row(e):
+    """Its agent is running now (AWVX): the hub's BoardRow.active, else read off
+    the row — a parked, exited or starting session, or a record with no session,
+    is listed but not active."""
+    if "active" in e:
+        return bool(e["active"])
+    return not e.get("record_only") and e.get("state") in ACTIVE_STATES
+
+
 def session_count(items, query="", remote_unknown=False):
+    """The number the list shows: its ACTIVE sessions (AWVX) — the rows it
+    lists, less the parked and the session-less, which cost nothing."""
     rows = counted_rows(items)
-    known = [e for e in rows.values() if not e.get("lost")]
+    known = [e for e in rows.values() if not e.get("lost") and active_row(e)]
     unknown = remote_unknown or any(e.get("lost") for e in rows.values())
     total = str(len(known)) + ("+?" if unknown else "")
     if query.strip():

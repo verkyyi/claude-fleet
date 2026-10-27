@@ -459,8 +459,8 @@ fleet_ui_t() {
     zh:view_new_exit_fmt) printf '退出码 %s，没说原因' "${1:-}" ;;
     en:view_new_exit_fmt) printf 'exit %s, no reason given' "${1:-}" ;;
     # EPIC #3178 round 2 (issue #3324): the ⌘P panel's next words, for ④ ⑥
-    zh:view_count_fmt) printf '会话 %s' "${1:-}" ;;
-    en:view_count_fmt) printf 'Sessions %s' "${1:-}" ;;
+    zh:view_count_fmt) printf '活跃会话 %s' "${1:-}" ;;
+    en:view_count_fmt) printf 'Active %s' "${1:-}" ;;
     zh:view_age_fmt) printf ' · %s' "${1:-}" ;;
     en:view_age_fmt) printf ' · %s' "${1:-}" ;;
     zh:view_age_refreshing_fmt) printf ' · %s · 刷新中…' "${1:-}" ;;
