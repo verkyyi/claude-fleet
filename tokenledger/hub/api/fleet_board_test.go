@@ -124,6 +124,11 @@ func TestBoardOneRowPerTask(t *testing.T) {
 	if b.Count != 4 || b.Groups["gone"] != 4 {
 		t.Fatalf("count = %d groups = %v; want 4 counted (pin · work · 2 queue), 4 put away", b.Count, b.Groups)
 	}
+	// active: the three with an agent up (looping · working · done); the queued
+	// record has no session (AWVX)
+	if b.Active != 3 || !got[plain].Active || got[queued.FID].Active {
+		t.Fatalf("active = %d; want 3 (rows: %+v)", b.Active, got)
+	}
 	if order[0] != "pin:looping" || order[1] != "work:working" || order[len(order)-1][:5] != "gone:" {
 		t.Fatalf("order = %v", order)
 	}
@@ -643,5 +648,29 @@ func TestBoardTaskListFacts(t *testing.T) {
 	old := read([]FleetSession{{Availability: "online", Worker: map[string]any{"identity": task.FID, "state": "looping"}}})
 	if old.Loop != nil || old.Running {
 		t.Fatalf("legacy looping guessed as recurring plan/activity: %+v", old)
+	}
+}
+
+// AWVX: a parked session is listed and counted, but its agent is not running.
+func TestBoardActiveLeavesParkedOut(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	fleet := "42f8e358-7cc0-5856-a353-8983a4b4c9a1"
+	sess := func(ident, key, state string, avail string) FleetSession {
+		wid := fleet + "/" + key
+		w := map[string]any{"identity": ident, "key": key, "state": state, "name": key, "born": float64(100), "worker_id": wid}
+		return FleetSession{WorkerID: &wid, MachineName: "mac-b", OSUser: "alice", Availability: avail, Worker: w}
+	}
+	b, err := s.buildBoard("gh:1", []FleetSession{
+		sess("0b7e8c1a-1111-4222-8333-444455556601", "o-r:scratch-1", "done", "online"),
+		sess("0b7e8c1a-1111-4222-8333-444455556602", "o-r:scratch-2", "parked", "online"),
+		sess("0b7e8c1a-1111-4222-8333-444455556603", "o-r:scratch-3", "needs", "online"),
+		sess("0b7e8c1a-1111-4222-8333-444455556604", "o-r:scratch-4", "working", "lost"),
+	}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Count != 3 || b.Active != 2 {
+		t.Fatalf("count = %d active = %d; want 3 listed (done · parked · needs), 2 running", b.Count, b.Active)
 	}
 }

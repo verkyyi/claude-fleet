@@ -87,9 +87,10 @@ class Board(unittest.TestCase):
         self.assertNotIn("f-local", [e["fid"] for e in out_gone])
         items = [e for g in v.GROUPS for e in out[g]] + out_gone
         with patch.object(v, "say", side_effect=lambda k, x: x):
-            # pin + the task + the record (+ the stray the hub will list next round)
-            self.assertEqual(v.session_count(items), "4")
-            self.assertEqual(v.session_count([e for e in items if not e.get("unboarded")]), str(BOARD["count"]))
+            # the ACTIVE ones (AWVX): pin + the task (+ the stray the hub will list
+            # next round) — the record has no session running
+            self.assertEqual(v.session_count(items), "3")
+            self.assertEqual(v.session_count([e for e in items if not e.get("unboarded")]), str(BOARD["count"] - 1))
 
     def test_planned_board_only(self):
         board = {"rows": [{"id": "planned", "group": "queue", "tag": "queued",
@@ -143,7 +144,11 @@ class Board(unittest.TestCase):
         self.assertEqual((park["word"], park["origin"]), ("空闲", "web"), "a parked session reads as idle")
         items = [e for g in v.GROUPS for e in out[g]] + out_gone
         with patch.object(v, "say", side_effect=lambda k, x: x):
-            self.assertEqual(v.session_count(items), str(board["count"]))
+            # listed both, active one (AWVX): the parked session runs no agent
+            self.assertEqual(v.session_count(items), "1")
+            board["rows"][1]["active"], board["rows"][0]["active"] = False, True
+            out, out_gone = v.board_apply(board, groups, [], [], "m", "u")
+            self.assertEqual(v.session_count([e for g in v.GROUPS for e in out[g]]), "1", "the hub's word wins")
 
     def test_exited_window_is_not_counted(self):
         items = [sess("@1", "a", "work"), sess("@2", "b", "folded", sec="gone", shut=True, state="exited")]

@@ -83,6 +83,7 @@ type BoardRow struct {
 	// suppresses older clients' guesses from legacy group/tag words.
 	PendingStart bool   `json:"pending_start"`
 	Running      bool   `json:"running"`
+	Active       bool   `json:"active"`
 	Loop         *bool  `json:"loop,omitempty"`
 	NativeWait   string `json:"native_wait,omitempty"`
 	WorkerID     string `json:"worker_id,omitempty"`
@@ -129,10 +130,14 @@ type Board struct {
 	SessionList SessionListPreferences `json:"session_list"`
 	Rows        []BoardRow             `json:"rows"`
 	Count       int                    `json:"count"`
-	Groups      map[string]int         `json:"groups"`
-	GoneDays    int                    `json:"gone_days"`
-	GoneMore    int                    `json:"gone_more,omitempty"` // older than the cap, not listed
-	Digest      string                 `json:"digest"`
+	// Active is how many of the counted rows have an agent running right now
+	// (boardActive): what the panel and the console show as the number (AWVX);
+	// Count stays the list's size.
+	Active   int            `json:"active"`
+	Groups   map[string]int `json:"groups"`
+	GoneDays int            `json:"gone_days"`
+	GoneMore int            `json:"gone_more,omitempty"` // older than the cap, not listed
+	Digest   string         `json:"digest"`
 	// Machines is how many machines the person has (task PQ41): one ⇒ the page
 	// names none (a machine's name is only in a session's details then).
 	Machines int `json:"machines"`
@@ -471,6 +476,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Loop = &loop
 		}
 		r.Running = boardRunning(r.State, r.NativeWait)
+		r.Active = boardActive(r.State)
 		r.PendingStart = r.State == "starting"
 		// Inventory is runtime evidence; a native ledger segment is preferred.
 		if r.Agent == "" && wstr(w, "agent") != "" {
@@ -687,6 +693,17 @@ func boardRunning(state, wait string) bool {
 	return false
 }
 
+// boardActive: the session's agent process is up — not parked or sleeping (its
+// window holds a conversation, no process), not exited, failed or still starting.
+// A record with no session has no state and is never active.
+func boardActive(state string) bool {
+	switch state {
+	case "working", "looping", "needs", "blocked", "idle", "done", "landed":
+		return true
+	}
+	return false
+}
+
 // Only a recorded, still-pending start is evidence. An operation ID alone can
 // name an already failed or settled start. No-session and reserved IDs are not
 // pending requests. Live observations take precedence in buildBoard above.
@@ -836,6 +853,9 @@ func finishBoard(rows []BoardRow) *Board {
 		b.Groups[r.Group]++
 		if r.Group != "gone" && !r.Lost {
 			b.Count++
+			if r.Active {
+				b.Active++
+			}
 		}
 	}
 	if b.Rows == nil {

@@ -424,8 +424,13 @@ export default function SessionsPage() {
   const detail = current ? <RowPanel key={current.id} r={current} onOpen={open} /> : null;
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-5 md:px-6 md:py-8">
-      <PageHeader title={tr("会话", "Sessions")} count={board ? board.count : undefined}
-        sub={board ? tr(`和 ⌘P 面板同一份清单 · ${clock(boardAt)}`, `The same list as the ⌘P panel · ${clock(boardAt)}`)
+      {/* The number is the ACTIVE sessions — an agent running now (AWVX); the list
+          also holds parked sessions and session-less records, which cost nothing. */}
+      <PageHeader title={tr("会话", "Sessions")} count={board ? board.active ?? board.count : undefined}
+        sub={board ? (board.active !== undefined
+          ? tr(`活跃 ${board.active} · 列出 ${board.count} · 和 ⌘P 面板同一份清单 · ${clock(boardAt)}`,
+            `${board.active} active · ${board.count} listed · the same list as the ⌘P panel · ${clock(boardAt)}`)
+          : tr(`和 ⌘P 面板同一份清单 · ${clock(boardAt)}`, `The same list as the ⌘P panel · ${clock(boardAt)}`))
           : tr("你派出的每件事和开着的会话，一件一行", "Everything you sent out and every open session, one line each")}
         action={<Button disabled={!!viewAs} onClick={() => setNewOpen(true)}><Plus />{tr("新建", "New")}</Button>} />
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-6">
