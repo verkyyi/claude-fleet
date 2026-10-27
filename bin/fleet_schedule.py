@@ -91,8 +91,8 @@ def command(sup, paths, rest):
     if sup.pod_self_uid(login) is None and not sup._svc_root('schedule'): return 1
     if sup._svc_ident(login) is None: return 1
     import sys
-    body=sys.stdin.read(65537)
-    if len(body)>65536: raise ValueError('request too large')
+    body=sys.stdin.read(262145)
+    if len(body)>262144: raise ValueError('request too large')
     request=json.loads(body)
     if set(request)-{'action','schedule','run_id'}: raise ValueError('unsupported command')
     doc=request.get('schedule')

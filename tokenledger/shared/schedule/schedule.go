@@ -100,6 +100,9 @@ func Validate(s Spec) (int, error) {
 	if strings.TrimSpace(s.Prompt) == "" || len([]rune(s.Prompt)) > 16000 || strings.ContainsRune(s.Prompt, 0) {
 		return 0, errors.New("prompt must be 1–16000 characters")
 	}
+	if len(s.Cron) > 256 || len(s.Timezone) > 100 || len(s.Repo) > 256 {
+		return 0, errors.New("schedule field too long")
+	}
 	if s.Entry != "" && !Entry.MatchString(s.Entry) {
 		return 0, errors.New("invalid existing task name")
 	}

@@ -1390,7 +1390,7 @@ TOOLS = {
             "at": {"type": "string", "description": "Daily local HH:MM; mutually exclusive with cron."},
             "cron": {"type": "string", "description": "Five cron fields; minimum one-hour interval."},
             "timezone": {"type": "string", "description": "IANA zone, default Asia/Shanghai."},
-            "repo": REPO,
+            "repo": dict(REPO, description="Optional owner/name of a repo this login hosts; omitted runs without a repository."),
             "delivery": {"type": "object", "properties": {"wechat": {"type": "boolean"}, "livepage": {"type": "boolean"}}, "additionalProperties": False}},
             "required": ["action"], "additionalProperties": False}}),
 

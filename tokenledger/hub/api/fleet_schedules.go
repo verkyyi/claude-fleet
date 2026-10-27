@@ -167,7 +167,7 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 		return
 	}
 	var in scheduleRequest
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10))
 	dec.DisallowUnknownFields()
 	if e := dec.Decode(&in); e != nil {
 		scheduleError(w, e)
