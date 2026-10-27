@@ -791,6 +791,52 @@ class client:
         self.assertTrue(self.opt('@park_relay'), 'stale prompt proof stopped the assistant')
         self.assertFalse(self.opt('@parked'))
 
+    def test_relay_recovers_from_an_exit_the_agent_ignored(self):
+        # 5430 (2026-10-27): /exit was typed, a cron loop kept the agent alive, and
+        # the relay answered status not-ok for good — unparkable forever.
+        import socket as _socket
+        relay_mod = module('park_relay_mod', 'fleet-status-7501.py')
+        with patch.dict(os.environ, {'TMUX_PANE': ''}):
+            control = relay_mod.ParkRelay(os.getpid())
+        try:
+            def ask(request):
+                with _socket.socket(_socket.AF_UNIX) as c:
+                    c.connect(control.path)
+                    c.sendall((json.dumps(request) + '\n').encode())
+                    control.serve(bytearray(), False)
+                    return json.loads(c.recv(4096))
+            first = ask({'op': 'status'})
+            self.assertTrue(first['ok'])
+            self.assertTrue(ask({'op': 'exit', 'generation': first['generation']})['ok'])
+            self.assertFalse(ask({'op': 'status'})['ok'])          # still exiting
+            control.exit_at -= relay_mod.EXIT_STALE_SECS + 1
+            again = ask({'op': 'status'})
+            self.assertTrue(again['ok'], again)
+            self.assertNotEqual(again['generation'], first['generation'])
+        finally:
+            control.close()
+
+    def test_probe_past_its_policy_still_parks_while_unreported(self):
+        # 5432 (2026-10-27): done:1m passed, the reaper holds an unreported probe,
+        # so the parker must not hand it there — else neither closes nor parks it.
+        from types import SimpleNamespace
+        args = SimpleNamespace(socket_name=self.label, session='test', window_repo=False, repo='', dry_run=False)
+        r = reap.Cleaner(args)
+        r.now = 1000
+        snap = {'@park_wrap_ver':'1', '@parked':'', '@wrap_gone':'', 'pane_dead':'',
+                '@claude_state':'done', '@agent_status':'', '@claude_state_ts':'600',
+                '@fleet_id':'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', '@loop':'', '@park_presence':'1',
+                '@reap_policy':'done:1m', '@reap_origin':'probe', '@session_origin':''}
+        with patch.dict(os.environ, self.env | {'FLEET_SESSION_PARK_IDLE_UNATTENDED':'1m'}), \
+                patch.object(r, 'busy', return_value=False), \
+                patch.object(r, 'tm', return_value=''), \
+                patch.object(r, 'is_waiting', return_value=False), \
+                patch.object(reap, 'run', return_value='{"ok":true}'):
+            with patch.object(r, 'work_over', return_value=False):
+                self.assertTrue(r.web_park('@1', snap))
+            with patch.object(r, 'work_over', return_value=True):
+                self.assertIsNone(r.web_park('@1', snap))          # the reaper closes it
+
     def test_all_origins_and_memory_oldest_eligible(self):
         # The reaper's real decision, independent of its close / GitHub roads.
         from types import SimpleNamespace

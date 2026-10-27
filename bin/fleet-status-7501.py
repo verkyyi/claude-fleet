@@ -429,6 +429,11 @@ def _rc(st):
     return 1
 
 
+# How long an /exit may go unanswered by a live agent before the relay offers
+# itself again (the gate waits FLEET_GATE_PARK_SECS, 15 s, then rolls back).
+EXIT_STALE_SECS = float(os.environ.get("FLEET_PARK_EXIT_STALE_SECS") or 120)
+
+
 class ParkRelay:
     """A per-launch, private control socket; only this relay writes its pty.
 
@@ -447,6 +452,7 @@ class ParkRelay:
         self.generation = 0
         self.exiting = False
         self.exit_confirmed = False
+        self.exit_at = 0.0
         self.presence_at = 0
         if pane():
             tmux(["set-option", "-w", "-t", pane(), "@park_relay", self.path])
@@ -461,6 +467,13 @@ class ParkRelay:
                 client.settimeout(.1)
                 request = json.loads(client.recv(2048))
                 op = request.get("op")
+                if op == "status" and self.exiting and time.time() - self.exit_at > EXIT_STALE_SECS:
+                    # An /exit the agent never acted on (a dialog ate it, a loop
+                    # kept it): the agent is still here, so the park gave up long
+                    # ago. Without this the relay answers not-ok for its whole life
+                    # and the session can never park again.
+                    self.exiting = self.exit_confirmed = False
+                    self.generation += 1
                 if op == "status":
                     reply = dict(ok=not self.exiting, generation=self.generation, relay_pid=os.getpid(),
                                  agent_pid=self.agent_pid, park_exit=["typed", "paste"])
@@ -469,6 +482,7 @@ class ParkRelay:
                       and request.get("park_exit", "typed") in ("typed", "paste")):
                     buffer.extend(b"\x1b[200~/exit\x1b[201~\r" if request.get("park_exit") == "paste" else b"/exit\r")
                     self.exiting = True
+                    self.exit_at = time.time()
                     reply = dict(ok=True)
                 elif (op == 'confirm-exit' and self.exiting and not self.exit_confirmed
                       and not pending_input and not buffer and request.get('generation') == self.generation):

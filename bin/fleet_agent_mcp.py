@@ -411,6 +411,28 @@ def shell_exec_argv(pid, parent, config, env_reader):
         return None
 
 
+RELEASE_DIR_RE = re.compile(r'[0-9a-f]{7,64}')
+
+
+def release_links(path):
+    """The version-link spellings of a release's own file — fleet-mcp.py's
+    follow_link: launched as <root>/<sha>/bin/<f>, a reload re-execs
+    <root>/current/bin/<f> (or ~/.claude/fleet/bin/<f> beside fleet.versions/),
+    which after a release switch is ANOTHER file. Same service, newer version."""
+    found = set()
+    for spelled in {os.path.abspath(path), os.path.realpath(path)}:   # /var vs /private/var
+        bindir = os.path.dirname(spelled)
+        ver = os.path.dirname(bindir)
+        root = os.path.dirname(ver)
+        if os.path.basename(bindir) != 'bin' or not RELEASE_DIR_RE.fullmatch(os.path.basename(ver)):
+            continue
+        links = [os.path.join(root, 'current')]
+        if os.path.basename(root) == 'fleet.versions':
+            links.append(os.path.join(os.path.dirname(root), 'fleet'))
+        found.update(os.path.join(link, 'bin', os.path.basename(spelled)) for link in links if os.path.islink(link))
+    return found
+
+
 def configured_process(pid, config, argv_reader, exe_reader, env_reader=None, parent=None):
     command = config.get('command')
     args = config.get('args') or []
@@ -436,13 +458,16 @@ def configured_process(pid, config, argv_reader, exe_reader, env_reader=None, pa
                             and executable.parts[-4:] == ('Python.app', 'Contents', 'MacOS', 'Python'))
         arguments_match = argv[1:] == launched[1:]
         # The managed MCP server re-execs its canonical install path on upgrade.
-        # Permit only the Python script operand to name the same existing file;
-        # all remaining arguments and the native parent/environment proof stay exact.
+        # Permit only the Python script operand to name the same existing file, or
+        # the version link its reload follows (release_links) once a switch made
+        # that another file; all remaining arguments and the native
+        # parent/environment proof stay exact.
         if (not arguments_match and re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', program)
                 and len(argv) > 1 and len(launched) > 1 and argv[2:] == launched[2:]
                 and os.path.isabs(argv[1]) and os.path.isabs(launched[1])):
             try:
-                arguments_match = Path(argv[1]).is_file() and os.path.samefile(argv[1], launched[1])
+                arguments_match = Path(argv[1]).is_file() and (argv[1] in release_links(launched[1])
+                                                               or os.path.samefile(argv[1], launched[1]))
             except OSError:
                 pass
         if (same and '/' not in program and arguments_match
@@ -629,7 +654,7 @@ def contract_hint(source, approved, name, conf=None):
 
 
 def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True, env_reader=None,
-             remounted=frozenset()):
+             remounted=frozenset(), settled=False):
     # strict=False answers a narrower question (issue #864): not "may this worker
     # hibernate?" but "is this configured MCP service, or something the agent is
     # still running?". An uncontracted, unready or job-owning service is still an
@@ -639,6 +664,12 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
     # env_reader (fleet_agent_argv.process_env) lets a `bash -c 'exec …'` launcher
     # match its exec target (shell_exec_argv, issue #4537) — Codex callers only;
     # without it that shape stays unverified. Identity is never a contract.
+    # settled=True (non-strict Codex only): the caller holds the native proof that
+    # no turn, tool call or goal is running (fleet_worker_life.codex_idle_turn), so
+    # nothing beneath a configured, ready service is the agent's work — Playwright's
+    # browser left open after a page check is the service's own, as under Claude —
+    # and so is a configured service whose handshake failed: a dead MCP connection
+    # is not a job the agent is running.
     # remounted (issue #4775) names services the CALLER proved the next lifetime
     # mounts afresh from the current install (the continuation's own question,
     # never sleep's): they skip only the restartability contract and readiness —
@@ -657,8 +688,16 @@ def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, stric
             continue
         name, conf = matches[0]
         if not strict and source.get('agent') == 'codex':
-            if statuses is None or not runtime_ready(statuses.get(name, {})):
+            if not settled and (statuses is None or not runtime_ready(statuses.get(name, {}))):
                 continue  # unknown/unready is not evidence of idle infrastructure
+            if settled:
+                pending = [pid]
+                while pending:
+                    node = pending.pop()
+                    if node not in allowed:
+                        allowed.add(node)
+                        pending.extend(child for child, (pp, _) in rows.items() if pp == node)
+                continue
             allowed.add(pid)
             allowed.update(child for child, (pp, _) in rows.items() if pp == pid
                            and package_child(child, conf, argv_reader, exe_reader))

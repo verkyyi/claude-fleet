@@ -958,8 +958,12 @@ class Cleaner:
         # tier. Return to the existing reaper; its live/history checks still
         # decide whether it may close. Explicit waiting reports park instead.
         pol = self.policy(snap) if not controlled and fleet_reap_policy.ORIGINS[self.origin(snap)]["reap"] == "done" else None
+        # Only when that reaper may close it: a probe whose work is not over is
+        # held there as `unreported`, and deferring would leave it neither closed
+        # nor parked, its agent alive for good.
         if (pol and pol[0] == "done" and self.deadline(snap, pol) <= self.now
-                and not self.is_waiting(snap)):
+                and not self.is_waiting(snap)
+                and (self.origin(snap) != "probe" or self.work_over(snap))):
             return None
         if not hasattr(self, "_park_watched"):
             clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
