@@ -125,7 +125,7 @@ func TestSessionCredIssueAndVerify(t *testing.T) {
 	}
 	v := sessVerify(t, h, map[string]any{"cred": cred, "principal": "gh:1005", "provider": "claude"})
 	if v["valid"] != true || v["revoked"] != false || v["principal"] != "gh:1005" || v["worker_id"] != wid ||
-		v["machine"] != "mac-d" || v["exp"] == nil || len(v["providers"].([]any)) != 2 {
+		v["machine"] != "mac-d" || v["exp"] == nil || len(v["providers"].([]any)) != len(sessionCredProviders) {
 		t.Fatalf("verify = %v; want a valid pass for gh:1005", v)
 	}
 	// The operator may verify too; a node's token, or none, may not.

@@ -14,6 +14,9 @@
 #                the credential files unreadable; no hub credential → 403
 #   D2 central — trusted, but a person's pod (node.env CCQUOTA_FLEET_CREDS=0 +
 #                FLEET_CRED_CENTRAL_URL): central all the same (issue #4290)
+#   DS DeepSeek (task J7BN): /deepseek/<path> on a trusted machine goes to the
+#      central proxy's /v1/proxy/deepseek/<path> with the session's hub pass; a
+#      session with no hub pass is a 403 that reached nothing
 #   E  a region 403 on direct moves the SAME request to relay (route_switch logged)
 #   F  three sessions at once never cross accounts; rebind / revoke
 #   G  rails: ctl.sock 0600, 127.0.0.1 only, no token in the log
@@ -348,6 +351,32 @@ mv "$SB/codex-homes.away" "$SB/codex-homes"
 cp "$SB/node.env.d2" "$FLEET_CONF_DIR/node.env"
 probe reachable
 r=$(CP route --provider codex); case "$r" in central*) fail "D2 a leasing login went central: $r" ;; esac
+
+# ── DS: DeepSeek is central only (task J7BN, P0) ──────────────────────────────
+# a TRUSTED machine (its Claude goes direct): /deepseek/ still goes to the cluster's
+# /v1/proxy/deepseek/<rest> with the session's hub pass — no pass is a 403 that
+# reached nothing, never the direct road, the relay or a credential file
+r=$(CP route --refresh); case "$r" in direct*) ;; *) fail "DS route: $r" ;; esac
+TS=$(CP mint --account a1 --sid sds)
+jn=$(R /deepseek/v1/messages "$TS")
+case "$(jf "$jn" _status) $jn" in
+  "403 "*"only through the central proxy"*"no hub pass"*) pass "DS deepseek with no hub pass → 403 naming the central-only rule" ;;
+  *) fail "DS no hub pass: $jn" ;;
+esac
+grep '"ev": "fwd"' "$SB/proxy.log" | grep -q '"sid": "sds"' && fail "DS a refused deepseek request reached an upstream"
+printf 'fcp-h1.hubsigned.sds\n' | CP attach --sid sds >/dev/null || fail "DS attach"
+js=$(R /deepseek/v1/messages "$TS" anthropic-beta=context-1m)
+jh=$(R /deepseek/v1/messages "fcp-h1.direct-hub-cred")
+if check DS central deepseek "$js" a1 && check DS central deepseek "$jh" a1 \
+   && [ "$(jf "$js" path)" = /central/v1/proxy/deepseek/v1/messages ] \
+   && [ "$(jf "$jh" path)" = /central/v1/proxy/deepseek/v1/messages ] \
+   && [ "$(jf "$js" auth)" = "Bearer fcp-h1.hubsigned.sds" ] && [ "$(jf "$js" beta)" = context-1m ]; then
+  pass "DS deepseek → <central>/v1/proxy/deepseek/v1/messages with the hub pass (no oauth beta, no x-api-key)"
+else fail "DS central: $js | $jh"; fi
+grep '"ev": "fwd"' "$SB/proxy.log" | grep '"provider": "deepseek"' | grep -qv '"route": "central"' \
+  && fail "DS a deepseek request took a road other than central"
+jb=$(R /deepseek/../v1/messages "$TS")
+[ "$(jf "$jb" _status)" = 403 ] && pass "DS a /deepseek/ path that is not plain → 403" || fail "DS dotted path: $jb"
 
 # ── E: a region refusal switches the same session's route ───────────────────
 echo absent > "$SB/trust"      # a hub that names no trust: fail closed (T600 took the pre-#1968 «trusted»)

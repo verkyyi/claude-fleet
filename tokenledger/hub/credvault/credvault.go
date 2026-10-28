@@ -40,10 +40,15 @@ const (
 	Claude = "claude"
 	Codex  = "codex"
 	GitHub = "github"
+	// DeepSeek is an API key for DeepSeek's Anthropic-compatible API (task
+	// J7BN, P0): stored like a setup token — the key IS the lease, never
+	// refreshed — and handed only to the cluster credential proxy, never to a
+	// node machine.
+	DeepSeek = "deepseek"
 )
 
 // ValidProvider reports whether p is a provider the vault knows.
-func ValidProvider(p string) bool { return p == Claude || p == Codex || p == GitHub }
+func ValidProvider(p string) bool { return p == Claude || p == Codex || p == GitHub || p == DeepSeek }
 
 // Secret is the long-lived half, as the operator stores it. Which fields
 // matter depends on the provider:
@@ -59,6 +64,9 @@ func ValidProvider(p string) bool { return p == Claude || p == Codex || p == Git
 //	codex:  refresh_token, account_id (+ id_token, kept current by refreshes)
 //	github: token, user — phase one hands the person's existing token down as
 //	        is (it has no refresh); R1 replaces it with a short-lived one.
+//	deepseek: api_key only (task J7BN) — handed down as is, no expiry, no
+//	        refresh; the cluster proxy puts it in front of DeepSeek's
+//	        Anthropic-compatible API.
 //
 // account_uuid (optional, any provider) is the usage account the credential
 // belongs to, as the importing login knows it (oauthAccount.accountUuid): a
@@ -84,6 +92,8 @@ type Secret struct {
 	AWSAccessKeyID     string `json:"aws_access_key_id,omitempty"`
 	AWSSecretAccessKey string `json:"aws_secret_access_key,omitempty"`
 	AWSRegion          string `json:"aws_region,omitempty"`
+	// APIKey is a DeepSeek API key (task J7BN): provider deepseek only.
+	APIKey string `json:"api_key,omitempty"`
 }
 
 // Kinds — what the long-lived half IS, kept beside the row as metadata (the
@@ -93,6 +103,7 @@ const (
 	KindRefreshToken = "refresh_token" // refreshed by the hub, rotates on use
 	KindSetupToken   = "setup_token"   // claude setup-token: issued as is, never refreshed
 	KindToken        = "token"         // github phase one: issued as is
+	KindAPIKey       = "api_key"       // deepseek (task J7BN): issued as is, never refreshed
 	// KindBedrock is an AWS key pair for the Bedrock fallback (task PNWW):
 	// store.KindBedrock, kept out of every subscription list.
 	KindBedrock = store.KindBedrock
@@ -106,6 +117,8 @@ func (s Secret) Kind(provider string) string {
 	switch {
 	case provider == GitHub:
 		return KindToken
+	case provider == DeepSeek:
+		return KindAPIKey
 	case provider == Claude && s.SetupToken != "":
 		return KindSetupToken
 	case provider == Claude && s.AWSAccessKeyID != "":
@@ -128,6 +141,9 @@ func (s Secret) SecretExpiry(provider string) *time.Time {
 func (s Secret) Validate(provider string) error {
 	if s.AccountUUID != "" && !validAccountUUID(s.AccountUUID) {
 		return errors.New("account_uuid must be 1-128 of [A-Za-z0-9:._-]")
+	}
+	if provider != DeepSeek && s.APIKey != "" {
+		return errors.New("api_key is for provider deepseek only")
 	}
 	switch provider {
 	case Claude:
@@ -156,10 +172,32 @@ func (s Secret) Validate(provider string) error {
 		if s.Token == "" {
 			return errors.New("github needs token")
 		}
+	case DeepSeek:
+		switch {
+		case s.RefreshToken != "" || s.SetupToken != "" || s.ExpiresAt != nil || s.IDToken != "" ||
+			s.AccountID != "" || len(s.Scopes) != 0 || s.Token != "" || s.User != "" ||
+			s.AWSAccessKeyID != "" || s.AWSSecretAccessKey != "" || s.AWSRegion != "":
+			return errors.New("deepseek takes api_key only")
+		case !validAPIKey(s.APIKey):
+			return errors.New("deepseek needs api_key: 1-512 printable characters, no whitespace")
+		}
 	default:
 		return fmt.Errorf("unknown provider %q", provider)
 	}
 	return nil
+}
+
+// validAPIKey: 1-512 printable ASCII, no whitespace.
+func validAPIKey(k string) bool {
+	if k == "" || len(k) > 512 {
+		return false
+	}
+	for i := 0; i < len(k); i++ {
+		if k[i] <= ' ' || k[i] > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 func validAWSRegion(r string) bool {
@@ -608,7 +646,7 @@ func (v *Vault) LeaseProbe(ctx context.Context, principal, provider, account str
 
 // probeThrough: a probe may lease past c's reauth mark.
 func probeThrough(c *store.Credential) bool {
-	return c.Kind == KindSetupToken || strings.HasPrefix(c.RefreshError, QuotaReauthPrefix)
+	return c.Kind == KindSetupToken || c.Kind == KindAPIKey || strings.HasPrefix(c.RefreshError, QuotaReauthPrefix)
 }
 
 func (v *Vault) lease(ctx context.Context, principal, provider, account string, probe bool) (Access, error) {
@@ -623,10 +661,10 @@ func (v *Vault) lease(ctx context.Context, principal, provider, account string, 
 	if c.Kind == KindBedrock {
 		return Access{}, fmt.Errorf("%w: a Bedrock key is never leased", ErrNotBedrock)
 	}
-	if c.ReauthRequired && provider != GitHub && c.Kind == KindSetupToken && !probe {
+	if c.ReauthRequired && provider != GitHub && (c.Kind == KindSetupToken || provider == DeepSeek) && !probe {
 		return Access{}, reauthErr(c)
 	}
-	if provider == GitHub || c.Kind == KindSetupToken {
+	if provider == GitHub || provider == DeepSeek || c.Kind == KindSetupToken {
 		// No refresh: the stored token IS the lease. Nothing is written, so
 		// no row lock — any number of machines read the same token.
 		var s Secret
@@ -635,6 +673,12 @@ func (v *Vault) lease(ctx context.Context, principal, provider, account string, 
 		}
 		if provider == GitHub {
 			return Access{Token: s.Token, User: s.User}, nil
+		}
+		if provider == DeepSeek {
+			if s.APIKey == "" {
+				return Access{}, errors.New("deepseek credential carries no api_key")
+			}
+			return Access{AccessToken: s.APIKey, SubscriptionType: s.SubscriptionType}, nil
 		}
 		if s.ExpiresAt != nil && !s.ExpiresAt.After(v.now()) {
 			at := ""
@@ -832,19 +876,23 @@ func (v *Vault) RejectUpstream(principal, provider, account, fingerprint, code, 
 	}
 	at := v.now()
 	detail := optionalCode(code) + optionalBy(by)
-	if c.Kind == KindSetupToken {
+	if c.Kind == KindSetupToken || provider == DeepSeek {
 		var s Secret
 		if err := sl.Open(c.SecretSealed, &s, principal, provider, account, "secret"); err != nil {
 			return false, err
 		}
-		if AccessFingerprint(s.SetupToken) != fingerprint || c.ReauthRequired {
+		token, what := s.SetupToken, "setup token"
+		if provider == DeepSeek {
+			token, what = s.APIKey, "api key"
+		}
+		if AccessFingerprint(token) != fingerprint || c.ReauthRequired {
 			return false, nil
 		}
-		if err := v.Store.MarkReauthRequired(principal, provider, account, "upstream rejected the setup token: "+code, false, at); err != nil {
+		if err := v.Store.MarkReauthRequired(principal, provider, account, "upstream rejected the "+what+": "+code, false, at); err != nil {
 			return false, err
 		}
 		_ = v.Store.AddCredAudit(store.CredAudit{At: at, Action: store.CredUpstreamRejected, PrincipalID: principal,
-			Provider: provider, Account: account, Detail: detail + " · setup token: reauth_required"})
+			Provider: provider, Account: account, Detail: detail + " · " + what + ": reauth_required"})
 		return true, nil
 	}
 	var cached Access
@@ -879,6 +927,9 @@ func optionalBy(by string) string {
 
 // refresh runs the Refresher, asking a RefresherVia where it ran.
 func (v *Vault) refresh(ctx context.Context, provider string, s Secret) (Access, Secret, string, error) {
+	if provider == DeepSeek || provider == GitHub || s.SetupToken != "" {
+		return Access{}, s, "", fmt.Errorf("%w: a %s credential is never refreshed", ErrRefreshFailed, provider)
+	}
 	if rv, ok := v.Refresher.(RefresherVia); ok {
 		return rv.RefreshVia(ctx, provider, s)
 	}

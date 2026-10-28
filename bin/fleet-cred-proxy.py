@@ -103,6 +103,11 @@ machine's trust × the last probe (bin/fleet-node-probe.sh → node-probe.json):
                                     the hub gates as not credential-separated
                                     (/v1/node/self credsep_gate, issue #2295)
 
+DeepSeek (task J7BN, P0): a path under /deepseek/ is provider `deepseek` —
+its ONE route is central, `<central>/v1/proxy/deepseek/<rest>` with the
+session's hub pass (no machine holds the key: never direct, relay or a pool
+file); a session with no hub pass, or no central proxy here, is a 403.
+
 A region refusal (Anthropic 403 / OpenAI unsupported_country_region_territory)
 or a connection that never opens moves THAT session to the next route and
 retries the same request; the move is logged `route_switch`.
@@ -292,6 +297,23 @@ def codex_refused(method, path):
     if method not in meths:
         return "%s %s is not a request Codex CLI makes" % (method, bare)
     return ""
+def deepseek_refused(path):
+    """-> why a /deepseek/ request is refused, or "" (task J7BN): one spelling per
+    path — no %, \\, //, ./ or ../ — nothing else is checked here; the cluster
+    proxy serves /v1/proxy/deepseek/<path> and is the one that knows the key."""
+    import posixpath
+    bare = path.split("?")[0]
+    if "%" in bare or "\\" in bare or posixpath.normpath(bare) != bare:
+        return "not a plain /deepseek/ path"
+    return ""
+
+
+# DeepSeek's Anthropic-compatible API (task J7BN, P0): CENTRAL ONLY — no machine
+# holds its key, so a /deepseek/ request goes to the cluster proxy with the
+# session's hub pass, never direct, never the relay, never a pool file.
+DEEPSEEK_ONLY_CENTRAL = "deepseek runs only through the central proxy: "
+
+
 REGION_MARKS = ("unsupported_country_region_territory", "unsupported_country",
                 "unsupported_region", "request not allowed",
                 "not available in your country", "not available in your region")
@@ -2567,9 +2589,10 @@ class Proxy(BaseHTTPRequestHandler):
             return self.hub_broker(inbound, path[len("/hub"):], body, t0)
         if path.startswith("/space/"):
             return self.space(inbound, path, body, t0)
-        provider = "codex" if path.startswith("/codex/") else "claude"
-        if provider == "codex":
-            why = codex_refused(self.command, path)
+        provider = ("codex" if path.startswith("/codex/") else
+                    "deepseek" if path.startswith("/deepseek/") else "claude")
+        if provider in ("codex", "deepseek"):
+            why = codex_refused(self.command, path) if provider == "codex" else deepseek_refused(path)
             if why:
                 self.log(ev="deny", path=path.split("?")[0], why=why)
                 return self.fail(403, why, "permission_error")
@@ -2593,12 +2616,24 @@ class Proxy(BaseHTTPRequestHandler):
         if is_hub_pass(tok):
             # a hub-issued session credential: only the cluster can check it
             sid = "h-" + hashlib.sha256(tok.encode()).hexdigest()[:10]
+            if provider == "deepseek" and not self.cfg.central_url:
+                return self.deepseek_refuse(sid, path, "no central proxy is configured here (FLEET_CRED_CENTRAL_URL)")
             return self.send(["central"], provider, path, body, self.passes.best(tok), sid, "-", seen, t0)
         claims, why = self.keys.verify(tok, live=live_session(self.cfg.state))
         if not claims:
             self.log(ev="deny", path=path.split("?")[0], why=why, hdrs=seen)
             return self.fail(401, why)
         sid = claims["sid"]
+        if provider == "deepseek":
+            # never an account pick, a pin, the Codex book or a pool file: the
+            # session's hub pass (ctl attach) to the central proxy, or nothing
+            hubcred = self.t.hubcreds.get(sid)
+            if not hubcred:
+                return self.deepseek_refuse(sid, path, "this session has no hub pass "
+                                            "(mint it with fleet-session-cred.sh mint --provider deepseek)")
+            if not self.cfg.central_url:
+                return self.deepseek_refuse(sid, path, "no central proxy is configured here (FLEET_CRED_CENTRAL_URL)")
+            return self.send(["central"], provider, path, body, self.passes.best(hubcred), sid, "-", seen, t0)
         if claims.get("renewed"):
             with self.lock:
                 first = sid not in self.t.extended
@@ -2640,6 +2675,11 @@ class Proxy(BaseHTTPRequestHandler):
             hubcred = self.passes.best(hubcred)
         order, _ = self.router.candidates(provider, bool(hubcred))
         self.send(order, provider, path, body, hubcred, sid, acct, seen, t0)
+
+    def deepseek_refuse(self, sid, path, why):
+        """403, which no client retries: DeepSeek has no road from here (task J7BN)."""
+        self.log(ev="deny", provider="deepseek", sid=sid, path=path.split("?")[0], why=why)
+        return self.fail(403, DEEPSEEK_ONLY_CENTRAL + why, "permission_error")
 
     def hub_broker(self, inbound, path, body, t0):
         """/hub/<path> → the hub, with the node token put in (separated mode only)."""
@@ -2768,6 +2808,11 @@ class Proxy(BaseHTTPRequestHandler):
             base = {"direct": c.codex_url, "relay": c.relay_url + "/chatgpt/codex",
                     "central": c.central_url + "/v1/proxy/codex"}[route]
             upath = urlsplit(base).path.rstrip("/") + "/" + suffix
+        elif provider == "deepseek":
+            if route != "central" or public:
+                raise ValueError("deepseek is central only")   # never a key here (task J7BN)
+            base = c.central_url + "/v1/proxy/deepseek"
+            upath = urlsplit(base).path.rstrip("/") + path[len("/deepseek"):]
         else:
             base = {"direct": c.anthropic_url, "relay": c.relay_url + "/anthropic",
                     "central": c.central_url + "/v1/proxy/anthropic"}[route]

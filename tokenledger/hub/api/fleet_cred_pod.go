@@ -18,7 +18,7 @@ import (
 //	                           pod — an owner's "*" reads as every Codex
 //	                           subscription, an owner's list as its Codex
 //	                           entries; providers comma-separated
-//	                           (codex,claude); * : no provider gate.
+//	                           (codex,claude,deepseek); * : no provider gate.
 //
 // A list written for the pod itself still applies, under the same gate. Every
 // resolver reads it through credPolicyOf: the lease, the pool manifest, the
@@ -57,8 +57,8 @@ func checkCredPodProviders(_ *Server, v string) (string, string) {
 	seen := map[string]bool{}
 	for _, p := range strings.Split(v, ",") {
 		p = strings.TrimSpace(p)
-		if p != credvault.Codex && p != credvault.Claude {
-			return "", CredPodProvidersKey + ` is providers comma-separated (codex, claude), * for every one, or "" for the default (codex)`
+		if p != credvault.Codex && p != credvault.Claude && p != credvault.DeepSeek {
+			return "", CredPodProvidersKey + ` is providers comma-separated (codex, claude, deepseek), * for every one, or "" for the default (codex)`
 		}
 		seen[p] = true
 	}

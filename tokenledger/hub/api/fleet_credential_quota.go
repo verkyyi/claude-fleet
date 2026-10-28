@@ -18,6 +18,11 @@ func (s *Server) credentialLimits(c store.Credential) (*LimitsView, error) {
 	if s.Vault == nil {
 		return v, nil
 	}
+	if c.Provider == credvault.DeepSeek {
+		// an API key (task J7BN): no subscription windows to read
+		v.Reason = "An API key has no quota windows"
+		return v, nil
+	}
 	id := s.Vault.CredentialID(c)
 	if id == "" {
 		return v, nil

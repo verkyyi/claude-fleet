@@ -13,6 +13,11 @@
 //
 //	/v1/proxy/anthropic/<path>  → <relay>/anthropic/<path>      (api.anthropic.com)
 //	/v1/proxy/codex/<path>      → <relay>/chatgpt/codex/<path>  (chatgpt.com/backend-api/codex)
+//	/v1/proxy/deepseek/<path>   → <DeepSeekURL><path>           (api.deepseek.com/anthropic, ALWAYS direct)
+//
+// DeepSeek is a domestic provider: its requests never ride the Singapore
+// relay. Its credential is an API key (the hub's access_token, no expiry),
+// sent as x-api-key; there is no oauth beta, no rebind, no Bedrock fallback.
 //
 // It is stateless: no database, no vault key, nothing on disk. Each answer
 // from the hub is cached ≤ CacheTTL (30 s at most) by the pass, so a
@@ -23,7 +28,8 @@
 //
 // Behaviour kept from the local proxy (EPIC #1967 共同约定 5): only the
 // authentication is rewritten (Claude: Authorization + the oauth beta,
-// x-api-key dropped; Codex: Authorization + chatgpt-account-id overwritten);
+// x-api-key dropped; Codex: Authorization + chatgpt-account-id overwritten;
+// DeepSeek: Authorization dropped, x-api-key set);
 // the body passes byte for byte; the response streams chunk by chunk; a
 // refusal reads the request body first; a permanent refusal (a forged /
 // expired / revoked pass, no account) is a 403, which neither client retries;
@@ -54,9 +60,13 @@ import (
 
 // Providers, as the hub names them.
 const (
-	Claude = "claude"
-	Codex  = "codex"
+	Claude   = "claude"
+	Codex    = "codex"
+	DeepSeek = "deepseek"
 )
+
+// DefaultDeepSeekURL is DeepSeek's Anthropic-compatible API.
+const DefaultDeepSeekURL = "https://api.deepseek.com/anthropic"
 
 // PassPrefix marks a hub-issued session pass.
 const PassPrefix = "fcp-h1."
@@ -183,6 +193,9 @@ type Config struct {
 	Direct       bool
 	AnthropicURL string // default https://api.anthropic.com
 	CodexURL     string // default https://chatgpt.com/backend-api/codex
+	// DeepSeekURL is where /v1/proxy/deepseek/ goes — always, Direct or not:
+	// DeepSeek is domestic and never rides the relay (default DefaultDeepSeekURL).
+	DeepSeekURL string
 	// CacheTTL is how long one hub answer is used (default and max 30 s).
 	CacheTTL time.Duration
 	// StaleFor is how long an answer may outlive CacheTTL while the hub
@@ -249,7 +262,7 @@ func New(cfg Config) (*Proxy, error) {
 	if !cfg.Direct && cfg.RelayURL == "" {
 		return nil, errors.New("credproxy: no relay URL — every request goes through the Singapore relay (or say --direct)")
 	}
-	for _, u := range []*string{&cfg.RelayURL, &cfg.AnthropicURL, &cfg.CodexURL, &cfg.BedrockURL} {
+	for _, u := range []*string{&cfg.RelayURL, &cfg.AnthropicURL, &cfg.CodexURL, &cfg.DeepSeekURL, &cfg.BedrockURL} {
 		*u = strings.TrimRight(*u, "/")
 	}
 	if cfg.AnthropicURL == "" {
@@ -257,6 +270,9 @@ func New(cfg Config) (*Proxy, error) {
 	}
 	if cfg.CodexURL == "" {
 		cfg.CodexURL = "https://chatgpt.com/backend-api/codex"
+	}
+	if cfg.DeepSeekURL == "" {
+		cfg.DeepSeekURL = DefaultDeepSeekURL
 	}
 	if cfg.CacheTTL <= 0 || cfg.CacheTTL > MaxCacheTTL {
 		cfg.CacheTTL = MaxCacheTTL
@@ -395,6 +411,7 @@ func (p *Proxy) Handler() http.Handler {
 	mux.HandleFunc("/v1/proxy/anthropic/", func(w http.ResponseWriter, r *http.Request) { p.serve(w, r, Claude) })
 	codex := func(w http.ResponseWriter, r *http.Request) { p.serve(w, r, Codex) }
 	mux.HandleFunc("/v1/proxy/codex/", codex)
+	mux.HandleFunc("/v1/proxy/deepseek/", func(w http.ResponseWriter, r *http.Request) { p.serve(w, r, DeepSeek) })
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// past the mux's own clean-and-redirect: a /codex/ path is judged by
 		// codexRefused as it was sent, a 403 — never a 301 to its clean spelling
@@ -656,7 +673,12 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			}
 			out.Header[k] = vs
 		}
-		out.Header.Set("Authorization", "Bearer "+res.AccessToken)
+		if provider == DeepSeek {
+			// an API key, never a bearer: DeepSeek's Anthropic API reads x-api-key
+			out.Header.Set("X-Api-Key", res.AccessToken)
+		} else {
+			out.Header.Set("Authorization", "Bearer "+res.AccessToken)
+		}
 		// a metered answer must be readable here (claude-fleet#3407): Claude
 		// Code asks for br / zstd, which the meter cannot open
 		out.Header.Set("Accept-Encoding", meterAccept(r.Header.Values("Accept-Encoding")))
@@ -695,7 +717,8 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	resp, err := send(res)
 	if err == nil && resp.StatusCode == http.StatusUnauthorized && provider == Codex {
 		resp = p.refreshRejected(r.Context(), resp, pass, provider, &res)
-	} else if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+	} else if err == nil && resp.StatusCode == http.StatusTooManyRequests && provider != DeepSeek {
+		// DeepSeek is one API key: no other account to move to, its 429 passes through
 		resp = p.rebind(r.Context(), resp, pass, provider, &res, &a, send)
 	}
 	if err != nil {
@@ -789,10 +812,13 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 
 // target is where a request goes, and by which road.
 func (p *Proxy) target(provider string, u *url.URL) (string, string) {
-	pfx := map[string]string{Claude: "/v1/proxy/anthropic", Codex: "/v1/proxy/codex"}[provider]
+	pfx := map[string]string{Claude: "/v1/proxy/anthropic", Codex: "/v1/proxy/codex", DeepSeek: "/v1/proxy/deepseek"}[provider]
 	rest := strings.TrimPrefix(u.EscapedPath(), pfx)
 	base, route := "", "relay"
 	switch {
+	case provider == DeepSeek:
+		// domestic: never the relay, whatever Direct says
+		base, route = p.cfg.DeepSeekURL, "direct"
 	case p.cfg.Direct && provider == Claude:
 		base, route = p.cfg.AnthropicURL, "direct"
 	case p.cfg.Direct:

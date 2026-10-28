@@ -45,7 +45,7 @@ func (s *Server) handleNodeAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := NodeAgentsResponse{}
-	for _, a := range sessionCredProviders {
+	for _, a := range nodeAgentNames {
 		out.Agents = append(out.Agents, NodeAgent{Agent: a})
 	}
 	if s.Vault == nil {

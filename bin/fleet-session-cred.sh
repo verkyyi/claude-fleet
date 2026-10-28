@@ -7,12 +7,14 @@
 #
 #   fleet-session-cred.sh on                  exit 0 ⇔ separated (credsep.json: always,
 #                                             issue #4675) or FLEET_CRED_PROXY=1 (fleet.conf / env)
-#   fleet-session-cred.sh mint --provider claude|codex --sid SID
+#   fleet-session-cred.sh mint --provider claude|codex|deepseek --sid SID
 #                              [--account LABEL] [--codex-home DIR]
 #        → one line on stdout: <route> TAB <port> TAB <session credential>
 #          route direct|relay  the proxy signs an fcp1. bound to LABEL (or, for
 #                              Codex, the account DIR is: ~/.codex = default,
 #                              <FLEET_CRED_CODEX_HOMES>/<L> = L)
+#          (deepseek — task J7BN — is ALWAYS central: a pass for provider
+#          deepseek, whatever the machine's trust; no node holds its key)
 #          route central       an untrusted machine: an fcp-h2. (else fcp-h1.) pass borrowed from
 #                              the hub (POST /v1/fleet/session-cred, the node token
 #                              + this session's own worker assertion) — no account
@@ -255,19 +257,25 @@ case "$cmd" in
   mint)
     [ "$(switch)" = 1 ] || exit 3
     sid_ok "$sid" || die "mint: --sid NAME ([A-Za-z0-9._-])" 2
-    case "$provider" in claude|codex) ;; *) die "mint: --provider claude|codex" 2 ;; esac
+    case "$provider" in claude|codex|deepseek) ;; *) die "mint: --provider claude|codex|deepseek" 2 ;; esac
     port=$(FLEET_CRED_PROXY=1 bash "$PROXY" ensure 2>/dev/null) && [ -n "$port" ] \
       || die "the credential proxy is not running and would not start (logs/cred-proxy.log)" 6
+    route=''
+    if [ "$provider" = deepseek ]; then
+      # DeepSeek (task J7BN, P0) is central only: no machine holds its key, so the
+      # session always borrows a hub pass, whatever this machine's trust says
+      route=central
+    else
     rt=$(bash "$PROXY" route --provider "$provider" --json 2>/dev/null); prc=$?
     case "$rt" in *'"trust": "unknown"'*) rt=$(bash "$PROXY" route --provider "$provider" --refresh --json 2>/dev/null); prc=$? ;; esac
     # the route read by the shell (T992: an interpreter for one field); a shape
     # it does not know is python's, as before
-    route=''
     case "$rt" in *'"route": "'*) route=${rt#*'"route": "'}; route=${route%%'"'*} ;; esac
     case "$route" in direct|relay|central) ;; *)
       route=$(printf '%s' "$rt" | python3 -c 'import json,sys; print(json.load(sys.stdin)["route"])' 2>/dev/null) \
         || die "the proxy did not say which route this machine takes" "$(down_rc "$prc")" ;;
     esac
+    fi
     wid=''; [ "$route" = central ] || wid=$(session_worker)   # central: the cluster proxy's to meter
     if [ "$route" = central ]; then
       row=$(hub_pass "$provider"); hrc=$?

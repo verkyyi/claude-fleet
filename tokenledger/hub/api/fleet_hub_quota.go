@@ -285,7 +285,8 @@ func (s *Server) ReadHubQuota(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if c.Provider == credvault.GitHub || (c.PrincipalID == store.PoolPrincipal && paused[c.Account]) || ownPaused(settings, c) {
+		// DeepSeek (task J7BN) is an API key: no subscription windows to read.
+		if c.Provider == credvault.GitHub || c.Provider == credvault.DeepSeek || (c.PrincipalID == store.PoolPrincipal && paused[c.Account]) || ownPaused(settings, c) {
 			continue
 		}
 		id := s.Vault.CredentialID(c)

@@ -1790,6 +1790,48 @@ machine must now stop refreshing the account. Details
 and the environment table: `tokenledger/README.md`, "Credentials live at the
 entrance".
 
+### DeepSeek (task J7BN, P0)
+
+A third provider beside `claude` and `codex`: `deepseek`, an API key for
+DeepSeek's Anthropic-compatible API. A session using it is Claude Code pointed
+at that API through the cluster credential proxy. The vault keeps the key the
+way it keeps a Claude setup token (`credvault.KindAPIKey`, row kind
+`api_key`): the stored key IS the lease — no expiry, never refreshed, nothing
+written and no row lock on a lease. Its identity is the usual
+`cred:<sha256>` of owner, provider and key, so the same key under two labels
+is one credential. Its secret takes `api_key` and nothing else: 1–512
+printable characters, no whitespace, and no OAuth or Bedrock field beside it.
+`api_key` on any other provider is refused.
+
+An operator stores one in the shared pool, or as one person's own, through the
+usual route:
+
+```http
+POST /v1/fleet/credentials
+{"action": "put", "principal_id": "pool", "provider": "deepseek",
+ "account": "ds-main", "secret": {"api_key": "sk-…"}}
+```
+
+A pool key is recorded with source class `api` (a commercial API key); a
+person's own key is `byo`. `GET /v1/fleet/credentials` lists it, but never the
+key.
+
+**Central only in P0.** `/v1/node/credentials` never hands a deepseek row to a
+machine (`centralOnlyOut`), the pool manifest lists only Claude setup tokens,
+and `/v1/node/agents` lists `claude` and `codex` alone. The only road to the key
+is `POST /v1/fleet/credproxy/resolve` with `provider: "deepseek"`: a session pass
+covers `deepseek` by default (`sessionCredProviders`), it is bound through
+`sessionBind` (own key first, then the pool's, within the subscription
+allowlists), and the answer's `access_token` is the key. A pass issued with an
+explicit `providers` list that leaves deepseek out resolves none. A cluster pod
+may use it once `fleet.cred_pod_providers` names `deepseek`.
+
+The hub's quota reader skips deepseek rows (an API key has no 5h/7d windows),
+and the pool page shows it with no reading. Its usage is metered like the
+others: `POST /v1/fleet/credproxy/usage` with `provider: "deepseek"` (source
+`""`) is filed in `pool_usage` under the pass's person and counted in their
+budget.
+
 ## Organizations and subscription pools (task PNWW)
 
 One level above persons: every person belongs to exactly ONE organization

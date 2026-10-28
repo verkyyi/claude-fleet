@@ -54,7 +54,7 @@ func (s *Server) poolReauthMark(r HubQuotaRead, n int, since, at time.Time) bool
 	why := poolReauthWhy(r, n, since)
 	// An OAuth credential's cached access is what was refused: dropped, so
 	// the next probe refreshes instead of reading with it again.
-	if err := s.Store.MarkReauthRequired(r.Owner, r.Provider, r.Account, why, c.Kind != credvault.KindSetupToken, at); err != nil {
+	if err := s.Store.MarkReauthRequired(r.Owner, r.Provider, r.Account, why, c.Kind != credvault.KindSetupToken && c.Kind != credvault.KindAPIKey, at); err != nil {
 		log.Printf("pool reauth: mark %s: %v", poolReloginSubject(r), err)
 		return false
 	}
@@ -73,7 +73,7 @@ func (s *Server) poolReauthLift(r HubQuotaRead, at time.Time) bool {
 	if err != nil || c == nil || !c.ReauthRequired {
 		return false
 	}
-	if c.Kind != credvault.KindSetupToken && !strings.HasPrefix(c.RefreshError, credvault.QuotaReauthPrefix) {
+	if c.Kind != credvault.KindSetupToken && c.Kind != credvault.KindAPIKey && !strings.HasPrefix(c.RefreshError, credvault.QuotaReauthPrefix) {
 		return false
 	}
 	cleared, err := s.Store.ClearReauthRequired(r.Owner, r.Provider, r.Account, at)

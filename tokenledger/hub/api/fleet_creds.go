@@ -308,6 +308,9 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	creds = append(creds, pool...)
+	// A DeepSeek API key (task J7BN, P0) is central only: the cluster
+	// credential proxy is handed it per request, a machine never holds it.
+	creds = centralOnlyOut(creds)
 	// Subscription allowlists (claude-fleet#3043): this machine's ∩ this
 	// person's, after every gate above. A policy that cannot be read refuses
 	// the lease rather than reading as no restriction.
@@ -421,6 +424,18 @@ func (s *Server) handleNodeCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// centralOnlyOut drops the rows no machine may lease: DeepSeek API keys
+// (task J7BN, P0) live only behind the cluster credential proxy.
+func centralOnlyOut(creds []store.Credential) []store.Credential {
+	out := creds[:0:0]
+	for _, c := range creds {
+		if c.Provider != credvault.DeepSeek {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // joinDetail is a · b, or whichever is set.
@@ -592,7 +607,7 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if req.PrincipalID == "" || req.Account == "" || !credvault.ValidProvider(req.Provider) {
-			httpError(w, http.StatusBadRequest, "principal_id (a person, or \"pool\" for a shared-pool account), account and a provider of claude|codex|github are required")
+			httpError(w, http.StatusBadRequest, "principal_id (a person, or \"pool\" for a shared-pool account), account and a provider of claude|codex|github|deepseek are required")
 			return
 		}
 		if !validAccountLabel(req.Account) {
@@ -631,6 +646,17 @@ func (s *Server) handleFleetCredentials(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			audit.Action = store.CredPut
+			if req.Provider == credvault.DeepSeek {
+				// a DeepSeek API key (task J7BN): a commercial API key, by
+				// definition, when it is the pool's; a person's own stays byo
+				if req.PrincipalID == store.PoolPrincipal {
+					if err := s.Store.SetCredentialSource(req.PrincipalID, req.Provider, req.Account, store.SourceAPI, time.Now()); err != nil {
+						httpError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+				}
+				audit.Detail = "kind=api_key · "
+			}
 			if bedrock {
 				// a commercial API key, by definition (WACK C1's source_class)
 				if err := s.Store.SetCredentialSource(req.PrincipalID, req.Provider, req.Account, store.SourceAPI, time.Now()); err != nil {
