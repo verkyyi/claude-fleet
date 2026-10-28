@@ -1,3 +1,4 @@
+import { scheduleReceipt } from "@/shared/schedule-receipt";
 "use client";
 
 import {
@@ -130,6 +131,7 @@ const taskAwareGroupBy = (
   part: Parameters<typeof messageGroupBy>[0],
   context?: Parameters<typeof messageGroupBy>[1],
 ): readonly ThreadGroupKey[] => {
+  if (part.type === "tool-call" && !part.isError && scheduleReceipt(part.toolName, part.result)) return [];
   const path = messageGroupBy(part, context);
   return part.type === "tool-call" &&
     part.messages !== undefined &&

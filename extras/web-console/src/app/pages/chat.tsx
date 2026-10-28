@@ -1,3 +1,5 @@
+import { scheduleReceipt } from "@/shared/schedule-receipt";
+import { ScheduleReceipt } from "../ScheduleReceipt";
 // chat.tsx — 对话, the member side's front page (EPIC #3923 C3): assistant-ui's
 // Thread on the person's one conversation, moved here from extras/web-chat/ui
 // (issues #3637, #3646). The shell draws the bars; this page draws the thread,
@@ -61,7 +63,8 @@ const ToolStep: ToolCallMessagePartComponent = (p) => {
   const summary = (p.args as { summary?: string })?.summary;
   const waiting = !!p.approval && p.approval.approved === undefined && p.approval.resolution === undefined;
   const status = waiting ? ({ type: "requires-action", reason: "interrupt" } as const) : p.status;
-  return <ToolFallback {...p} status={status} toolName={summary || p.toolName} />;
+  const receipt = p.isError ? null : scheduleReceipt(p.toolName, p.result);
+  return <>{receipt && <ScheduleReceipt receipt={receipt} />}<ToolFallback {...p} status={status} toolName={summary || p.toolName} /></>;
 };
 
 const ModelPicker: FC = () => {

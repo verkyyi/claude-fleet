@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { scheduleReceipt } from '../src/shared/schedule-receipt.ts';
+const response={action:'create',schedule:{spec:{id:'schedule-abc',name:'Notes',at:'07:00',timezone:'Asia/Shanghai',agent:'claude',delivery:{wechat:true,livepage:false}},sync_state:'pending',observed:{}}};
+const receipt=scheduleReceipt('mcp__fleet__schedule',JSON.stringify(response));
+assert.equal(receipt.id,'schedule-abc');
+assert.equal(receipt.synced,false,'pending registration is not scheduled');
+assert.equal(receipt.next,undefined,'do not invent a first run');
+assert.equal(receipt.agent,'claude');
+for(const result of [response,JSON.stringify(response),[{type:'text',text:JSON.stringify(response)}],{content:[{type:'text',text:JSON.stringify(response)}]},{structuredContent:response}]) assert.deepEqual(scheduleReceipt('mcp__fleet.schedule',result),receipt);
+for(const result of [{...response,action:'update'},{...response,action:'list'},{...response,action:undefined},{isError:true,structuredContent:response},'{"action":"create",',{action:'create',schedule:{spec:{id:'../../oops'}}}]) assert.equal(scheduleReceipt('schedule',result),null);
+assert.equal(scheduleReceipt('Bash',response),null);
+console.log('PASS schedule receipt: create only, pending registration, native envelopes, partial and failed results');

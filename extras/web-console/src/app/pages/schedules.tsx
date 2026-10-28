@@ -1,6 +1,9 @@
+import { ScheduleReceipt } from "../ScheduleReceipt";
+import { scheduleReceipt, type ScheduleReceipt as Receipt } from "@/shared/schedule-receipt";
 import { useEffect, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -8,9 +11,9 @@ import { tr } from "@/shared/i18n";
 import { sendJSON } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
 
-import { useSchedules, scheduleDate as date, schedulePath, recurrence, scheduleAgent, type Spec, type ScheduleRow as Row, type Run } from "../schedules";
+import { useSchedules, scheduleDate as date, schedulePath, recurrence, scheduleStatus, AgentChip, type Spec, type ScheduleRow as Row, type Run } from "../schedules";
 
-type Reply = { schedule?: Row; runs?: Run[] };
+type Reply = { action?: string; schedule?: Row; runs?: Run[] };
 const initial = (): Spec => ({ id: "", revision: 0, name: "", prompt: "", at: "07:00", timezone: "Asia/Shanghai", enabled: true, deleted: false, delivery: { wechat: false, livepage: false } });
 const panel = "rounded-xl border bg-card p-4 sm:p-5 space-y-3";
 const words: Record<string, string> = {
@@ -38,6 +41,7 @@ export function SchedulePanel() {
   const selection = useRef(selected); selection.current = selected;
   const seed = state as { prompt?: string; name?: string; agent?: Spec["agent"]; repo?: string } | null;
   const [error, setError] = useState("");
+  const [created, setCreated] = useState<Receipt | null>(null);
   const [edit, setEdit] = useState<Spec | null>(null);
   useEffect(() => { setEdit(selected === "new" ? { ...initial(), ...seed } : null); setDeleting(null); setError(""); }, [selected, seed]);
   const [preview, setPreview] = useState<number | null>(null);
@@ -86,14 +90,29 @@ export function SchedulePanel() {
     setBusy(false);
     if (selection.current !== requestedSelection) { await refresh(); return; }
     if (!result.ok) { setError(result.error || tr("请求未确认，请重试。", "Request not confirmed. Retry.")); return; }
+    if (action === "create") setCreated(scheduleReceipt("schedule", result.data));
     idem.current = null; setEdit(null); setDeleting(null); await refresh(); setRunsVersion(v => v + 1);
     if (action === "delete") go("/?schedules=1");
     else if (result.data?.schedule) go(schedulePath(result.data.schedule.spec.id), { replace: action !== "create" });
   }
-  const selectedRow = rows?.find(r => r.spec.id === selected) ?? detail;
-  return <div className="mx-auto max-w-4xl space-y-5 p-4 md:p-6">
-    <header className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">⏰ {selectedRow?.spec.name || tr("定时任务", "Schedules")}</h1><p className="mt-1 text-sm text-muted-foreground">{tr("运行使用你自己的额度。", "Runs use your own allowance.")}</p></div><Button disabled={readOnly} onClick={() => go(schedulePath("new"))}>{tr("新建定时任务", "New schedule")}</Button></header>
-    {!selected && <p className="text-sm text-muted-foreground">{tr("已建", "Saved")} {rows?.length ?? "—"} / 10 · {tr("最快每小时一次，每天最多 24 次计划运行", "Hourly or slower; up to 24 planned runs a day")}</p>}
+  const selectedRow = rows?.find(r => r.spec.id === selected) ?? (detail?.spec.id === selected ? detail : null);
+  const editFromLink = new URLSearchParams(search).get("edit") === "1";
+  const editOpened = useRef("");
+  useEffect(() => {
+    if (!editFromLink) { editOpened.current = ""; return; }
+    if (selectedRow && editOpened.current !== selectedRow.spec.id) {
+      editOpened.current = selectedRow.spec.id; setEdit(structuredClone(selectedRow.spec));
+    }
+  }, [editFromLink, selectedRow]);
+  const actions = (row: Row, compact = false) => <ScheduleActions row={row} compact={compact} disabled={busy || readOnly} act={act} edit={() => setEdit(structuredClone(row.spec))} remove={() => setDeleting(row)} />;
+  return <div className="mx-auto max-w-5xl space-y-5 p-4 md:p-6">
+    <header className="space-y-3 border-b pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-3"><h1 className="text-xl font-semibold">⏰ {selectedRow?.spec.name || tr("定时任务", "Schedules")}</h1>
+        {selectedRow && !edit ? actions(selectedRow) : <div className="flex gap-2"><Button variant="ghost" size="sm" onClick={() => go("/")}>{tr("‹ 会话", "‹ Sessions")}</Button>{!edit && <Button size="sm" disabled={readOnly} onClick={() => go(schedulePath("new"))}>{tr("＋ 新建", "+ New")}</Button>}</div>}
+      </div>
+      {selectedRow && !edit ? <><div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground"><span>{recurrence(selectedRow.spec)} · {selectedRow.spec.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : selectedRow.spec.timezone}</span><AgentChip spec={selectedRow.spec} /><span>{deliveryLabel(selectedRow.spec)}</span><span>{tr("下次", "Next")} {date(selectedRow.spec.enabled ? selectedRow.observed.next_run : undefined, selectedRow.spec.timezone)}</span></div><p className="text-xs text-muted-foreground">{scheduleStatus(selectedRow)} · {tr("运行使用你自己的额度。", "Runs use your own allowance.")}</p></> : !edit && <p className="text-xs text-muted-foreground">{tr("已建", "Saved")} {rows?.length ?? "—"} / 10 · {tr("最快每小时一次，每天最多 24 次计划运行", "Hourly or slower; up to 24 planned runs a day")}</p>}
+    </header>
+    {created && created.id === selected && !edit && <ScheduleReceipt receipt={created} />}
     {feedError && <p role="status" className="text-sm text-muted-foreground">{feedError}{expired && <a href="/app/signin" className="ml-2 underline">{tr("重新登录", "Sign in again")}</a>}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {edit && <form className={panel} onSubmit={e => { e.preventDefault(); void act(edit.id ? "update" : "create", edit); }}>
@@ -112,31 +131,46 @@ export function SchedulePanel() {
       </fieldset>
       <div className="flex gap-2"><Button disabled={busy || readOnly} type="submit">{busy ? tr("保存中…", "Saving…") : tr("保存任务", "Save schedule")}</Button><Button type="button" variant="outline" onClick={() => { setEdit(null); if (selected === "new") go("/?schedules=1"); }}>{tr("取消", "Cancel")}</Button></div>
     </form>}
-    {!edit && (!selected || selectedRow) && (rows === null ? <p role="status">{tr("正在读取…", "Loading…")}</p> : rows.length === 0 && !selectedRow ? <div className={panel}><h2 className="font-semibold">{tr("创建第一个定时任务", "Create your first schedule")}</h2><p>{tr("例如：每天早上 7 点整理群日报。首次使用会自动准备你的运行环境。", "For example: summarize the group chat every morning at 7. Your runtime is prepared automatically.")}</p></div> : (selectedRow ? [selectedRow] : rows).map(row => { const s = row.spec; const o = row.observed; const state = row.sync_state !== "synced" ? "pending" : !s.enabled ? "stopped" : o.status ?? "scheduled"; return <article className={panel} key={s.id}>
-      <div className="flex flex-wrap justify-between gap-2"><h2 className="font-semibold">{s.name}</h2><span className={state === "failed" ? "text-destructive" : "text-muted-foreground"}>{words[state] ?? state}</span></div>
-      <p className="text-sm">{s.cron || tr("每天", "Daily") + " " + s.at} · {s.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : s.timezone}</p>
-      <p className="text-sm">{tr("投递", "Delivery")}: {tr("站内通知", "In-app notice")}{s.delivery.wechat && tr(" · 微信", " · WeChat")}{s.delivery.livepage && tr(" · 私密活页", " · Private live page")}</p>
-      <p className="text-sm">{tr("Agent 类型", "Agent type")}: {s.agent === "claude" ? "Claude" : s.agent === "codex" ? "Codex" : tr("跟随 fleet 默认", "Fleet default")}</p>
-      <p className="text-sm">{tr("上次", "Last")}: {date(o.last_run, s.timezone)} · {tr("下次", "Next")}: {date(s.enabled ? o.next_run : undefined, s.timezone)}</p>
-      {o.stale && <p className="text-sm text-muted-foreground">{tr("运行状态尚未更新，显示上次记录。", "Runtime status is stale; showing the last observation.")}</p>}
-      {(row.sync_note || o.last_error || o.last_line) && <p className="break-words text-sm text-muted-foreground">{row.sync_note || o.last_error || o.last_line}</p>}
-      <div className="flex flex-wrap gap-2">{!selected && <Button variant="outline" onClick={() => go(schedulePath(s.id))}>{tr("查看详情", "Details")}</Button>}<Button variant="outline" disabled={busy || readOnly || s.deleted} onClick={() => void act(s.enabled ? "pause" : "resume", s)}>{s.enabled ? tr("暂停", "Pause") : tr("恢复", "Resume")}</Button><Button variant="outline" disabled={busy || readOnly || s.deleted || row.sync_state !== "synced"} onClick={() => void act("run-now", s)}>{tr("立即运行", "Run now")}</Button><Button variant="ghost" disabled={readOnly || s.deleted} onClick={() => setEdit(structuredClone(s))}>{tr("编辑", "Edit")}</Button><Button variant="ghost" disabled={readOnly || s.deleted} onClick={() => setDeleting(row)}>{tr("删除", "Delete")}</Button></div>
-      {!s.enabled && <p className="text-xs text-muted-foreground">{tr("暂停未来运行；已经开始的本次会继续。立即运行一次后仍保持暂停。", "Future runs are paused. An active run continues. A manual run keeps the schedule paused.")}</p>}
-    </article>; }))}
+    {!edit && !selected && (rows === null ? <p role="status">{tr("正在读取…", "Loading…")}</p> : rows.length === 0 ? <div className={panel}><h2 className="font-semibold">{tr("创建第一个定时任务", "Create your first schedule")}</h2><p>{tr("例如：每天早上 7 点整理群日报。首次使用会自动准备你的运行环境。", "For example: summarize the group chat every morning at 7. Your runtime is prepared automatically.")}</p></div> : rows.map(row => <article className={`${panel} ${failed(row) ? "border-destructive/40" : ""}`} key={row.spec.id}>
+      <div className="flex items-start justify-between gap-3"><Link to={schedulePath(row.spec.id)} className="min-w-0 break-words font-semibold">{row.spec.name}</Link><span className={`shrink-0 text-xs ${failed(row) ? "text-destructive" : row.observed.status === "running" ? "text-blue-600" : "text-muted-foreground"}`}>{scheduleStatus(row)}</span></div>
+      <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">{recurrence(row.spec)} · {row.spec.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : row.spec.timezone} <AgentChip spec={row.spec} /></div>
+      <p className="text-xs text-muted-foreground">{tr("上次", "Last")}: {date(row.observed.last_run, row.spec.timezone)} · {tr("下次", "Next")}: {date(row.spec.enabled ? row.observed.next_run : undefined, row.spec.timezone)}</p>
+      {(row.sync_note || row.observed.last_error || row.observed.last_line) && <p className={`line-clamp-2 break-words text-xs ${failed(row) ? "text-destructive" : "text-muted-foreground"}`}>{row.sync_note || row.observed.last_error || row.observed.last_line}</p>}
+      {actions(row, true)}
+    </article>))}
+    {selectedRow && !edit && (selectedRow.sync_note || selectedRow.observed.stale || !selectedRow.spec.enabled) && <p role="status" className="text-xs text-muted-foreground">{selectedRow.sync_note || (selectedRow.observed.stale ? tr("运行状态尚未更新，显示上次记录。", "Runtime status is stale; showing the last observation.") : tr("暂停未来运行；已经开始的本次会继续。立即运行一次后仍保持暂停。", "Future runs are paused. An active run continues. A manual run keeps the schedule paused."))}</p>}
     {deleting && <div role="alertdialog" aria-label={tr("删除任务", "Delete schedule")} className={panel}><p>{tr("删除后不再自动运行；正在运行的本次继续，已有结果保留 30 天。", "Stops future runs. An active run continues; results remain for 30 days.")} <b>{deleting.spec.name}</b></p><div className="flex gap-2"><Button variant="destructive" disabled={busy || readOnly} onClick={() => void act("delete", deleting.spec)}>{tr("确认删除", "Delete")}</Button><Button variant="outline" onClick={() => setDeleting(null)}>{tr("取消", "Cancel")}</Button></div></div>}
-    {selected && selected !== "new" && !edit && <section className={panel}><div className="flex justify-between gap-2"><h2 className="font-semibold">{selectedRow?.spec.name} · {tr("运行结果", "Results")}</h2><Button variant="ghost" onClick={() => go("/?schedules=1")}>{tr("关闭", "Close")}</Button></div>
-      {runs === null ? <p>{tr("正在读取…", "Loading…")}</p> : runs.length === 0 ? <p>{tr("还没有运行记录。", "No runs yet.")}</p> : runs.map(run => {
-        const summary = (run.summary || run.error || tr("正在等待本次最终结论…", "Waiting for the final answer…")).split("\n")[0];
-        const content = <><p className={run.state === "failed" ? "text-sm text-destructive" : "text-sm"}>{date(run.started, selectedRow?.spec.timezone ?? "Asia/Shanghai")} · {words[run.state] ?? run.state}</p><p className="mt-2 truncate text-sm">{summary}</p>
-          {run.delivery.wechat && <p className="mt-2 text-xs">{run.delivery.wechat_channel === "email" ? tr("邮件（微信未送达）", "Email (WeChat unavailable)") : tr("微信", "WeChat")}: {words[run.delivery.wechat] ?? run.delivery.wechat}</p>}
-          {run.delivery.livepage && <p className="mt-1 text-xs">{tr("活页", "Live page")}: {words[run.delivery.livepage] ?? run.delivery.livepage}</p>}
-        </>;
-        return <div className="border-t pt-3" key={run.id}>
-          {run.session_id ? <Link className="block rounded-lg p-2 text-foreground no-underline hover:bg-muted" aria-label={`${tr("打开完整对话", "Open conversation")} · ${date(run.started, selectedRow?.spec.timezone ?? "Asia/Shanghai")}`} to={`/s/${encodeURIComponent("fid:" + run.session_id)}`}>{content}<span className="mt-2 block text-xs text-primary">{tr("打开完整对话", "Open conversation")} →</span></Link> : <div className="p-2">{content}</div>}
-          {run.delivery.url && <a className="p-2 text-sm underline" href={run.delivery.url} target="_blank" rel="noreferrer">{tr("打开私密活页", "Open private live page")}</a>}
-        </div>;
-      })}
+    {selected && selected !== "new" && !edit && <section className="space-y-3"><h2 className="text-sm font-medium text-muted-foreground">{tr("运行记录 · 点一行打开那次会话", "Run history · select a row to open its conversation")}</h2>
+      {runs === null ? <p>{tr("正在读取…", "Loading…")}</p> : runs.length === 0 ? <p className={panel}>{tr("还没有运行记录。", "No runs yet.")}</p> : <RunHistory runs={runs} zone={selectedRow?.spec.timezone ?? "Asia/Shanghai"} />}
     </section>}
-    {selectedRow && !edit && <section className={panel}><h2 className="font-semibold">{tr("任务内容", "Prompt")}</h2><p className="text-sm text-muted-foreground">{recurrence(selectedRow.spec)} · {selectedRow.spec.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : selectedRow.spec.timezone} · {scheduleAgent(selectedRow.spec)} · {tr("站内通知", "In-app notice")}{selectedRow.spec.delivery.wechat && tr(" · 微信", " · WeChat")}{selectedRow.spec.delivery.livepage && tr(" · 私密活页", " · Private live page")}</p><p className="whitespace-pre-wrap break-words text-sm">{selectedRow.spec.prompt}</p><h3 className="text-sm font-medium">{tr("日志末行", "Last log line")}</h3><p className="break-words text-sm text-muted-foreground">{selectedRow.observed.last_line || "—"}</p></section>}
+    {selectedRow && !edit && <section className="space-y-3"><h2 className="text-sm font-medium text-muted-foreground">{tr("要做什么", "Prompt")}</h2><pre className="whitespace-pre-wrap break-words rounded-xl border bg-card p-4 font-mono text-xs leading-relaxed">{selectedRow.spec.prompt}</pre><p className="break-words font-mono text-xs text-muted-foreground">{tr("日志末行", "Last log line")} · {selectedRow.observed.last_line || "—"}</p></section>}
+  </div>;
+}
+const failed = (row: Row) => row.observed.status === "failed" || row.observed.last_result === "failed";
+export const deliveryLabel = (s: Spec) => [tr("站内通知", "In-app notice"), ...(s.delivery.wechat ? [tr("本人微信", "My WeChat")] : []), ...(s.delivery.livepage ? [tr("私密活页", "Private live page")] : [])].join(" · ");
+function ScheduleActions({ row, compact, disabled, act, edit, remove }: { row: Row; compact: boolean; disabled: boolean; act: (action: string, spec: Spec) => Promise<void>; edit: () => void; remove: () => void }) {
+  const s = row.spec, locked = disabled || s.deleted;
+  return <div className="flex flex-wrap items-center gap-2">
+    {compact && <Button asChild size="sm" variant="outline"><Link to={schedulePath(s.id)}>{row.observed.status === "running" ? tr("查看本次", "Current run") : tr("查看记录", "History")}</Link></Button>}
+    {(!compact || failed(row)) && <Button size="sm" disabled={locked || row.sync_state !== "synced" || row.observed.status === "running"} onClick={() => void act("run-now", s)}>▶ {tr("立即运行", "Run now")}</Button>}
+    <Button size="sm" variant="outline" disabled={locked} onClick={() => void act(s.enabled ? "pause" : "resume", s)}>{s.enabled ? tr("⏸ 暂停", "⏸ Pause") : tr("▶ 恢复", "▶ Resume")}</Button>
+    {!compact && <Button size="sm" variant="outline" disabled={locked} onClick={edit}>{tr("编辑", "Edit")}</Button>}
+    <DropdownMenu><DropdownMenuTrigger asChild><Button size="sm" variant="outline" aria-label={tr("更多任务操作", "More schedule actions")}>⋯</Button></DropdownMenuTrigger><DropdownMenuContent align="end">
+      {compact && <DropdownMenuItem disabled={locked || row.sync_state !== "synced" || row.observed.status === "running"} onSelect={() => void act("run-now", s)}>{tr("立即运行", "Run now")}</DropdownMenuItem>}
+      {compact && <DropdownMenuItem disabled={locked} onSelect={edit}>{tr("编辑", "Edit")}</DropdownMenuItem>}
+      <DropdownMenuItem className="text-destructive" disabled={locked} onSelect={remove}>{tr("删除", "Delete")}</DropdownMenuItem>
+    </DropdownMenuContent></DropdownMenu>
+  </div>;
+}
+const columns = "grid grid-cols-2 items-start gap-2 px-3 py-3 sm:grid-cols-[9rem_8rem_minmax(0,1fr)_9rem]";
+function RunHistory({ runs, zone }: { runs: Run[]; zone: string }) {
+  return <div className="overflow-hidden rounded-xl border bg-card" role="table" aria-label={tr("运行记录", "Run history")}>
+    <div role="row" className={`${columns} hidden bg-muted/40 text-xs text-muted-foreground sm:grid`}>{[tr("时间", "Time"), tr("结果", "Result"), tr("结论", "Conclusion"), tr("投递", "Delivery")].map(t => <span role="columnheader" key={t}>{t}</span>)}</div>
+    {runs.map(run => {
+      const summary = (run.summary || run.error || tr("正在等待本次最终结论…", "Waiting for the final answer…")).split("\n")[0];
+      const duration = run.ended > run.started && run.started > 0 ? `${Math.max(1, Math.round((run.ended - run.started) / 60))} ${tr("分", "min")}` : "";
+      const cells = <><span role="cell" className="text-xs">{date(run.started, zone)}</span><span role="cell"><span className={`inline-block rounded-full px-2 py-0.5 text-xs ${run.state === "failed" ? "bg-destructive/10 text-destructive" : run.state === "running" ? "bg-blue-500/10 text-blue-600" : run.state === "ok" || run.state === "succeeded" ? "bg-emerald-500/10 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{words[run.state] ?? run.state} {duration}</span>{run.attempt > 1 && <span className="mt-1 block text-xs text-muted-foreground">{tr("重试", "Retry")} {run.attempt - 1}</span>}</span><span role="cell" className="col-span-2 min-w-0 text-sm sm:col-span-1"><span className="line-clamp-2 break-words">{summary}</span>{run.session_id && <span className="text-xs text-clay">{tr("打开会话", "Open conversation")} ›</span>}</span><span role="cell" className="col-span-2 flex flex-wrap gap-1 sm:col-span-1">{[[run.delivery.wechat_channel === "email" ? tr("邮件（微信未送达）", "Email (WeChat unavailable)") : tr("微信", "WeChat"), run.delivery.wechat], [tr("活页", "Live page"), run.delivery.livepage]].filter(([, state]) => state).map(([channel, state]) => <span key={channel} className={`rounded-full px-2 py-0.5 text-xs ${state === "sent" ? "bg-emerald-500/10 text-emerald-700" : "bg-muted text-muted-foreground"}`}>{channel} · {words[state!] ?? state}</span>)}{!run.delivery.wechat && !run.delivery.livepage && "—"}</span></>;
+      return <div key={run.id} className="border-t first:border-0">{run.session_id ? <Link role="row" className={`${columns} text-foreground no-underline hover:bg-muted/50 focus-visible:bg-muted`} to={`/s/${encodeURIComponent("fid:" + run.session_id)}`} aria-label={`${tr("打开完整对话", "Open conversation")} · ${date(run.started, zone)}`}>{cells}</Link> : <div role="row" className={columns}>{cells}</div>}{run.delivery.url && <a className="mx-3 mb-3 inline-block text-xs text-clay underline" href={run.delivery.url} target="_blank" rel="noreferrer">{tr("打开私密活页", "Open private live page")}</a>}</div>;
+    })}
   </div>;
 }
