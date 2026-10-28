@@ -18,25 +18,56 @@ const MaxDailySlots = 24
 const MaxDailyStarts = 30
 const Capability = "schedule_v1"
 const AgentCapability = "schedule_agent_v1"
+const JobCapability = "schedule_jobs_v1"
 
 type Delivery struct {
 	WeChat   bool `json:"wechat"`
 	LivePage bool `json:"livepage"`
 }
+
+// Execution is opt-in. Nil preserves the recurring contract; one-shot jobs
+// never retry unless explicitly requested. All attempts share result/delivery.
+type Execution struct {
+	TimeoutSeconds    int  `json:"timeout_seconds,omitempty"`
+	Retries           *int `json:"retries,omitempty"`
+	RetryDelaySeconds int  `json:"retry_delay_seconds,omitempty"`
+}
+
+func (s Spec) Policy() (timeout, retries, delay int) {
+	timeout, retries, delay = 3600, 2, 300
+	if s.OnceAt != 0 {
+		retries = 0
+	}
+	if p := s.Execution; p != nil {
+		if p.TimeoutSeconds != 0 {
+			timeout = p.TimeoutSeconds
+		}
+		if p.Retries != nil {
+			retries = *p.Retries
+		}
+		if p.RetryDelaySeconds != 0 {
+			delay = p.RetryDelaySeconds
+		}
+	}
+	return
+}
+
 type Spec struct {
-	ID       string   `json:"id"`
-	Revision int64    `json:"revision"`
-	Name     string   `json:"name"`
-	Prompt   string   `json:"prompt"`
-	Agent    string   `json:"agent,omitempty"`
-	At       string   `json:"at,omitempty"`
-	Cron     string   `json:"cron,omitempty"`
-	Timezone string   `json:"timezone"`
-	Enabled  bool     `json:"enabled"`
-	Deleted  bool     `json:"deleted"`
-	Delivery Delivery `json:"delivery"`
-	Repo     string   `json:"repo,omitempty"`
-	Entry    string   `json:"entry,omitempty"`
+	OnceAt    int64      `json:"once_at,omitempty"`
+	Execution *Execution `json:"execution,omitempty"`
+	ID        string     `json:"id"`
+	Revision  int64      `json:"revision"`
+	Name      string     `json:"name"`
+	Prompt    string     `json:"prompt"`
+	Agent     string     `json:"agent,omitempty"`
+	At        string     `json:"at,omitempty"`
+	Cron      string     `json:"cron,omitempty"`
+	Timezone  string     `json:"timezone"`
+	Enabled   bool       `json:"enabled"`
+	Deleted   bool       `json:"deleted"`
+	Delivery  Delivery   `json:"delivery"`
+	Repo      string     `json:"repo,omitempty"`
+	Entry     string     `json:"entry,omitempty"`
 }
 
 var ID = regexp.MustCompile(`^schedule-[a-z0-9-]{1,38}$`)
@@ -93,6 +124,10 @@ func field(s string, lo, hi int) ([]int, error) {
 // Validate returns a conservative per-day slot reservation. Calendar restrictions
 // do not buy extra burst capacity; all tasks together reserve at most 24/day.
 func Validate(s Spec) (int, error) {
+	timeout, retries, delay := s.Policy()
+	if timeout < 60 || timeout > 3600 || retries < 0 || retries > 2 || delay < 300 || delay > 86400 {
+		return 0, errors.New("execution requires timeout_seconds 60..3600, retries 0..2, retry_delay_seconds 300..86400")
+	}
 	if s.Agent != "" && s.Agent != "claude" && s.Agent != "codex" {
 		return 0, errors.New("agent must be claude or codex (empty uses fleet default)")
 	}
@@ -119,6 +154,12 @@ func Validate(s Spec) (int, error) {
 	}
 	if _, e := time.LoadLocation(s.Timezone); e != nil {
 		return 0, errors.New("unknown timezone")
+	}
+	if s.OnceAt != 0 {
+		if s.OnceAt < 1 || s.OnceAt > 253402300799 || s.At != "" || s.Cron != "" || s.Entry != "" {
+			return 0, errors.New("once_at must be a positive epoch; cannot combine with at, cron or adopt")
+		}
+		return 0, nil // one shot reserves a start, never a recurring daily slot
 	}
 	if (s.At == "") == (s.Cron == "") {
 		return 0, errors.New("provide at or cron, not both")
@@ -170,6 +211,9 @@ func Validate(s Spec) (int, error) {
 // selects or triggers a future run; only the node's task_slot owns that clock.
 func DueSlot(s Spec, slot string, now time.Time) bool {
 	epoch, err := strconv.ParseInt(slot, 10, 64)
+	if s.OnceAt != 0 {
+		return err == nil && epoch == s.OnceAt && epoch <= now.Unix()
+	}
 	if err != nil || epoch > now.Unix() || now.Unix()-epoch > 6*3600 {
 		return false
 	}
@@ -218,6 +262,12 @@ func DueSlot(s Spec, slot string, now time.Time) bool {
 func Preview(s Spec, after time.Time) (time.Time, error) {
 	if _, e := Validate(s); e != nil {
 		return time.Time{}, e
+	}
+	if s.OnceAt != 0 {
+		if s.OnceAt <= after.Unix() {
+			return time.Time{}, errors.New("one-shot time has passed")
+		}
+		return time.Unix(s.OnceAt, 0), nil
 	}
 	loc, _ := time.LoadLocation(s.Timezone)
 	expr := s.Cron

@@ -24,10 +24,47 @@ class ScheduleTests(unittest.TestCase):
         self.doc = {'id':'schedule-abc', 'revision':1, 'name':'Daily brief', 'prompt':'Summarize my notes',
                     'at':'07:00', 'timezone':'Asia/Shanghai', 'enabled':True, 'deleted':False,
                     'delivery':{'wechat':False,'livepage':False}}
+    def test_once_slot_does_not_recur_and_policy_is_opt_in(self):
+        import time
+        stamp=int(time.time())-60
+        doc=dict(self.doc,at='',once_at=stamp)
+        svc=self.schedule.apply(self.sup,self.paths,'alice',doc)
+        self.assertEqual(svc['retries'],0)
+        self.assertEqual(self.sup.task_slot(svc['schedule'],stamp-1,1)[0],stamp)
+        self.assertEqual(self.sup.task_slot(svc['schedule'],stamp,1),(None,None))
+        self.assertEqual(self.sup.task_slot(svc['schedule'],stamp+86400,-1)[0],stamp)
+        self.assertEqual(self.schedule.validate(self.sup,doc),0)
+        with self.assertRaises(ValueError):
+            self.schedule.validate(self.sup,dict(doc,at='07:00'))
+        recurring=self.schedule.apply(self.sup,self.paths,'bob',self.doc)
+        self.assertEqual((recurring['retries'],recurring['retry_delay'],recurring['timeout']),(2,300,3600))
+        policy=dict(doc,revision=2,execution={'retries':1,'timeout_seconds':600,'retry_delay_seconds':300})
+        svc=self.schedule.apply(self.sup,self.paths,'alice',policy)
+        self.assertEqual((svc['retries'],svc['timeout']),(1,600))
+
+    def test_once_due_after_offline_and_only_one_slot(self):
+        from unittest.mock import patch
+        import time
+        stamp=int(time.time())-86400
+        svc=self.schedule.apply(self.sup,self.paths,'alice',dict(self.doc,at='',once_at=stamp))
+        daemon=self.sup.Supervisor.__new__(self.sup.Supervisor)
+        daemon.p=self.paths;daemon.state={};daemon.agent_running={};daemon.dirty=False
+        seen=[]
+        def start(key,state,snapshot,ident,t):
+            seen.append(state['slot_t']);state['state']='ok'
+        daemon.start_agent=start
+        with patch.object(self.sup,'service_files',return_value=[('alice','schedule-abc','',svc,None)]),patch.object(self.sup,'account_ident',return_value=(1000,1000,self.tmp.name)):
+            daemon.tend_agent_tasks()
+            daemon.tend_agent_tasks()
+        self.assertEqual(seen,[stamp]) # past added/rescheduled and the six-hour periodic window
+
     def test_create_receipt_survives_native_preview(self):
         import json
         mcp = module('fleet-mcp')
         data = {'action': 'create', 'schedule': {'spec': dict(self.doc, prompt='x' * 16000)}}
+        self.assertIn('dispatch',mcp.listing(mcp.TOOLS))
+        job={'action':'create','job':{'spec':dict(self.doc,at='',once_at=1793142000)}}
+        self.assertEqual(mcp.tool_result('dispatch',job)['structuredContent'],job)
         response = mcp.tool_result('schedule', data)
         preview = response['content'][0]['text'][:160]
         self.assertEqual(json.loads(preview.split('\n')[0]), {'action':'create', 'schedule_id':self.doc['id']})

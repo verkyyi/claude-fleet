@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -106,6 +107,11 @@ func (s *Store) SaveSchedule(owner, key, request string, next Schedule, expected
 	} else {
 		if e != nil {
 			return Schedule{}, e
+		}
+		// A one-shot identity cannot become a different occurrence, including
+		// after its history has been pruned. Create a new job intentionally.
+		if old.Spec.OnceAt != next.Spec.OnceAt {
+			return Schedule{}, ErrScheduleConflict
 		}
 		if old.Spec.Revision != expected || old.Spec.Deleted {
 			return Schedule{}, ErrScheduleConflict
@@ -262,8 +268,12 @@ func (s *Store) AdmitSchedule(owner, endpoint, id, slot string, revision int64, 
 	if spec.Spec.Deleted || spec.Spec.Revision != revision || spec.SyncState != "synced" || (!spec.Spec.Enabled && !manual) {
 		return ScheduleRun{}, ErrScheduleConflict
 	}
-	if attempt < 1 || attempt > 3 {
+	_, retries, delay := spec.Spec.Policy()
+	if attempt < 1 || attempt > 1+retries {
 		return ScheduleRun{}, ErrScheduleLimit
+	}
+	if spec.Spec.OnceAt != 0 && (manual || slot != strconv.FormatInt(spec.Spec.OnceAt, 10) || now.Unix() < spec.Spec.OnceAt) {
+		return ScheduleRun{}, ErrScheduleConflict
 	}
 	if manual {
 		var one int
@@ -274,9 +284,13 @@ func (s *Store) AdmitSchedule(owner, endpoint, id, slot string, revision int64, 
 	}
 	if attempt > 1 {
 		var state string
-		e = tx.QueryRow(`SELECT state FROM fleet_schedule_runs WHERE schedule_id=? AND slot=? AND attempt=?`, id, slot, attempt-1).Scan(&state)
+		var ended int64
+		e = tx.QueryRow(`SELECT state,ended FROM fleet_schedule_runs WHERE schedule_id=? AND slot=? AND attempt=?`, id, slot, attempt-1).Scan(&state, &ended)
 		if e != nil || state != "failed" {
 			return ScheduleRun{}, ErrScheduleConflict
+		}
+		if spec.Spec.Execution != nil && now.Unix() < ended+int64(delay) {
+			return ScheduleRun{}, ErrScheduleLimit // defer this attempt, do not cancel it
 		}
 	}
 	loc, _ := time.LoadLocation("Asia/Shanghai")
@@ -297,6 +311,24 @@ func (s *Store) AdmitSchedule(owner, endpoint, id, slot string, revision int64, 
 		}
 		if last > 0 && now.Unix()-last < 3600 {
 			return ScheduleRun{}, ErrScheduleLimit
+		}
+	}
+	if spec.Spec.OnceAt != 0 && attempt == 1 {
+		res, err := tx.Exec(`INSERT INTO fleet_schedule_once(schedule_id,slot,started) VALUES (?,?,?) ON CONFLICT(schedule_id) DO NOTHING`, id, slot, now.Unix())
+		if err != nil {
+			return ScheduleRun{}, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return ScheduleRun{}, err
+		}
+		if n != 1 {
+			return ScheduleRun{}, ErrScheduleConflict
+		}
+	}
+	if spec.Spec.OnceAt != 0 && attempt > 1 {
+		if _, e = tx.Exec(`UPDATE fleet_schedule_once SET state='running',ended=0,attempt=? WHERE schedule_id=?`, attempt, id); e != nil {
+			return ScheduleRun{}, e
 		}
 	}
 	// Same UUID5 as fleet_schedule_run.py; admission persists it before launch.
@@ -331,7 +363,18 @@ func (s *Store) FinishSchedule(owner, endpoint, id, state, summary, why, session
 	if r.Endpoint != endpoint || r.State != state || r.Summary != summary || r.Error != why {
 		return r, ErrScheduleConflict
 	}
+	// Keep the one-shot terminal state even when detailed run history expires.
+	// Retried finish requests also repair this projection after a transient error.
+	_, e = s.write.Exec(`UPDATE fleet_schedule_once SET state=?,ended=? WHERE schedule_id=? AND attempt=?`, state, r.Ended, r.ScheduleID, r.Attempt)
+	if e != nil {
+		return r, e
+	}
 	return r, nil
+}
+
+func (s *Store) ScheduleOnce(owner, id string) (state string, started, ended int64, err error) {
+	err = s.read.QueryRow(`SELECT o.state,o.started,o.ended FROM fleet_schedule_once o JOIN fleet_schedules s ON s.id=o.schedule_id WHERE s.owner=? AND s.id=?`, owner, id).Scan(&state, &started, &ended)
+	return
 }
 
 func (s *Store) ScheduleDelivery(owner, id string, d json.RawMessage) error {

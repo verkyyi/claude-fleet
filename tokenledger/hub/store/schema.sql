@@ -805,3 +805,9 @@ CREATE TABLE IF NOT EXISTS fleet_schedule_manual (
 CREATE TABLE IF NOT EXISTS fleet_schedule_pages (
  schedule_id TEXT PRIMARY KEY, owner TEXT NOT NULL, proposal_id TEXT NOT NULL, url TEXT NOT NULL
 );
+
+-- Durable one-shot consumption survives run retention and daemon state loss.
+CREATE TABLE IF NOT EXISTS fleet_schedule_once (
+ schedule_id TEXT PRIMARY KEY, slot TEXT NOT NULL, started BIGINT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'running', ended BIGINT NOT NULL DEFAULT 0, attempt INTEGER NOT NULL DEFAULT 1
+);

@@ -852,3 +852,76 @@ The hub persists desired definitions and retries installation through the existi
 The managed runner commits launch intent and final results locally, adopts its exact attempt window, and uploads through the authenticated node path. An unconfirmed launch retains its reservation instead of spending again. Success requires an exact native transcript final and no active background work or Loop. Failures retain the daemon's retry/service_failed route. Final results and consent snapshots feed the existing durable notification outbox; private page publishing records its receipt before polling conversion/review. Ambiguous publication is shown as unconfirmed and is never blindly repeated. Finished run records expire after 30 days; an active reservation is never silently expired.
 
 Schedule admission persists the runner’s deterministic UUID5 (`schedule_id:slot:attempt`, URL namespace) before launch. The owner-scoped run record supplies `schedule_id` / `run_id` on board rows and `GET /v1/schedules?session_id=<fid>` for historical conversations. Completion cannot rebind a new run to another session. Run title snapshots preserve the original name/date, while manual conversation titles take precedence. The Web entry is the conversation sidebar and main detail panel (`/app/?schedule=<id>`); `/app/schedules?id=<id>` forwards there.
+
+### Managed Dispatch and Schedule
+
+`dispatch` adds a managed execution entry, sharing Schedule's owner/login,
+registry, admission, result and delivery paths. It does not replace the interactive
+`task` tool, `/v1/chat/open`, signed client placement, `/v1/svc/runs`, or the
+throwaway container `/v1/node/jobs` API. Those contracts and defaults remain intact.
+
+Personal HTTP entry: `GET|POST /v1/dispatch`; authenticated node adapter:
+`GET|POST /v1/node/dispatch`. The personal route requires a signed-in Tokenman
+person, with the same origin checks as `/v1/schedules`; a shared viewer token is
+not a person credential. This is not a new API-key issuance or webhook service.
+Service-account runs retain their existing scoped-token and signed-callback API.
+
+POST accepts the Schedule fields (`name`, `prompt`, `agent`, `repo`, `timezone`,
+`delivery`, `idempotency_key`, `id`, `revision`, `action`) plus:
+
+```json
+{
+  "action": "create",
+  "idempotency_key": "notes-2027-01-01",
+  "name": "Notes summary",
+  "prompt": "Summarize my notes and list the sources.",
+  "agent": "codex",
+  "trigger": {"type": "once", "at": "2027-01-01T07:00:00+08:00"},
+  "delivery": {"wechat": true, "livepage": false},
+  "execution": {"timeout_seconds": 900, "retries": 0}
+}
+```
+
+Triggers: `{"type":"now"}`, `{"type":"once","at":"<RFC3339 with offset>"}`,
+`{"type":"daily","at":"07:00"}` or `{"type":"cron","cron":"0 7 * * 1-5"}`.
+`trigger` cannot combine with legacy `at`, `cron` or `adopt`. `once` requires a
+future whole-second timestamp; the offset fixes the instant and `timezone`
+(default Asia/Shanghai) controls display. Creation retries reuse the original
+instant. `/v1/dispatch` defaults missing `action` to `create` and requires a
+trigger for create. The old `/v1/schedules` list still returns recurring definitions by default;
+`?include_jobs=1` opts into all triggers (used by the new Web feed). Its request/response remains valid and
+also accepts the additive fields.
+
+A write returns `{action, job}`; `job.spec.id` is the stable definition ID and
+`job.sync_state` distinguishes pending registration from runtime confirmation.
+`GET /v1/dispatch` returns `{jobs, unread, limits}`. `GET /v1/dispatch?id=<id>`
+returns `{job, runs}`; each run includes its ID, state, session ID, final summary,
+error and delivery status. MCP `dispatch` uses the same actions as `schedule`.
+IDs are shared: either tool may inspect or pause the same definition. A successful
+registration is not task completion; read `runs` for the result. Use a stable
+idempotency key for every retried write, and the current revision for edits.
+
+Execution is optional: timeout 60–3600 seconds (default 3600), retries 0–2,
+retry delay 300–86400 seconds (default 300). Recurring defaults remain two retries;
+one-shot defaults to none. An explicit retry may repeat external side effects;
+callers opt in deliberately. Pause/delete stop future starts, not the active
+conversation. One-shot triggers are immutable and cannot use `run-now`; use a
+new ID/key for an intentional repeat. A due one-shot waits for capacity/runtime,
+including after an offline period; periodic catch-up remains six hours. All
+managed definitions, including saved completed ones, share the 10-record quota,
+30 starts/day and one running attempt. Only recurrence reserves daily slots.
+Detailed run results retain the existing 30-day window.
+
+The supervisor remains the only scheduling clock. `Spec.once_at` stores a fixed
+epoch, and `fleet_schedule_once` is a durable admission fence that survives run
+pruning and lost daemon state. Replaying an admitted attempt restores its exact
+session ID. Opted-in retries need a failed prior attempt and the backoff. The
+`execution` policy travels with the existing frozen attempt snapshot. Nodes
+must advertise `schedule_jobs_v1` before receiving either new field; legacy
+schedule definitions still work on `schedule_v1` nodes. No existing definition
+is rewritten or re-registered during upgrade.
+
+Design checks: this adds personal self-service execution to the existing runtime,
+uses native Claude/Codex sessions, and adds no scheduler or orchestration service.
+Managed execution remains an explicit user choice. Existing ownership, billing,
+private results and delivery consent apply to all triggers.

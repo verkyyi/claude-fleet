@@ -19,6 +19,7 @@ import uuid
 BIN=Path(__file__).resolve().parent
 sys.path.insert(0,str(BIN))
 from fleet_node_http import call, Unreachable
+from fleet_schedule import policy
 
 class AdmissionCancelled(Exception):
     pass
@@ -172,7 +173,8 @@ def run():
             tmux(session,'set-option','-w','-t',wid,'@schedule_id',doc['id'])
             tmux(session,'set-option','-w','-t',wid,'@schedule_run_id',ans['id'])
         started=rec.get('started',ans['started']);last=rec.get('native',{});summary='';why=''
-        while time.time()-started<3600:
+        timeout,_,_=policy(doc)
+        while time.time()-started<timeout:
             if not wid:wid=attempt_window(session,name,rec)
             current=native(session,wid) if wid else {}
             if current:
@@ -186,7 +188,7 @@ def run():
             if current.get('state') in ('needs','blocked','ask'):
                 why='task needs your input';break
             time.sleep(5)
-        else:why='task exceeded its one-hour limit'
+        else:why='task exceeded its %s-second limit'%timeout
         if why:
             summary=''
             fid=last.get('fid') or rec.get('fid')

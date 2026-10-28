@@ -12,7 +12,7 @@ try {
     const row=(id,name,status,agent)=>({spec:{id,revision:1,name,prompt:'Summarize the group discussion.\nInclude sources and action items.',at:'07:30',timezone:'Asia/Shanghai',agent,enabled:true,delivery:{wechat:true,livepage:true}},sync_state:'synced',observed:{status,last_run:1793143800,next_run:1793230200,last_line:'Read 26 messages; composing the final summary.'}});
     let rows=[row('schedule-brief','Group brief','running','claude'),row('schedule-ai','AI brief','scheduled','codex'),row('schedule-failed','Weekly notes','failed','claude')];
     const runs=[{id:'run-1',state:'running',attempt:1,started:1793143800,ended:0,summary:'',delivery:{},session_id:'12345678-1234-4234-8234-123456789abc'},{id:'run-2',state:'succeeded',attempt:2,started:1793057400,ended:1793058060,summary:'Today’s group summary\nFull conclusion',delivery:{wechat:'sent',livepage:'sent'},session_id:'12345678-1234-4234-8234-123456789abd'},{id:'run-3',state:'failed',attempt:1,started:1792971000,ended:1792971300,error:'Source needs authorization',delivery:{wechat:'undelivered'},session_id:''}];
-    const actions=[]; let fullReads=0;
+    const actions=[], bodies=[]; let fullReads=0;
     await page.route('**/*',async route=>{
       const url=new URL(route.request().url());
       if(!url.pathname.startsWith('/v1/')){
@@ -40,9 +40,9 @@ try {
       }
       if(url.pathname==='/v1/schedules'){
         if(route.request().method()==='POST'){
-          const body=route.request().postDataJSON();actions.push(body.action);
+          const body=route.request().postDataJSON();actions.push(body.action); bodies.push(body);
           if(body.action==='create'){
-            const created={...row('schedule-created',body.name,'scheduled',body.agent),spec:{...body,id:'schedule-created',revision:1,enabled:true},sync_state:'pending',observed:{}};
+            const created={...row('schedule-created',body.name,'scheduled',body.agent),spec:{...body,...(body.trigger ? {once_at:body.trigger.type==='now'?Math.floor(Date.now()/1000):Date.parse(body.trigger.at)/1000,trigger:undefined}:{}),id:'schedule-created',revision:1,enabled:true},sync_state:'pending',observed:{}};
             rows.push(created); data={action:'create',schedule:created};
           } else data={ok:true};
         } else if(url.searchParams.has('session_id'))data={run:{id:'run-1',schedule_id:'schedule-brief',title:'Group brief 2026-10-28'}};
@@ -91,6 +91,19 @@ try {
     await receipt.getByRole('link',{name:'Change time'}).click();
     await page.getByRole('textbox',{name:'Name',exact:true}).waitFor();
     assert.equal(await page.getByRole('textbox',{name:'Name',exact:true}).inputValue(),'New daily brief');
+    for(const mode of ['now','once']) {
+      await page.goto(base+'?schedule=new&lang=en');
+      await page.getByRole('textbox',{name:'Name',exact:true}).fill('One-shot '+mode);
+      await page.getByRole('textbox',{name:'What should it do?'}).fill('Summarize once');
+      await page.getByRole('combobox',{name:'When to run',exact:true}).selectOption(mode);
+      if(mode==='once')await page.getByRole('textbox',{name:'Date and time (include UTC offset)'}).fill('2027-01-01T07:00:00+08:00');
+      await page.getByRole('button',{name:'Save schedule',exact:true}).click();
+      await page.getByRole('region',{name:'Schedule creation receipt'}).waitFor();
+      assert.equal(bodies.filter(b=>b.action==='create').at(-1).trigger.type,mode);
+      assert.equal(bodies.filter(b=>b.action==='create').at(-1).at,undefined,'no accidental daily recurrence');
+      assert.equal(bodies.filter(b=>b.action==='create').at(-1).execution,undefined,'retries not silently enabled');
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    }
     await context.close();
     assert.deepEqual(errors,[],`browser errors at ${width}`);
     console.log(`PASS ${width}px: layout, run navigation, retry count, native and form receipts, edit link`);

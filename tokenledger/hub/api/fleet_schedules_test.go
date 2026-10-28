@@ -388,3 +388,98 @@ func TestScheduleConversationProvenance(t *testing.T) {
 		t.Fatalf("closed/manual source: %+v %v", board, err)
 	}
 }
+
+func TestJobsUnifiedAndLegacyContracts(t *testing.T) {
+	h := newFleetHarness(t)
+	request := func(owner, path, body string, code int) map[string]json.RawMessage {
+		t.Helper()
+		r := httptest.NewRequest("POST", path, bytes.NewBufferString(body))
+		w := httptest.NewRecorder()
+		h.srv.scheduleRequest(w, r, owner, nil)
+		if w.Code != code {
+			t.Fatalf("want %d got %d: %s", code, w.Code, w.Body.String())
+		}
+		var out map[string]json.RawMessage
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	raw := `{"idempotency_key":"now-job","name":"Brief","prompt":"Summarize","trigger":{"type":"now"},"agent":"claude","delivery":{"wechat":true}}`
+	first := request("alice", DispatchPath, raw, 200)
+	var job store.Schedule
+	_ = json.Unmarshal(first["job"], &job)
+	if job.Spec.OnceAt == 0 || job.Spec.At != "" || job.Spec.Agent != "claude" || !job.Spec.Delivery.WeChat {
+		t.Fatal(job)
+	}
+	_, retries, _ := job.Spec.Policy()
+	if retries != 0 {
+		t.Fatal("default retry")
+	}
+	again := request("alice", DispatchPath, raw, 200)
+	var replay store.Schedule
+	_ = json.Unmarshal(again["job"], &replay)
+	if job.Spec.ID != replay.Spec.ID || job.Spec.OnceAt != replay.Spec.OnceAt {
+		t.Fatal("duplicate create", replay)
+	}
+	request("alice", DispatchPath, `{"idempotency_key":"now-job","name":"Changed","prompt":"Summarize","trigger":{"type":"now"}}`, 409)
+	request("bob", DispatchPath, fmt.Sprintf(`{"action":"pause","id":"%s","revision":1,"idempotency_key":"pause"}`, job.Spec.ID), 404)
+	request("alice", DispatchPath, fmt.Sprintf(`{"action":"run-now","id":"%s","idempotency_key":"repeat"}`, job.Spec.ID), 409)
+	request("alice", DispatchPath, `{"idempotency_key":"bad","name":"Bad","prompt":"notes","trigger":{"type":"once","at":"2027-01-01T07:00:00"}}`, 400)
+	request("alice", DispatchPath, `{"idempotency_key":"bad","name":"Bad","prompt":"notes","trigger":{"type":"now"},"at":"07:00"}`, 400)
+	once := request("alice", DispatchPath, `{"idempotency_key":"once","name":"Once","prompt":"notes","trigger":{"type":"once","at":"2027-01-01T07:00:00+08:00"}}`, 200)
+	_ = json.Unmarshal(once["job"], &replay)
+	expected, _ := time.Parse(time.RFC3339, "2027-01-01T07:00:00+08:00")
+	if replay.Spec.OnceAt != expected.Unix() {
+		t.Fatal(replay)
+	}
+	old := request("alice", SchedulesPath, `{"action":"create","idempotency_key":"old","name":"Daily","prompt":"notes","at":"07:00"}`, 200)
+	var legacy store.Schedule
+	_ = json.Unmarshal(old["schedule"], &legacy)
+	timeout, retries, delay := legacy.Spec.Policy()
+	if legacy.Spec.OnceAt != 0 || legacy.Spec.Execution != nil || timeout != 3600 || retries != 2 || delay != 300 || old["job"] != nil {
+		t.Fatal("legacy contract changed", legacy)
+	}
+}
+func TestJobLegacyListKeepsRecurringShape(t *testing.T) {
+	h := newFleetHarness(t)
+	for _, once := range []bool{false, true} {
+		id := fmt.Sprintf("schedule-%v", once)
+		spec := schedule.Spec{ID: id, Revision: 1, Name: "test", Prompt: "test", At: "07:00", Timezone: "Asia/Shanghai", Enabled: true}
+		if once {
+			spec.At = ""
+			spec.OnceAt = time.Now().Unix()
+		}
+		if _, err := h.srv.Store.SaveSchedule("alice", id, id, store.Schedule{Spec: spec}, 0, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		path, key string
+		n         int
+	}{
+		{SchedulesPath, "schedules", 1}, {SchedulesPath + "?include_jobs=1", "schedules", 2}, {DispatchPath, "jobs", 2},
+	} {
+		w := httptest.NewRecorder()
+		h.srv.scheduleRequest(w, httptest.NewRequest("GET", tt.path, nil), "alice", nil)
+		var response map[string]json.RawMessage
+		_ = json.Unmarshal(w.Body.Bytes(), &response)
+		var rows []store.Schedule
+		_ = json.Unmarshal(response[tt.key], &rows)
+		if w.Code != 200 || len(rows) != tt.n {
+			t.Fatal(tt, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestJobsRequiresRuntimeCapability(t *testing.T) {
+	h, _, _ := newVaultHarness(t)
+	row := store.Schedule{Owner: pAlice, Endpoint: "jobs-node", Hostname: "mac-c", Login: "alice", Spec: schedule.Spec{OnceAt: time.Now().Unix()}}
+	for _, capable := range []bool{false, true} {
+		conn := &nodeConn{canSchedule: true, canScheduleJobs: capable}
+		h.srv.nodes.put(row.Endpoint, conn)
+		_, err := h.srv.scheduleTarget(context.Background(), row)
+		if (err == nil) != capable {
+			t.Fatal(capable, err)
+		}
+		h.srv.nodes.drop(row.Endpoint, conn)
+	}
+}

@@ -247,3 +247,32 @@ socket 0600）。
 旧 `fleet task` 任务可原位迁入：先暂停并等待当前运行结束，再在同一登录账号的会话中要求接管，提供原任务名及完全相同的提示词、时间、时区和 Agent 选择。`schedule create` 的 `adopt` 指向原任务名，保留原注册表文件、完成文件和历史；不要另建一个同时间的任务。尚在运行、参数不一致或已经被接管的任务会被拒绝。
 
 命令行登记可用 `fleet task add daily --at 07:00 --prompt "/daily-brief" --agent claude`。已有 CLI 任务可用 `fleet task schedule daily --agent claude` 只修改 Agent，保留运行时间；`fleet task ls` 显示选择。不要用 `--env FLEET_AGENT=…` 代替。
+
+### 一次性任务与统一接口
+
+在创建表单选择「立即执行一次」或「指定时间，仅一次」，也可以在会话中说
+「明天北京时间早上 7 点整理笔记，只执行一次」。AI 使用 `dispatch` 工具；
+运行结果、完整对话、微信和私密活页投递与定时任务共用。登记成功只代表请求
+已保存，结果要等运行完成。运行环境暂不可用时会等待；暂停或删除阻止未来启动，
+已开始的会话继续。
+
+一次性任务默认不重试，最长运行 1 小时。通过接口可显式设置 60–3600 秒超时、
+0–2 次重试和至少 5 分钟的重试间隔。重试可能重复外部操作，只在任务适合重试时
+开启。一次性执行时间确定后不可修改或「立即运行」第二遍；需要再做时新建任务。
+它与重复任务共用数量和每日启动上限，已完成但未删除的定义也计入 10 个任务。
+
+个人接口为 `POST /v1/dispatch`，使用本人 Tokenman 登录会话认证。示例请求：
+
+```json
+{"idempotency_key":"my-summary-001","name":"整理笔记","prompt":"总结我的笔记","agent":"codex","trigger":{"type":"now"},"delivery":{"wechat":true}}
+```
+
+`trigger` 也可以是 `{"type":"once","at":"2027-01-01T07:00:00+08:00"}`、
+`{"type":"daily","at":"07:00"}` 或 `{"type":"cron","cron":"0 7 * * 1-5"}`。
+重复任务默认时区为 Asia/Shanghai；一次性时间必须包含日期和时区偏移。
+返回 `job.spec.id` 后，用 `GET /v1/dispatch?id=<id>` 查询任务及 `runs` 中的
+最终结论、会话编号和投递状态。同一请求重试时复用 `idempotency_key`。
+这不是共享管理令牌接口，也不新增个人 API Key 或 webhook。
+
+已有 `task`、`schedule`、`/v1/chat/open` 和服务账号 `/v1/svc/runs` 调用无需修改。
+普通会话仍可持续追问；服务账号原有的签名回调继续使用。

@@ -163,3 +163,80 @@ func TestScheduleSessionBindingAndSnapshot(t *testing.T) {
 		t.Fatal("rename/delete changed historical source", own, err)
 	}
 }
+
+func TestJobOnceReplayAfterRetention(t *testing.T) {
+	s := newStore(t)
+	now := time.Now().Add(-32 * 24 * time.Hour)
+	row := scheduleFixture("schedule-once")
+	row.Spec.At, row.Spec.OnceAt = "", now.Unix()
+	row, err := s.SaveSchedule("alice", "once", "once", row, 0, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.ScheduleSynced(row, "synced", "", "{}")
+	slot := fmt.Sprint(now.Unix())
+	run, err := s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 1, false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 1, false, now)
+	if err != nil || again.ID != run.ID || again.SessionID != run.SessionID {
+		t.Fatal("replay", err)
+	}
+	if _, err = s.FinishSchedule("alice", "node-a", run.ID, "succeeded", "answer", "", run.SessionID, now); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.PruneScheduleRuns(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 1, false, time.Now()); !errors.Is(err, ErrScheduleConflict) {
+		t.Fatal("pruned one-shot executed twice", err)
+	}
+	if _, err = s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 2, false, time.Now()); err == nil {
+		t.Fatal("implicit retry")
+	}
+	row.Spec.Revision++
+	row.Spec.OnceAt++
+	if _, err = s.SaveSchedule("alice", "move-time", "move-time", row, 1, time.Now()); !errors.Is(err, ErrScheduleConflict) {
+		t.Fatal("retimed consumed identity", err)
+	}
+}
+func TestJobRetryRequiresConsentAndBackoff(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	retries := 1
+	row := scheduleFixture("schedule-retry")
+	row.Spec.At, row.Spec.OnceAt = "", now.Unix()
+	row.Spec.Execution = &schedule.Execution{Retries: &retries}
+	row, err := s.SaveSchedule("alice", "retry", "retry", row, 0, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.ScheduleSynced(row, "synced", "", "{}")
+	slot := fmt.Sprint(now.Unix())
+	run, err := s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 1, false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.FinishSchedule("alice", "node-a", run.ID, "failed", "", "failure", run.SessionID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 2, false, now.Add(time.Second)); !errors.Is(err, ErrScheduleLimit) {
+		t.Fatal("early retry must defer", err)
+	}
+	if _, err = s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 2, false, now.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// A delayed retry of attempt one's finish must not overwrite attempt two.
+	if _, err = s.FinishSchedule("alice", "node-a", run.ID, "failed", "", "failure", run.SessionID, now); err != nil {
+		t.Fatal(err)
+	}
+	state, _, _, err := s.ScheduleOnce("alice", row.Spec.ID)
+	if err != nil || state != "running" {
+		t.Fatal("stale finish overwrote newer attempt", state, err)
+	}
+	if _, err = s.AdmitSchedule("alice", "node-a", row.Spec.ID, slot, 1, 3, false, now.Add(10*time.Minute)); err == nil {
+		t.Fatal("excess retry")
+	}
+}

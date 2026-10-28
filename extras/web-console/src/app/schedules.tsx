@@ -6,7 +6,7 @@ import { useMe } from "@/shared/api";
 import { lang, tr } from "@/shared/i18n";
 import { Button } from "@/components/ui/button";
 
-export type Spec = { id: string; revision: number; name: string; prompt: string; agent?: "" | "claude" | "codex"; at?: string; cron?: string; timezone: string; enabled: boolean; deleted: boolean; delivery: { wechat: boolean; livepage: boolean }; repo?: string };
+export type Spec = { id: string; revision: number; name: string; prompt: string; agent?: "" | "claude" | "codex"; at?: string; cron?: string; once_at?: number; trigger?: { type: "now" | "once"; at?: string }; execution?: { timeout_seconds?: number; retries?: number; retry_delay_seconds?: number }; timezone: string; enabled: boolean; deleted: boolean; delivery: { wechat: boolean; livepage: boolean }; repo?: string };
 export type ScheduleRow = { spec: Spec; sync_state: string; sync_note: string; observed: { status?: string; last_run?: number; next_run?: number; last_result?: string; last_line?: string; last_error?: string; stale?: boolean } };
 export type Run = { attempt: number; id: string; schedule_id: string; state: string; started: number; ended: number; summary: string; error: string; delivery: { wechat?: string; wechat_channel?: string; livepage?: string; url?: string }; session_id: string };
 type Feed = { expired: boolean; read: <T>(url: string, init?: RequestInit) => Promise<T | null>; rows: ScheduleRow[] | null; unread: Run[]; error: string; refresh: () => Promise<void> };
@@ -18,7 +18,7 @@ export function scheduleDate(t: number | undefined, zone: string) {
   try { return new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", { timeZone: zone, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(t * 1000); } catch { return "—"; }
 }
 export const scheduleAgent = (s: Spec) => s.agent === "claude" ? "Claude" : s.agent === "codex" ? "Codex" : tr("跟随默认", "Default agent");
-export const recurrence = (s: Spec) => s.cron || `${tr("每天", "Daily")} ${s.at}`;
+export const recurrence = (s: Spec) => s.once_at ? `${tr("仅一次", "Once")} ${scheduleDate(s.once_at, s.timezone)}` : s.trigger?.type === "now" ? tr("立即执行一次", "Run once now") : s.trigger?.type === "once" ? `${tr("仅一次", "Once")} ${s.trigger.at ?? ""}` : s.cron || `${tr("每天", "Daily")} ${s.at}`;
 export function scheduleStatus(r: ScheduleRow) {
   if (!r.spec.enabled) return tr("⏸ 已暂停", "⏸ Paused");
   if (r.sync_state !== "synced") return tr("等待确认", "Pending");
@@ -39,7 +39,7 @@ export function SchedulesProvider({ children }: { children: ReactNode }) {
     return result.kind === "ok" ? result.data : null;
   }, []);
   const refresh = useCallback(async () => {
-    const data = await read<{ schedules: ScheduleRow[]; unread?: Run[] }>("/v1/schedules");
+    const data = await read<{ schedules: ScheduleRow[]; unread?: Run[] }>("/v1/schedules?include_jobs=1");
     if (data) { setRows(data.schedules); setUnread(data.unread ?? []); setError(""); }
     else setError(tr("暂时无法刷新定时任务，保留上次结果。", "Could not refresh schedules. Showing the previous result."));
   }, [read]);

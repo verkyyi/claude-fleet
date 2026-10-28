@@ -10,7 +10,18 @@ import os
 import re
 
 ID = re.compile(r'^schedule-[a-z0-9-]{1,38}$')
-FIELDS = {'id','revision','name','prompt','at','cron','timezone','enabled','deleted','delivery','repo','entry','agent'}
+FIELDS = {'id','revision','name','prompt','at','cron','timezone','enabled','deleted','delivery','repo','entry','agent','once_at','execution'}
+
+def policy(doc):
+    p=doc.get('execution') or {}
+    if not isinstance(p,dict) or set(p)-{'timeout_seconds','retries','retry_delay_seconds'}:
+        raise ValueError('invalid execution policy')
+    timeout=p.get('timeout_seconds') or 3600
+    retries=p.get('retries',0 if doc.get('once_at') else 2)
+    delay=p.get('retry_delay_seconds') or 300
+    for value,lo,hi in ((timeout,60,3600),(retries,0,2),(delay,300,86400)):
+        if type(value) is not int or not lo<=value<=hi:raise ValueError('invalid execution policy range')
+    return timeout,retries,delay
 
 def validate(sup, doc):
     if not isinstance(doc, dict) or set(doc) - FIELDS:
@@ -25,6 +36,7 @@ def validate(sup, doc):
             raise ValueError('invalid '+field)
     if type(doc.get('enabled')) is not bool or type(doc.get('deleted')) is not bool:
         raise ValueError('enabled and deleted must be booleans')
+    policy(doc)
     if doc.get('agent','') not in ('','claude','codex'):
         raise ValueError('agent must be claude or codex (empty uses fleet default)')
     delivery=doc.get('delivery') or {}
@@ -38,6 +50,11 @@ def validate(sup, doc):
     if doc.get('at'): sched['at']=doc['at']
     if doc.get('cron'): sched['cron']=doc['cron']
     if sup.task_tz(sched) is False: raise ValueError('unknown timezone')
+    if doc.get('once_at') is not None:
+        stamp=doc['once_at']
+        if type(stamp) is not int or not 1<=stamp<=253402300799 or doc.get('at') or doc.get('cron') or doc.get('entry'):
+            raise ValueError('once_at cannot combine with at, cron or adopt')
+        return 0
     mins,hours,*_=sup.task_cron(sched)
     times=sorted(h*60+m for h in hours for m in mins)
     if not times or any(b-a < 60 for a,b in zip(times,times[1:]+[times[0]+1440])):
@@ -74,12 +91,14 @@ def apply(sup, paths, login, doc):
             # Deleted first remains a tombstone, so a late create cannot revive it.
             pass
         sched={'tz':doc.get('timezone') or 'Asia/Shanghai','managed':True}
-        sched['at' if doc.get('at') else 'cron']=doc.get('at') or doc.get('cron')
+        if doc.get('once_at'):sched['once_at']=doc['once_at']
+        else:sched['at' if doc.get('at') else 'cron']=doc.get('at') or doc.get('cron')
+        timeout,retries,delay=policy(doc)
         now=sup.task_clock()
         svc=dict(old or {},name=name,login=login,kind='task',exec=None,
                  prompt=doc['prompt'],agent=doc.get('agent',''),schedule=sched,managed_schedule=doc,
                  state='enabled' if doc['enabled'] and not doc['deleted'] else 'stopped',
-                 retries=2,retry_delay=300,timeout=3600,idle=600,changed=now,
+                 retries=retries,retry_delay=delay,timeout=timeout,idle=600,changed=now,
                  added=(old or {}).get('added',now))
         if not old or old.get('schedule')!=sched or old.get('state')!=svc['state']:
             svc['rescheduled']=now

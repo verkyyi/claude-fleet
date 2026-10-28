@@ -888,10 +888,13 @@ def tool_spawn(args):
                   env=hub_env(ASSERT_TTL_S))
 
 
-def tool_schedule(args):
+def tool_dispatch(args):
+    return tool_schedule(args, jobs=True)
+
+def tool_schedule(args, jobs=False):
     if args.get("repo"):
         check_repo(args)
-    r = run([sys.executable, str(BIN / "fleet-schedule.py")],
+    r = run([sys.executable, str(BIN / "fleet-schedule.py")] + (["--dispatch"] if jobs else []),
             input_text=json.dumps(args), check=False, timeout=WRITE_TIMEOUT_S,
             env=hub_env(ASSERT_TTL_S))
     if r.returncode:
@@ -1387,7 +1390,15 @@ TOOLS = {
             "idempotency_key": {"type": "string", "description": "Reuse the same key when retrying the same write."},
             "adopt": {"type": "string", "description": "create only: adopt a paused, finished existing CLI task by name; preserve its exact prompt, time and timezone. No duplicate registry entry."},
             "name": {"type": "string", "maxLength": 120}, "prompt": {"type": "string", "maxLength": 16000},
-            "at": {"type": "string", "description": "Daily local HH:MM; mutually exclusive with cron."},
+            "trigger": {"type":"object", "properties": {
+                "type":{"type":"string","enum":["now","once","daily","cron"]},
+                "at":{"type":"string","description":"once: RFC3339 date/time with UTC offset; daily: HH:MM."},
+                "cron":{"type":"string"}},"required":["type"],"additionalProperties":False},
+            "execution": {"type":"object","properties": {
+                "timeout_seconds":{"type":"integer","minimum":60,"maximum":3600},
+                "retries":{"type":"integer","minimum":0,"maximum":2},
+                "retry_delay_seconds":{"type":"integer","minimum":300,"maximum":86400}},"additionalProperties":False},
+            "at": {"type": "string", "description": "Daily local HH:MM; mutually exclusive with cron and trigger."},
             "cron": {"type": "string", "description": "Five cron fields; minimum one-hour interval."},
             "timezone": {"type": "string", "description": "IANA zone, default Asia/Shanghai."},
             "agent": {"type": "string", "enum": ["", "claude", "codex"], "description": "Agent type. Omitted on create uses the fleet default; omitted on update keeps the choice; empty resets to fleet default."},
@@ -1683,6 +1694,19 @@ TOOLS = {
 }
 
 
+# The managed Dispatch entry shares Schedule's contract and owner fence.
+# Ordinary task/spawn and chat/open keep their interactive session semantics.
+import copy as _copy
+_dispatch_spec = _copy.deepcopy(TOOLS["schedule"][1])
+_dispatch_spec["description"] = ("Managed jobs on your own login: trigger now, once (RFC3339 with offset), daily or cron. "
+    "action create requires trigger; list/runs/update/pause/resume/delete use the same IDs and revisions as schedule. "
+    "Returns registration, not completion; query runs for the final answer and delivery state. "
+    "Once jobs queue until runtime is available and run at most once; retries are OFF unless explicitly enabled. "
+    "Default deadline 3600 seconds; recurring defaults remain two retries. Optional own WeChat/private live-page delivery. "
+    "Pause affects future starts, not a running conversation. One-shot triggers cannot be edited or run-now; create a new job to repeat. "
+    "Same shared limits as schedule: 10 saved definitions, 30 starts/day, one running at a time.")
+TOOLS["dispatch"] = (tool_dispatch, _dispatch_spec)
+
 # Two groups (issue #3113). TOOLS stays every handler: `fleet` answers all of them
 # (a dispatch-group call it does not list is logged road=legacy) but LISTS only
 # CORE; `fleet-orch` lists and answers ORCH.
@@ -1769,14 +1793,15 @@ def status_text(data):
     return "\n\n".join([head, report(data["children"]), data["repo_list"]])
 
 
+
 def tool_result(name, data, error=False):
     if error:
         return {"content": [{"type": "text", "text": data}], "isError": True}
     text = status_text(data) if name == "status" else ask_text(data) if name == "ask" else report(data)
     # A complete short create receipt survives the conversation viewer's 160
     # character tool preview. The full result remains available to the agent.
-    if name == "schedule" and isinstance(data, dict) and data.get("action") == "create":
-        sid = data.get("schedule", {}).get("spec", {}).get("id")
+    if name in ("schedule", "dispatch") and isinstance(data, dict) and data.get("action") == "create":
+        sid = (data.get("schedule") or data.get("job") or {}).get("spec", {}).get("id")
         if isinstance(sid, str) and re.fullmatch(r"schedule-[a-zA-Z0-9-]+", sid):
             text = json.dumps({"action": "create", "schedule_id": sid}, separators=(",", ":")) + "\n" + text
     return {"content": [{"type": "text", "text": text}], "structuredContent": data}
