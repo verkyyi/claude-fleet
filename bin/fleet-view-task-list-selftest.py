@@ -333,7 +333,8 @@ class SessionArchive(unittest.TestCase):
         e = row("id:fid-a", archived=False, board="fid-a", far=True, lost=True)
         for rc in (0,1):
             result = subprocess.CompletedProcess([],rc,'{"status":"succeeded"}' if rc==0 else '', 'save refused' if rc else '')
-            with patch.object(v.subprocess,"run",return_value=result) as run, patch.object(v,"act_env",return_value={}), patch.object(v,"hub_reread") as refresh:
+            with patch.object(v,"ui_lang",return_value="zh"), patch.object(v,"say",side_effect=lambda key,*args:key), \
+                    patch.object(v.subprocess,"run",return_value=result) as run, patch.object(v,"act_env",return_value={}), patch.object(v,"hub_reread") as refresh:
                 got = v.act_run(qo,"view","fleet",v.ACTION["archive"],e,"",wait=False)
                 self.assertEqual(got[0],rc)
                 run.assert_called_once()
