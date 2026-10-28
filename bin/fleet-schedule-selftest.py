@@ -145,10 +145,14 @@ class RunnerTests(unittest.TestCase):
                 if path=='finish' and fail[0]:raise run.Unreachable('offline')
                 return {'run':{'id':'one','state':'running','started':time.time()}}
             spawn=Mock(return_value=subprocess.CompletedProcess([],0,'@1\tname\t\tfid\n',''))
-            with patch.dict(os.environ,env),patch.object(run.Path,'home',return_value=home),patch.object(run,'http',side_effect=http),patch.object(run,'attempt_window',return_value=''),patch.object(run.subprocess,'run',spawn),patch.object(run,'native',return_value={'fid':'fid','sid':'sid','state':'idle','path':'p'}),patch.object(run,'conclusion',return_value='the final answer'),patch.object(run,'busy',return_value=False):
+            with patch.dict(os.environ,env),patch.object(run.Path,'home',return_value=home),patch.object(run,'http',side_effect=http),patch.object(run,'attempt_window',return_value=''),patch.object(run.subprocess,'run',spawn),patch.object(run,'native',return_value={'fid':'fid','sid':'sid','state':'idle','path':'p'}),patch.object(run,'conclusion',return_value='the final answer'),patch.object(run,'busy',return_value=False),patch.object(run,'tmux',return_value='') as stamp:
                 with self.assertRaises(run.Unreachable):run.run()
                 self.assertEqual(spawn.call_count,1)
+                stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_id','schedule-a')
+                stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_run_id','one')
                 argv=spawn.call_args.args[0]
+                import uuid
+                self.assertEqual(argv[argv.index('--fid')+1],str(uuid.uuid5(uuid.NAMESPACE_URL,'schedule-a:manual-one:1')))
                 if agent:self.assertEqual(argv[argv.index('--agent')+1],agent)
                 else:self.assertNotIn('--agent',argv)
                 fail[0]=False

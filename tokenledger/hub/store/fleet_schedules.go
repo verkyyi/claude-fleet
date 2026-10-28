@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/schedule"
 )
 
@@ -297,8 +299,12 @@ func (s *Store) AdmitSchedule(owner, endpoint, id, slot string, revision int64, 
 			return ScheduleRun{}, ErrScheduleLimit
 		}
 	}
-	consent, _ := json.Marshal(map[string]any{"consent": spec.Spec.Delivery, "consent_at": spec.Updated})
-	_, e = tx.Exec(`INSERT INTO fleet_schedule_runs(id,schedule_id,owner,endpoint,revision,slot,attempt,day,state,started,delivery) VALUES (?,?,?,?,?,?,?,?,'running',?,?)`, rid, id, owner, endpoint, revision, slot, attempt, day, now.Unix(), string(consent))
+	// Same UUID5 as fleet_schedule_run.py; admission persists it before launch.
+	sessionID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:%s:%d", id, slot, attempt))).String()
+	zone, _ := time.LoadLocation(spec.Spec.Timezone)
+	title := spec.Spec.Name + " " + now.In(zone).Format("2006-01-02")
+	consent, _ := json.Marshal(map[string]any{"consent": spec.Spec.Delivery, "consent_at": spec.Updated, "session_title": title})
+	_, e = tx.Exec(`INSERT INTO fleet_schedule_runs(id,schedule_id,owner,endpoint,revision,slot,attempt,day,state,started,session_id,delivery) VALUES (?,?,?,?,?,?,?,?,'running',?,?,?)`, rid, id, owner, endpoint, revision, slot, attempt, day, now.Unix(), sessionID, string(consent))
 	if e != nil {
 		return ScheduleRun{}, e
 	}
@@ -314,7 +320,7 @@ func (s *Store) FinishSchedule(owner, endpoint, id, state, summary, why, session
 	if state == "succeeded" && summary == "" {
 		return ScheduleRun{}, errors.New("completed run requires a final answer")
 	}
-	_, e := s.write.Exec(`UPDATE fleet_schedule_runs SET state=?,summary=?,error=?,session_id=?,ended=? WHERE owner=? AND endpoint=? AND id=? AND state='running'`, state, summary, why, session, now.Unix(), owner, endpoint, id)
+	_, e := s.write.Exec(`UPDATE fleet_schedule_runs SET state=?,summary=?,error=?,session_id=CASE WHEN session_id='' THEN ? ELSE session_id END,ended=? WHERE owner=? AND endpoint=? AND id=? AND state='running'`, state, summary, why, session, now.Unix(), owner, endpoint, id)
 	if e != nil {
 		return ScheduleRun{}, e
 	}
@@ -393,4 +399,38 @@ func (s *Store) PruneScheduleRuns(now time.Time) error {
 	}
 	_, e := s.write.Exec(`DELETE FROM fleet_schedule_manual WHERE created<?`, cutoff)
 	return e
+}
+
+// ScheduleSession carries only list metadata, never every run's full conclusion.
+type ScheduleSession struct {
+	ID         string `json:"id"`
+	ScheduleID string `json:"schedule_id"`
+	SessionID  string `json:"session_id"`
+	Title      string `json:"title"`
+	Endpoint   string `json:"-"`
+}
+
+// ScheduleSessions is owner-scoped provenance for the existing conversation list.
+// Deleted schedules retain associations for the result retention period.
+func (s *Store) ScheduleSessions(owner string) (map[string]ScheduleSession, error) {
+	rows, err := s.read.Query(`SELECT id,schedule_id,session_id,endpoint,delivery FROM fleet_schedule_runs WHERE owner=? AND session_id<>'' AND started>=?`, owner, time.Now().Add(-30*24*time.Hour).Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ScheduleSession{}
+	for rows.Next() {
+		var r ScheduleSession
+		var delivery string
+		if err := rows.Scan(&r.ID, &r.ScheduleID, &r.SessionID, &r.Endpoint, &delivery); err != nil {
+			return nil, err
+		}
+		var snapshot struct {
+			Title string `json:"session_title"`
+		}
+		_ = json.Unmarshal([]byte(delivery), &snapshot)
+		r.Title = snapshot.Title
+		out[r.SessionID] = r
+	}
+	return out, rows.Err()
 }

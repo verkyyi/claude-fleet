@@ -1,3 +1,4 @@
+import { ScheduleGroup, NewScheduleButton } from "./schedules";
 // Task list: PIN, ordinary tasks, then folded earlier sessions. One status slot.
 import { createContext, useContext, useEffect, useRef, useState, type FC, type PointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
@@ -165,7 +166,7 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
       className={cn(rowCls, listStatus(r).unknown && "opacity-60", variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
       <RowGlyph r={r} />
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal")}>
-        <span className="min-w-0 truncate">{it.title}</span>
+        <span className="min-w-0 truncate">{r.board?.schedule_id && <span aria-label={tr("定时运行", "Scheduled run")}>⏰ </span>}{it.title}</span>
       </span>
     </Link>
   );
@@ -255,6 +256,18 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const webActive = pathname === WEB_CHAT_PATH || (!!chatHome && pathname === "/");
   const row = (r: Row) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed} />;
   const List = variant === "side" ? SidebarMenu : "ul";
+  const timeline = (items: Row[]) => {
+    let previous = "";
+    const today = new Date(now).toDateString();
+    const yesterdayDate = new Date(now); yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    return items.flatMap(r => {
+      const day = new Date(r.at).toDateString();
+      const label = day === today ? tr("今天", "Today") : day === yesterdayDate.toDateString() ? tr("昨天", "Yesterday") : new Date(r.at).toLocaleDateString();
+      const heading = day !== previous ? <li key={`day-${r.id}`} className="px-4 pt-3 pb-1 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">{label}</li> : null;
+      previous = day;
+      return heading ? [heading, row(r)] : [row(r)];
+    });
+  };
   const searching = !!q.trim();
   const web = <WebChatRow key="web" variant={variant} active={webActive} />;
   let body: ReactNode;
@@ -280,7 +293,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
           <List>{(attentionOpen ? rows.filter((r) => needsAttention(r) && r.group !== "pin" && rowRef(r) !== ref) : attention.slice(0, attentionVisible)).map(row)}</List>
         </> : null}
         {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{pin.map(row)}</List></div></> : null}
-        <List>{open.map(row)}</List>
+        <List>{timeline(open)}</List>
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
@@ -288,7 +301,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
             {goneOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
             <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("更多会话", "More sessions")}<span className="font-mono"> · {gone.length}</span>{runningHidden ? tr(` · ${runningHidden} 个运行中`, ` · ${runningHidden} running`) : null}</span>
           </button>
-          {goneOpen ? <List>{gone.map(row)}</List> : null}
+          {goneOpen ? <List>{timeline(gone)}</List> : null}
         </> : null}
       </>
     );
@@ -307,6 +320,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
 // The phone's first screen: the list, and 新建 at the bottom right.
 export const SessionListPage: FC = () => (
   <div className="pb-[calc(env(safe-area-inset-bottom)+5rem)]">
+    <ScheduleGroup phone /><div className="flex justify-end px-2"><NewScheduleButton /></div>
     <SessionRows variant="page" />
     <NewFab />
   </div>

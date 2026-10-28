@@ -564,7 +564,7 @@ export type ThreadSource =
 // in sync, 同步中… while not, 家机器暂时连不上 when the home is out of reach —
 // and whether it answers now, from its own stream
 export type SyncWord = "" | "syncing" | "offline";
-export type Head = { sync: SyncWord; busy?: boolean };
+export type Head = { agent?: string; firstPrompt?: () => Promise<string>; sync: SyncWord; busy?: boolean };
 
 export function ChatThread({ source, last, onHead }: { source: ThreadSource; last?: string; onHead?: (h: Head) => void }) {
   const { me } = useShell();
@@ -675,7 +675,7 @@ const SessionView: FC<SessionProps> = (props) => {
   const raw: SyncWord = syncRaw(v);
   const sync = useSyncWord(raw);
   const busy = v.state ? v.busy : undefined;
-  useEffect(() => { onHead?.({ sync, busy }); }, [sync, busy, onHead]);
+  useEffect(() => { onHead?.({ sync, busy, firstPrompt: v.firstPrompt, agent: v.state?.agent }); }, [sync, busy, onHead, v.firstPrompt, v.state?.agent]);
   if (stage === "held" && v.state?.session && !preview) return (
     <HeldChat provider={v.state.agent === "codex" ? "codex" : "claude"} session={v.state.session}
       worker={source.worker || ""} label={v.state.label} onGave={() => setMine({ held: false, at: Date.now() })} />

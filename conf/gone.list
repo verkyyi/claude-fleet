@@ -290,3 +290,7 @@ func UnfinishedFleetOperations T1118 tokenledger/hub/store/
 func TouchUnfinishedOperation T1118 tokenledger/hub/store/
 word sessionListTTL T1118 tokenledger/hub/api/
 word FleetOperationMaxAge T1118 tokenledger/hub/store/
+
+# T1121: schedules share the conversation sidebar and main panel.
+func date T1121 extras/web-console/src/app/pages/schedules.tsx
+re go\("/schedules"\) T1121 extras/web-console/src/app/Shell.tsx

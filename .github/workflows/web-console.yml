@@ -82,6 +82,10 @@ jobs:
         run: node --experimental-strip-types test/poster.mjs
       - name: Machine parking savings — bilingual and narrow layout (RBQG)
         run: node test/park-metrics.mjs
+      - name: Schedule creation uses the first user message
+        run: node --experimental-strip-types test/schedules.mjs
+      - name: Background schedules preserve the current conversation on expiry
+        run: node --experimental-strip-types test/schedule-feed.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build

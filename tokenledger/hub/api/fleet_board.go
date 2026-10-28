@@ -59,6 +59,8 @@ const (
 
 // BoardRow is one row of the list.
 type BoardRow struct {
+	ScheduleID    string `json:"schedule_id,omitempty"`
+	RunID         string `json:"run_id,omitempty"`
 	CancelRequest string `json:"cancel_request,omitempty"`
 	Generation    int64  `json:"generation,omitempty"`
 	// Agent is accompanied by its evidence basis; planned never means actual.
@@ -647,6 +649,23 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			continue
 		}
 		kept = append(kept, r)
+	}
+	sources, err := s.Store.ScheduleSessions(owner)
+	if err != nil {
+		return nil, err
+	}
+	for i := range kept {
+		r := &kept[i]
+		fid := r.ID
+		if r.History != nil {
+			fid = r.History.ID
+		}
+		if run, ok := sources[fid]; ok {
+			r.ScheduleID, r.RunID = run.ScheduleID, run.ID
+			if b := idBy[fid]; run.Title != "" && (b == nil || b.TitleSource != "manual") {
+				r.Title = run.Title
+			}
+		}
 	}
 	b := finishBoard(kept)
 	b.SessionList = SessionListPreferences{MaxVisible: 10, IdleHours: 24}

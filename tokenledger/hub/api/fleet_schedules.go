@@ -99,6 +99,20 @@ func (s *Server) handleNodeSchedules(w http.ResponseWriter, r *http.Request) {
 func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner string, ep *store.Endpoint) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodGet {
+		if fid := r.URL.Query().Get("session_id"); fid != "" {
+			runs, err := s.Store.ScheduleSessions(owner)
+			if err != nil {
+				scheduleError(w, err)
+				return
+			}
+			run, ok := runs[fid]
+			if !ok || (ep != nil && run.Endpoint != ep.ID) {
+				httpError(w, 404, "no scheduled run for this session")
+				return
+			}
+			writeJSON(w, 200, map[string]any{"run": run})
+			return
+		}
 		if r.URL.Query().Get("preview") == "1" {
 			q := r.URL.Query()
 			spec := schedule.Spec{ID: "schedule-preview", Revision: 1, Name: "preview", Prompt: "preview", At: q.Get("at"), Cron: q.Get("cron"), Timezone: q.Get("timezone")}
