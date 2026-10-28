@@ -5716,6 +5716,16 @@ drill_schedule_agent_selection() {
   SECS=$(since "$t0"); WHAT='explicit Claude/Codex reaches the spawner; omitted agent keeps the fleet default'
 }
 
+drill_job_once_replay() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-schedule-selftest.py" ScheduleTests.test_once_slot_does_not_recur_and_policy_is_opt_in 2>&1) \
+    || { WHY="one-shot recurrence: $out"; return 1; }
+  go_half '^TestJob(OnceReplayAfterRetention|RetryRequiresConsentAndBackoff)$' ./hub/store
+  case $? in 1) return 1 ;; esac
+  SECS=$(since "$t0"); WHAT='one fixed occurrence; durable consumption survives history pruning and old finish replay'
+}
+
 drill_schedule_self_service() {
   CAP=30; local t0 out
   t0=$(now)

@@ -251,3 +251,39 @@ Final answers appear in the app with an unread notification; run history is reta
 To adopt an existing CLI task without duplicating it, pause it and wait for its active run to finish. In the same login, ask the agent to create a schedule with `adopt` set to that task's name and the exact existing prompt, recurrence, timezone and agent choice. This retains the registry entry, completion file and history. An active, mismatched or already adopted entry is refused.
 
 CLI example: `fleet task add daily --at 07:00 --prompt "/daily-brief" --agent claude`. For an existing CLI task, `fleet task schedule daily --agent claude` changes only the agent, keeping its recurrence. `fleet task ls` shows the choice. Do not substitute `--env FLEET_AGENT=…`.
+
+### One-shot tasks and the shared API
+
+Choose **Run once now** or **Once at a specified time** in the creation form, or
+ask an agent to perform a task once at a particular date and time. The `dispatch`
+MCP tool shares Schedule's conversations, run results, private WeChat/live-page
+delivery and owner billing. Registration is not completion. A due one-shot waits
+for runtime/capacity, including after being offline. Pause/delete prevent future
+starts; an active conversation continues.
+
+One-shot jobs default to no retries and a one-hour deadline. The API optionally
+accepts `execution` with `timeout_seconds` (60–3600), `retries` (0–2) and
+`retry_delay_seconds` (300–86400). Retries may repeat external effects; opt in only
+when appropriate. A one-shot's time cannot be edited and `run-now` cannot repeat
+it; create a new job deliberately. Saved completed definitions count towards the
+shared 10-definition quota; all managed jobs share the 30 daily starts and one
+running attempt limits. Detailed run history remains available for 30 days.
+
+`POST /v1/dispatch` uses your Tokenman sign-in session:
+
+```json
+{"idempotency_key":"my-summary-001","name":"Notes","prompt":"Summarize my notes","agent":"codex","trigger":{"type":"now"},"delivery":{"wechat":true}}
+```
+
+Other triggers are `{"type":"once","at":"2027-01-01T07:00:00+08:00"}`,
+`{"type":"daily","at":"07:00"}` and `{"type":"cron","cron":"0 7 * * 1-5"}`.
+A one-shot requires a future date/time with an explicit offset. Recurrence uses
+`timezone`, default Asia/Shanghai. Read `job.spec.id` from the response, then
+`GET /v1/dispatch?id=<id>` for the job and its `runs`, including final summary,
+session ID and delivery state. Reuse the idempotency key when retrying a write.
+This adds no personal API-key or webhook service; shared administrator tokens
+cannot act as a person.
+
+Existing `task`, `schedule`, `/v1/chat/open` and service-account `/v1/svc/runs`
+callers need no changes. Interactive sessions keep their existing lifecycle;
+service accounts retain their signed callbacks.

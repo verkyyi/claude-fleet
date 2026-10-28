@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,21 +20,45 @@ import (
 
 const SchedulesPath = "/v1/schedules"
 const NodeSchedulesPath = "/v1/node/schedules"
+const DispatchPath = "/v1/dispatch"
+const NodeDispatchPath = "/v1/node/dispatch"
+
+type jobTrigger struct {
+	Type string `json:"type"`
+	At   string `json:"at,omitempty"`
+	Cron string `json:"cron,omitempty"`
+}
+
+func isJobs(r *http.Request) bool {
+	return r.URL.Path == DispatchPath || r.URL.Path == NodeDispatchPath
+}
+func jobKey(r *http.Request, plural bool) string {
+	key := "schedule"
+	if isJobs(r) {
+		key = "job"
+	}
+	if plural {
+		key += "s"
+	}
+	return key
+}
 
 type scheduleRequest struct {
-	Adopt    string             `json:"adopt,omitempty"`
-	Action   string             `json:"action"`
-	ID       string             `json:"id,omitempty"`
-	Key      string             `json:"idempotency_key,omitempty"`
-	Revision int64              `json:"revision,omitempty"`
-	Name     *string            `json:"name,omitempty"`
-	Prompt   *string            `json:"prompt,omitempty"`
-	Agent    *string            `json:"agent,omitempty"`
-	At       *string            `json:"at,omitempty"`
-	Cron     *string            `json:"cron,omitempty"`
-	Timezone *string            `json:"timezone,omitempty"`
-	Delivery *schedule.Delivery `json:"delivery,omitempty"`
-	Repo     *string            `json:"repo,omitempty"`
+	Trigger   *jobTrigger         `json:"trigger,omitempty"`
+	Execution *schedule.Execution `json:"execution,omitempty"`
+	Adopt     string              `json:"adopt,omitempty"`
+	Action    string              `json:"action"`
+	ID        string              `json:"id,omitempty"`
+	Key       string              `json:"idempotency_key,omitempty"`
+	Revision  int64               `json:"revision,omitempty"`
+	Name      *string             `json:"name,omitempty"`
+	Prompt    *string             `json:"prompt,omitempty"`
+	Agent     *string             `json:"agent,omitempty"`
+	At        *string             `json:"at,omitempty"`
+	Cron      *string             `json:"cron,omitempty"`
+	Timezone  *string             `json:"timezone,omitempty"`
+	Delivery  *schedule.Delivery  `json:"delivery,omitempty"`
+	Repo      *string             `json:"repo,omitempty"`
 }
 
 func scheduleHash(parts ...string) string {
@@ -115,7 +140,8 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 		}
 		if r.URL.Query().Get("preview") == "1" {
 			q := r.URL.Query()
-			spec := schedule.Spec{ID: "schedule-preview", Revision: 1, Name: "preview", Prompt: "preview", At: q.Get("at"), Cron: q.Get("cron"), Timezone: q.Get("timezone")}
+			once, _ := strconv.ParseInt(q.Get("once_at"), 10, 64)
+			spec := schedule.Spec{OnceAt: once, ID: "schedule-preview", Revision: 1, Name: "preview", Prompt: "preview", At: q.Get("at"), Cron: q.Get("cron"), Timezone: q.Get("timezone")}
 			if spec.Timezone == "" {
 				spec.Timezone = "Asia/Shanghai"
 			}
@@ -159,7 +185,7 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 				}
 				runs[i].Delivery, _ = json.Marshal(d)
 			}
-			writeJSON(w, 200, map[string]any{"schedule": s.scheduleView(row), "runs": runs})
+			writeJSON(w, 200, map[string]any{jobKey(r, false): s.scheduleView(row), "runs": runs})
 			return
 		}
 		rows, e := s.Store.Schedules(owner)
@@ -169,12 +195,17 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 		}
 		out := []any{}
 		for _, row := range rows {
+			// Existing list clients can continue to assume daily or cron.
+			// The new Web feed opts in; Dispatch always lists every trigger.
+			if row.Spec.OnceAt != 0 && !isJobs(r) && r.URL.Query().Get("include_jobs") != "1" {
+				continue
+			}
 			if ep == nil || row.Endpoint == ep.ID {
 				out = append(out, s.scheduleView(row))
 			}
 		}
 		unread, _ := s.Store.ScheduleUnread(owner)
-		writeJSON(w, 200, map[string]any{"schedules": out, "unread": unread, "limits": map[string]int{"tasks": 10, "daily_slots": 24, "daily_starts": 30, "concurrent": 1}})
+		writeJSON(w, 200, map[string]any{jobKey(r, true): out, "unread": unread, "limits": map[string]int{"tasks": 10, "daily_slots": 24, "daily_starts": 30, "concurrent": 1}})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -186,6 +217,13 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 	dec.DisallowUnknownFields()
 	if e := dec.Decode(&in); e != nil {
 		scheduleError(w, e)
+		return
+	}
+	if isJobs(r) && in.Action == "" {
+		in.Action = "create"
+	}
+	if isJobs(r) && in.Action == "create" && in.Trigger == nil {
+		httpError(w, 400, "trigger is required (now, once, daily or cron)")
 		return
 	}
 	if !idemRE.MatchString(in.Key) {
@@ -236,6 +274,10 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 			httpError(w, 404, "no schedule in this login")
 			return
 		}
+		if in.Action == "run-now" && row.Spec.OnceAt != 0 {
+			httpError(w, 409, "one-shot jobs cannot be run again; create a new job with a new idempotency key")
+			return
+		}
 		if in.Action == "run-now" {
 			if row.Spec.Deleted || row.SyncState != "synced" {
 				httpError(w, 409, "schedule is not ready")
@@ -277,6 +319,56 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 		httpError(w, 400, "at and cron are mutually exclusive")
 		return
 	}
+	if in.Trigger != nil {
+		tr := in.Trigger
+		if in.At != nil || in.Cron != nil || in.Adopt != "" {
+			httpError(w, 400, "trigger cannot combine with at, cron or adopt")
+			return
+		}
+		row.Spec.At, row.Spec.Cron = "", ""
+		switch tr.Type {
+		case "now":
+			if in.Action != "create" || tr.At != "" || tr.Cron != "" {
+				httpError(w, 400, "now is create-only and takes no time fields")
+				return
+			}
+			row.Spec.OnceAt = time.Now().Unix()
+			if previous, err := s.Store.Schedule(owner, row.Spec.ID); err == nil {
+				row.Spec.OnceAt = previous.Spec.OnceAt // replay must not move its time
+			}
+		case "once":
+			at, err := time.Parse(time.RFC3339, tr.At)
+			if err != nil || at.Nanosecond() != 0 || tr.Cron != "" {
+				httpError(w, 400, "once requires a whole-second RFC3339 at with an explicit UTC offset")
+				return
+			}
+			if in.Action == "create" && !at.After(time.Now()) {
+				if _, err := s.Store.Schedule(owner, row.Spec.ID); err != nil {
+					httpError(w, 400, "once must be in the future; use trigger now for immediate execution")
+					return
+				}
+			}
+			row.Spec.OnceAt = at.Unix()
+		case "daily":
+			if tr.At == "" || tr.Cron != "" {
+				httpError(w, 400, "daily requires at HH:MM only")
+				return
+			}
+			row.Spec.OnceAt, row.Spec.At = 0, tr.At
+		case "cron":
+			if tr.Cron == "" || tr.At != "" {
+				httpError(w, 400, "cron requires five cron fields only")
+				return
+			}
+			row.Spec.OnceAt, row.Spec.Cron = 0, tr.Cron
+		default:
+			httpError(w, 400, "unknown trigger type")
+			return
+		}
+	}
+	if in.Execution != nil {
+		row.Spec.Execution = in.Execution
+	}
 	if in.Timezone != nil {
 		row.Spec.Timezone = *in.Timezone
 	}
@@ -315,7 +407,7 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 		s.installSchedule(r.Context(), row)
 		row, _ = s.Store.Schedule(owner, row.Spec.ID)
 	}
-	writeJSON(w, 200, map[string]any{"action": in.Action, "schedule": s.scheduleView(row)})
+	writeJSON(w, 200, map[string]any{"action": in.Action, jobKey(r, false): s.scheduleView(row)})
 }
 func (s *Server) scheduleView(row store.Schedule) any {
 	// Use the existing heartbeat as the live read, with an explicit observed time.
@@ -358,6 +450,20 @@ func (s *Server) scheduleView(row store.Schedule) any {
 		o["stale"] = true
 		row.Observed, _ = json.Marshal(o)
 	}
+	if row.Spec.OnceAt != 0 {
+		var observed map[string]any
+		_ = json.Unmarshal(row.Observed, &observed)
+		if observed == nil {
+			observed = map[string]any{}
+		}
+		if state, started, ended, err := s.Store.ScheduleOnce(row.Owner, row.Spec.ID); err == nil {
+			observed["status"], observed["last_run"], observed["next_run"] = state, started, nil
+			if ended != 0 {
+				observed["last_end"], observed["last_result"] = ended, state
+			}
+		}
+		row.Observed, _ = json.Marshal(observed)
+	}
 	return row
 }
 func (s *Server) scheduleTarget(ctx context.Context, row store.Schedule) (store.FleetRow, error) {
@@ -369,10 +475,10 @@ func (s *Server) scheduleTarget(ctx context.Context, row store.Schedule) (store.
 		return store.FleetRow{}, errors.New("schedule login no longer belongs to you")
 	}
 	if c := s.nodes.get(row.Endpoint); c != nil {
-		if !c.canSchedule || (row.Spec.Agent != "" && !c.canScheduleAgent) {
+		if !c.canSchedule || (row.Spec.Agent != "" && !c.canScheduleAgent) || ((row.Spec.OnceAt != 0 || row.Spec.Execution != nil) && !c.canScheduleJobs) {
 			return store.FleetRow{}, errors.New("runtime upgrade pending")
 		}
-	} else if peer, ok := s.peerOf(ctx, row.Endpoint); !ok || !peer.HasCap(schedule.Capability) || (row.Spec.Agent != "" && !peer.HasCap(schedule.AgentCapability)) {
+	} else if peer, ok := s.peerOf(ctx, row.Endpoint); !ok || !peer.HasCap(schedule.Capability) || (row.Spec.Agent != "" && !peer.HasCap(schedule.AgentCapability)) || ((row.Spec.OnceAt != 0 || row.Spec.Execution != nil) && !peer.HasCap(schedule.JobCapability)) {
 		return store.FleetRow{}, errors.New("runtime offline or upgrade pending")
 	}
 	return store.FleetRow{EndpointID: row.Endpoint, Hostname: row.Hostname, OSUser: row.Login, Present: true}, nil

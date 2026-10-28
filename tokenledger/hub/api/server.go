@@ -740,6 +740,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc(NodeSchedulesPath, s.handleNodeSchedules)
 		mux.HandleFunc(NodeSchedulesPath+"/", s.handleNodeSchedules)
 		mux.Handle(SchedulesPath, s.viewerOnly(http.HandlerFunc(s.handleSchedules)))
+		mux.Handle(DispatchPath, s.viewerOnly(http.HandlerFunc(s.handleSchedules)))
+		mux.HandleFunc(NodeDispatchPath, s.handleNodeSchedules)
 		mux.HandleFunc(NodeTasksPath, s.handleNodeTasks)
 		mux.HandleFunc(NodeTasksPath+"/", s.handleNodeTasks)
 		// The hub's mirror of every window's ID (EPIC T497 C2).

@@ -23,3 +23,7 @@ assert.equal(scheduleReceiptRef(replay.items[0].name,replay.items[1].text.slice(
 native.payload.item.result={isError:true,content:[{type:'text',text:'no permission'}]};
 assert.equal(rolloutRead(JSON.stringify(native)).items[1].error,true);
 console.log('PASS native Codex receipt replay and bounded preview reference');
+
+const once={action:'create',job:{...response.schedule,spec:{...response.schedule.spec,at:undefined,once_at:1793142000}}};
+assert.equal(scheduleReceipt('fleet.dispatch',once).once_at,1793142000);
+assert.equal(scheduleReceiptRef('mcp__fleet__dispatch','{"action":"create","schedule_id":"schedule-abc"}'),'schedule-abc');

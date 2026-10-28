@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1432" viewBox="0 0 640 1432" role="img" aria-labelledby="title desc" lang="zh">
 <title id="title">原生 agent 的运行时</title>
-<desc id="desc">四层概念架构。客户端连接运行时控制面中枢，应用服务与中央数据位于中枢边界内。节点常驻运行原生 agent 会话，主动向外连接中枢。模型请求从节点经过凭据代理到达模型提供方。模型密钥留在中枢，永不进入会话。</desc>
+<desc id="desc">四层概念架构。客户端连接运行时控制面中枢，应用服务与中央数据位于中枢边界内。节点常驻运行原生 agent 会话，主动向外连接中枢。模型请求从节点经过凭据代理到达模型提供方。模型密钥留在中枢，永不进入会话。 立即、指定时间一次和重复任务共用节点执行与中枢结果。</desc>
 <style>/*{{fleet_theme}}*/
 /* Theme is embedded by docs-build; system colors keep the source SVG readable. */
 :root{color-scheme:light dark}
@@ -51,7 +51,7 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <rect class="chip" x="52" y="434" width="258" height="42" rx="10"/>
 <text x="68" y="463" class="">身份与访问</text>
 <rect class="chip" x="330" y="434" width="258" height="42" rx="10"/>
-<text x="346" y="463" class="">会话 · 定时任务</text>
+<text x="346" y="463" class="">会话 · 托管任务</text>
 <rect class="chip" x="52" y="485" width="258" height="42" rx="10"/>
 <text x="68" y="514" class="">订阅池</text>
 <rect class="proxy" x="330" y="485" width="258" height="42" rx="10"/>

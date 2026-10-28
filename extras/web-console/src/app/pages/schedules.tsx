@@ -52,11 +52,15 @@ export function SchedulePanel() {
   useEffect(() => {
     setPreview(null); setPreviewError(false);
     if (!edit) return;
+    if (edit.trigger?.type === "now") { setPreview(Math.floor(Date.now()/1000)); return; }
+    const once = edit.once_at || (edit.trigger?.type === "once" ? Date.parse(edit.trigger.at ?? "")/1000 : 0);
+    if (edit.trigger?.type === "once" && !Number.isFinite(once)) { setPreviewError(true); return; }
+    if (edit.once_at) { setPreview(edit.once_at); return; }
     let live = true;
-    const q = new URLSearchParams({ preview: "1", timezone: edit.timezone, ...(edit.cron ? { cron: edit.cron } : { at: edit.at ?? "" }) });
+    const q = new URLSearchParams({ preview: "1", timezone: edit.timezone, ...(once ? { once_at: String(once) } : edit.cron ? { cron: edit.cron } : { at: edit.at ?? "" }) });
     const timer = setTimeout(async () => { const data = await read<{ next_run: number }>(`/v1/schedules?${q}`); if (live) { setPreview(data?.next_run ?? null); setPreviewError(!data); } }, 250);
     return () => { live = false; clearTimeout(timer); };
-  }, [edit?.at, edit?.cron, edit?.timezone, !!edit, read]);
+  }, [edit?.at, edit?.cron, edit?.once_at, edit?.trigger?.type, edit?.trigger?.at, edit?.timezone, !!edit, read]);
   const idem = useRef<{ signature: string; key: string } | null>(null);
   const [detail, setDetail] = useState<Row | null>(null);
   const [runsVersion, setRunsVersion] = useState(0);
@@ -82,7 +86,7 @@ export function SchedulePanel() {
   async function act(action: string, spec: Spec) {
     if (busy || readOnly) return;
     const requestedSelection = selected;
-    const body = action === "create" || action === "update" ? { action, ...(spec.id ? { id: spec.id, revision: spec.revision } : {}), name: spec.name, prompt: spec.prompt, agent: spec.agent ?? "", ...(spec.cron ? { cron: spec.cron } : { at: spec.at }), timezone: spec.timezone, delivery: spec.delivery, repo: spec.repo ?? "" } : { action, id: spec.id, revision: spec.revision };
+    const body = action === "create" || action === "update" ? { action, ...(spec.id ? { id: spec.id, revision: spec.revision } : {}), name: spec.name, prompt: spec.prompt, agent: spec.agent ?? "", ...(spec.once_at ? {} : spec.trigger ? { trigger: spec.trigger } : spec.cron ? { cron: spec.cron } : { at: spec.at }), ...(spec.execution ? { execution: spec.execution } : {}), timezone: spec.timezone, delivery: spec.delivery, repo: spec.repo ?? "" } : { action, id: spec.id, revision: spec.revision };
     const signature = JSON.stringify(body);
     if (!idem.current || idem.current.signature !== signature) idem.current = { signature, key: crypto.randomUUID() };
     setBusy(true); setError("");
@@ -120,9 +124,14 @@ export function SchedulePanel() {
       <label className="block space-y-1"><span>{tr("名称", "Name")}</span><Input required maxLength={120} value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></label>
       <label className="block space-y-1"><span>{tr("要做什么", "What should it do?")}</span><Textarea required maxLength={16000} rows={4} value={edit.prompt} onChange={e => setEdit({ ...edit, prompt: e.target.value })} /></label>
       <label className="block space-y-1"><span>{tr("Agent 类型", "Agent type")}</span><select className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={edit.agent ?? ""} onChange={e => setEdit({ ...edit, agent: e.target.value as Spec["agent"] })}><option value="">{tr("跟随 fleet 默认", "Fleet default")}</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
+      {!edit.id && <label className="block space-y-1"><span>{tr("何时执行", "When to run")}</span><select className="block h-9 w-full rounded-md border bg-background px-3" value={edit.trigger?.type ?? "recurring"} onChange={e => setEdit({ ...edit, trigger: e.target.value === "recurring" ? undefined : { type: e.target.value as "now" | "once", ...(e.target.value === "once" ? { at: "" } : {}) } })}><option value="recurring">{tr("重复执行", "Recurring")}</option><option value="now">{tr("立即执行一次", "Run once now")}</option><option value="once">{tr("指定时间，仅一次", "Once at a specified time")}</option></select></label>}
+      {edit.trigger?.type === "once" && <label className="block space-y-1"><span>{tr("日期时间（含时区偏移）", "Date and time (include UTC offset)")}</span><Input required value={edit.trigger.at ?? ""} placeholder="2027-01-01T07:00:00+08:00" onChange={e => setEdit({ ...edit, trigger: { type: "once", at: e.target.value } })} /><span className="text-xs text-muted-foreground">{tr("例如 +08:00 表示北京时间；执行后不会重复。", "For example, +08:00 means Beijing time. This runs only once.")}</span></label>}
+      {(!!edit.once_at || !!edit.trigger) && <p className="text-sm text-muted-foreground">{tr("一次性任务默认不自动重试；最长运行 1 小时。运行环境未就绪时排队等待。", "One-shot jobs do not retry by default and have a one-hour deadline. They wait for an available runtime.")}</p>}
+      {!edit.once_at && !edit.trigger && <>
       <div className="grid gap-3 sm:grid-cols-2"><label className="block space-y-1"><span>{tr("每天的时间", "Daily time")}</span><Input type="time" disabled={!!edit.cron} value={edit.at ?? "07:00"} onChange={e => setEdit({ ...edit, at: e.target.value })} /></label><label className="block space-y-1"><span>{tr("时区", "Timezone")}</span><Input required value={edit.timezone} onChange={e => setEdit({ ...edit, timezone: e.target.value })} /></label></div>
       <details><summary className="cursor-pointer py-2 text-sm">{tr("自定义重复时间", "Custom recurrence")}</summary><label className="block space-y-1"><span className="text-sm">{tr("五段 cron，留空则每天运行", "Five-field cron; leave empty for daily")}</span><Input value={edit.cron ?? ""} placeholder="0 7 * * 1-5" onChange={e => setEdit({ ...edit, cron: e.target.value })} /></label></details>
-      <p className="text-sm">{edit.cron || tr("每天", "Every day") + " " + edit.at} · {edit.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : edit.timezone}</p>
+      </>}
+      <p className="text-sm">{recurrence(edit)} · {edit.timezone === "Asia/Shanghai" ? tr("北京时间", "Beijing time") : edit.timezone}</p>
       <p role="status" className="text-sm text-muted-foreground">{preview ? `${tr("下次运行", "Next run")}: ${date(preview, edit.timezone)}` : previewError ? tr("请检查时间和时区，暂时无法预览。", "Check the time and timezone; preview unavailable.") : tr("正在预览时间…", "Previewing time…")}</p>
       <fieldset className="space-y-2"><legend className="mb-2 text-sm font-medium">{tr("结果投递（始终保存在站内）", "Delivery (always saved here)")}</legend>
         <label className="flex items-center gap-2"><Checkbox checked={edit.delivery.wechat} onCheckedChange={v => setEdit({ ...edit, delivery: { ...edit.delivery, wechat: v === true } })} />{tr("推到我微信", "My WeChat")}</label>
@@ -152,11 +161,11 @@ function ScheduleActions({ row, compact, disabled, act, edit, remove }: { row: R
   const s = row.spec, locked = disabled || s.deleted;
   return <div className="flex flex-wrap items-center gap-2">
     {compact && <Button asChild size="sm" variant="outline"><Link to={schedulePath(s.id)}>{row.observed.status === "running" ? tr("查看本次", "Current run") : tr("查看记录", "History")}</Link></Button>}
-    {(!compact || failed(row)) && <Button size="sm" disabled={locked || row.sync_state !== "synced" || row.observed.status === "running"} onClick={() => void act("run-now", s)}>▶ {tr("立即运行", "Run now")}</Button>}
+    {(!compact || failed(row)) && <Button size="sm" disabled={locked || !!s.once_at || row.sync_state !== "synced" || row.observed.status === "running"} onClick={() => void act("run-now", s)}>▶ {tr("立即运行", "Run now")}</Button>}
     <Button size="sm" variant="outline" disabled={locked} onClick={() => void act(s.enabled ? "pause" : "resume", s)}>{s.enabled ? tr("⏸ 暂停", "⏸ Pause") : tr("▶ 恢复", "▶ Resume")}</Button>
     {!compact && <Button size="sm" variant="outline" disabled={locked} onClick={edit}>{tr("编辑", "Edit")}</Button>}
     <DropdownMenu><DropdownMenuTrigger asChild><Button size="sm" variant="outline" aria-label={tr("更多任务操作", "More schedule actions")}>⋯</Button></DropdownMenuTrigger><DropdownMenuContent align="end">
-      {compact && <DropdownMenuItem disabled={locked || row.sync_state !== "synced" || row.observed.status === "running"} onSelect={() => void act("run-now", s)}>{tr("立即运行", "Run now")}</DropdownMenuItem>}
+      {compact && <DropdownMenuItem disabled={locked || !!s.once_at || row.sync_state !== "synced" || row.observed.status === "running"} onSelect={() => void act("run-now", s)}>{tr("立即运行", "Run now")}</DropdownMenuItem>}
       {compact && <DropdownMenuItem disabled={locked} onSelect={edit}>{tr("编辑", "Edit")}</DropdownMenuItem>}
       <DropdownMenuItem className="text-destructive" disabled={locked} onSelect={remove}>{tr("删除", "Delete")}</DropdownMenuItem>
     </DropdownMenuContent></DropdownMenu>

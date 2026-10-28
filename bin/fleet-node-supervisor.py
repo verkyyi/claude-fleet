@@ -2163,6 +2163,11 @@ def task_slot(sched, t, direction):
     """(epoch, 'YYYY-MM-DD') of the schedule's next slot after t (direction 1) or
     its latest at or before t (-1), in the schedule's zone; (None, None) if none
     within 400 days."""
+    if sched.get("once_at"):
+        stamp = sched["once_at"]
+        if (direction > 0 and stamp > t) or (direction < 0 and stamp <= t):
+            return stamp, datetime.datetime.fromtimestamp(stamp, task_tz(sched) or None).date().isoformat()
+        return None, None
     mins, hours, dom, mon, dow, dom_any, dow_any = task_cron(sched)
     tz = task_tz(sched) or None
     day = datetime.datetime.fromtimestamp(t, tz).date()
@@ -2190,7 +2195,7 @@ def task_slot(sched, t, direction):
 def task_when(sched):
     """The schedule in words: `daily 07:00 Asia/Shanghai` / `cron 0 7 * * 1-5 local`."""
     sched = sched or {}
-    what = "daily %s" % sched["at"] if sched.get("at") else "cron %s" % sched.get("cron")
+    what = ("once %s" % task_time(sched["once_at"], sched)) if sched.get("once_at") else ("daily %s" % sched["at"] if sched.get("at") else "cron %s" % sched.get("cron"))
     return "%s %s" % (what, sched.get("tz") or "local")
 
 
@@ -2214,7 +2219,11 @@ def task_check(svc):
     if task_tz(sched) is False:
         return "unknown tz %r" % sched.get("tz")
     try:
-        task_cron(sched)
+        if "once_at" in sched:
+            if type(sched["once_at"]) is not int or not 1 <= sched["once_at"] <= 253402300799 or sched.get("at") or sched.get("cron"):
+                raise ValueError("invalid one-shot timestamp")
+        else:
+            task_cron(sched)
     except ValueError as e:
         return "schedule: %s" % e
     for f, lo, hi in (("retries", 0, TASK_RETRIES_MAX), ("retry_delay", 0, 86400), ("timeout", 60, 86400),
@@ -3266,8 +3275,8 @@ class Supervisor(object):
                 at = datetime.datetime.fromtimestamp(clk, task_tz(svc["schedule"]) or None)
                 self.new_slot(ts, clk, at.date().isoformat(), request.get("run_id") or at.strftime("%H%M"))
             elif prev and prev > (ts.get("slot_t") or 0) \
-                    and prev >= max(svc.get("added") or 0, svc.get("rescheduled") or 0) \
-                    and clk - prev <= catchup:
+                    and (svc["schedule"].get("once_at") or (prev >= max(svc.get("added") or 0, svc.get("rescheduled") or 0) \
+                    and clk - prev <= catchup)):
                 self.new_slot(ts, prev, day, False)
             elif ts.get("state") == "interrupted":
                 pass                                  # the same attempt again: the runner adopts its window

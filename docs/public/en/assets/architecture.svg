@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="640" height="1432" viewBox="0 0 640 1432" role="img" aria-labelledby="title desc" lang="en">
 <title id="title">The native agent runtime</title>
-<desc id="desc">Four conceptual layers. Clients connect to the hub, the runtime control plane. Application services and central data share the hub boundary. Nodes keep native agent sessions running and connect outward to the hub. Model requests go from a node through the credential proxy to a model provider. Model keys stay at the hub, never in sessions.</desc>
+<desc id="desc">Four conceptual layers. Clients connect to the hub, the runtime control plane. Application services and central data share the hub boundary. Nodes keep native agent sessions running and connect outward to the hub. Model requests go from a node through the credential proxy to a model provider. Model keys stay at the hub, never in sessions. Immediate, once-at and recurring tasks share node execution and hub results.</desc>
 <style>/*{{fleet_theme}}*/
 /* Theme is embedded by docs-build; system colors keep the source SVG readable. */
 :root{color-scheme:light dark}
@@ -51,7 +51,7 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <rect class="chip" x="52" y="434" width="258" height="42" rx="10"/>
 <text x="68" y="463" class="">Identity &amp; access</text>
 <rect class="chip" x="330" y="434" width="258" height="42" rx="10"/>
-<text x="346" y="463" class="">Sessions · Schedules</text>
+<text x="346" y="463" class="">Sessions · Tasks</text>
 <rect class="chip" x="52" y="485" width="258" height="42" rx="10"/>
 <text x="68" y="514" class="">Subscription pools</text>
 <rect class="proxy" x="330" y="485" width="258" height="42" rx="10"/>
@@ -80,7 +80,7 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <rect class="native" x="52" y="952" width="536" height="70" rx="12"/>
 <text x="320" y="981" class="heading" text-anchor="middle">Claude Code / Codex</text>
 <text x="320" y="1008" class="small muted" text-anchor="middle">Sessions: native agents, unmodified</text>
-<text x="320" y="1058" class="muted" text-anchor="middle">Node agent · Task timer · Working files</text>
+<text x="320" y="1058" class="muted" text-anchor="middle">Node agent · Once / recurring · Files</text>
 <text x="32" y="1125" class="heading">Model requests</text>
 <text x="608" y="1125" class="small muted" text-anchor="end">Model keys never enter sessions</text>
 <rect class="card" x="32" y="1146" width="176" height="86" rx="14"/>

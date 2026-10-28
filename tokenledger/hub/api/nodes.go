@@ -183,6 +183,7 @@ type nodeConn struct {
 	canServiceLog    bool
 	canSchedule      bool
 	canScheduleAgent bool
+	canScheduleJobs  bool
 	// userPod is a machine link that is one person's pod (CapUserPod,
 	// claude-fleet#3550).
 	userPod bool
@@ -671,6 +672,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canServiceLog:    hp.HasCap(control.CapServiceLog),
 		canSchedule:      hp.HasCap("schedule_v1"),
 		canScheduleAgent: hp.HasCap("schedule_agent_v1"),
+		canScheduleJobs:  hp.HasCap("schedule_jobs_v1"),
 		computeOff:       !control.ComputeOn(hp.Compute), computeForce: hp.ComputeForce, probe: hp.Probe,
 		personal: hp.Personal, machineLink: hp.HasCap(control.CapMachine),
 		userPod:           hp.HasCap(control.CapMachine) && hp.HasCap(control.CapUserPod),
