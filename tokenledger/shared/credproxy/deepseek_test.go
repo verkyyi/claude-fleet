@@ -116,14 +116,18 @@ func TestDeepSeekRouteDirectWithAPIKey(t *testing.T) {
 			t.Fatalf("direct=%v: %d %s", direct, code, out)
 		}
 		g.mu.Lock()
-		if len(g.relay) != 0 {
-			t.Fatalf("direct=%v: the relay / another upstream was used: %+v", direct, g.relay)
+		relayed, dsn := len(g.relay), len(g.ds)
+		var s seen
+		if dsn > 0 {
+			s = g.ds[0]
 		}
-		if len(g.ds) != 1 {
-			t.Fatalf("direct=%v: deepseek saw %d", direct, len(g.ds))
-		}
-		s := g.ds[0]
 		g.mu.Unlock()
+		if relayed != 0 {
+			t.Fatalf("direct=%v: the relay / another upstream was used %d time(s)", direct, relayed)
+		}
+		if dsn != 1 {
+			t.Fatalf("direct=%v: deepseek saw %d", direct, dsn)
+		}
 		if s.path != "/anthropic/v1/messages" || s.query != "beta=1" {
 			t.Fatalf("path %q query %q", s.path, s.query)
 		}
@@ -150,11 +154,18 @@ func TestDeepSeekRouteDirectWithAPIKey(t *testing.T) {
 		if len(prov) == 0 || prov[0] != DeepSeek {
 			t.Fatalf("resolved as %v", prov)
 		}
-		g.mu.Lock()
-		if !strings.Contains(g.audit[len(g.audit)-1], `"provider":"deepseek"`) || !strings.Contains(g.audit[len(g.audit)-1], `"route":"direct"`) {
-			t.Fatalf("audit %s", g.audit[len(g.audit)-1])
-		}
-		g.mu.Unlock()
+		// the audit line is written after the answer has gone out: wait for it,
+		// never Fatal while holding g.mu (the handler's Audit would block Close)
+		waitUntil(t, func() bool {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			for _, l := range g.audit {
+				if strings.Contains(l, `"provider":"deepseek"`) && strings.Contains(l, `"route":"direct"`) {
+					return true
+				}
+			}
+			return false
+		})
 	}
 }
 
