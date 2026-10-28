@@ -5,8 +5,8 @@ import "database/sql"
 // Archiving is an owner's presentation preference, independent of execution,
 // history availability and retention. Stable IDs survive moves and key reuse.
 func (s *Store) ensureSessionArchives() error {
-	_, err := s.write.Exec(`CREATE TABLE IF NOT EXISTS fleet_session_archives (
- owner TEXT NOT NULL, id TEXT NOT NULL, archived INTEGER NOT NULL, PRIMARY KEY(owner,id))`)
+	_, err := s.write.Exec(s.d.ddl(`CREATE TABLE IF NOT EXISTS fleet_session_archives (
+ owner TEXT NOT NULL, id TEXT NOT NULL, archived INTEGER NOT NULL, PRIMARY KEY(owner,id))`))
 	return err
 }
 
