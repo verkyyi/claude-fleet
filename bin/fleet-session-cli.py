@@ -15,6 +15,8 @@
                                          登录 · 名称 · 类型 · 状态 · 上次 · 下次 ·
                                          最近日志, a failed one red (fleet-services.py,
                                          issue #2526)
+    fleet archive <会话>                 归档：只隐藏列表，会话继续运行
+    fleet unarchive <会话>               取消归档；fleet ls --archived 查看归档
     fleet show <会话>                    one session, every field
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
     fleet rename <会话> <新名…>          its display name (the hub's worker_rename,
@@ -110,7 +112,7 @@ from pathlib import Path
 BIN = Path(__file__).absolute().parent
 sys.path.insert(0, str(BIN))
 from fleet_ticket_url import ticket_url  # noqa: E402 — where a ticket reads (issue #3596)
-VERBS = ("ls", "show", "open", "rename", "close", "continue", "reap", "answer", "service", "task", "notices")
+VERBS = ("ls", "show", "open", "rename", "archive", "unarchive", "close", "continue", "reap", "answer", "service", "task", "notices")
 STATE_SAY = {"needs": "在问你", "failed": "失败", "working": "在干活", "looping": "循环中",
              "done": "完成", "idle": "空闲", "exited": "已退出", "sleeping": "睡着", "landed": "已落地", "starting": "待启动"}
 
@@ -167,15 +169,16 @@ def pending_rows(rs):
             matched = next((x for x in rs if (r.get('fid') and x.get('fleet_id') == r['fid'])
                            or (r.get('worker_id') and x.get('worker_id') == r['worker_id'])), None)
             if matched is not None:
-                matched.update(cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
+                matched.update(archived=r.get("archived", False), board=r.get("board"), code=r.get("code") or matched.get("code") or "", cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
                                task=r.get('task') or matched.get('task') or '',
                                execution_endpoint=r.get('execution_endpoint') or matched.get('execution_endpoint') or '')
                 continue
-            if not (pending_start_task(r) or fleet_view.controlled_stop_task(r)) or r.get("fid") in known:
+            if not (r.get("archived") or pending_start_task(r) or fleet_view.controlled_stop_task(r)) or r.get("fid") in known:
                 continue
             rs.append(dict(key="id:" + r["board"], name=r["name"], title=r["text"],
-                           state="starting", node=r.get("machine") or "", issue="", pr="", reap="",
+                           state=r.get("state") or "starting", node=r.get("machine") or "", issue="", pr="", reap="",
                            group="", repo=r.get("repo") or "", ended="", task=r["task"],
+                           archived=r.get("archived", False), board=r.get("board"),
                            record_only=True, pending_start=r.get('pending_start',False),
                            pending_start_explicit=r.get('pending_start_explicit',False),
                            execution_endpoint=r.get('execution_endpoint') or '', lost=r.get('lost',False),
@@ -198,7 +201,7 @@ def hub_ok_age():
     return max(0, now() - ok)
 
 
-def hub_freshen():
+def hub_freshen(force=False):
     """--home (issue #3478): the list is the person's sessions on EVERY machine, as
     the hub sees them — this fleet's hub cache, the one the sidebar reads. A thin
     client's `fleet ls` runs on whichever machine the hub picks to enter, and there
@@ -213,7 +216,7 @@ def hub_freshen():
     except ValueError:
         stale = 60
     age = hub_ok_age()
-    if age is not None and age <= stale:
+    if not force and age is not None and age <= stale:
         return
     seam = os.environ.get("FLEET_SESSION_CLI_REFRESH")
     cmd = shlex.split(seam) if seam else ["bash", str(BIN / "fleet-hub-sessions.sh"), "--refresh"]
@@ -645,10 +648,10 @@ def cmd_ls(args):
         if rest not in ([], ["--json"]):
             return usage()
         return lib("fleet_services", "fleet-services.py").main(rest)
-    if any(a not in ("--json", "--all") for a in args) or len(set(args)) != len(args):
+    if any(a not in ("--json", "--all", "--archived") for a in args) or len(set(args)) != len(args):
         return usage()
-    rs = rows()
-    if "--all" not in args:
+    rs = [r for r in rows() if bool(r.get("archived")) == ("--archived" in args)]
+    if "--all" not in args and "--archived" not in args:
         # the list's own 已结束 group (issue #2565): over, so off the default list
         rs = [r for r in rs if not r.get("ended")]
         # a 「结果给你」 row (issue #3517): the report of a session already gone
@@ -657,7 +660,7 @@ def cmd_ls(args):
     rs = attach_bus(rs)
     if "--json" in args:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test",
-                "worker_id", "fleet_id", "ended", "task", "code", "pending_start", "record_only")
+                "archived", "worker_id", "fleet_id", "ended", "task", "code", "pending_start", "record_only")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
                ("model", "model"), ("effort", "effort"), ("ask_kind", "ask_kind"), ("ask", "ask"))
@@ -678,6 +681,23 @@ def cmd_ls(args):
         print(("\n" if live else "") + "已结束 · 还开着 %d 个" % len(over))
         table(over)
     return 0
+
+
+def cmd_archive(args, archived=True):
+    if len(args) != 1:
+        return usage()
+    row, rc = one(rows(), args[0])
+    if row is None:
+        return rc
+    fid = row.get("board") or row.get("fleet_id")
+    if not fid:
+        say("入口尚未确认此会话的身份，请稍后重试")
+        return 1
+    ok, why = hub_write("session_archive", {"id": fid, "archived": archived})
+    if ok and not os.environ.get("FLEET_SESSION_CLI_ROWS"):
+        hub_freshen(force=True)
+    say(("已归档；未改变运行状态" if archived else "已取消归档") if ok else why)
+    return 0 if ok else 1
 
 
 def cmd_show(args):
@@ -1162,7 +1182,7 @@ def main(argv):
             return 1
     # every verb sees the test identity's sessions the list hides (issue #2505)
     os.environ["FLEET_ROWS_TEST"] = "1"
-    return {"ls": cmd_ls, "show": cmd_show, "open": cmd_open, "rename": cmd_rename, "close": cmd_close,
+    return {"archive": cmd_archive, "unarchive": lambda a: cmd_archive(a, False), "ls": cmd_ls, "show": cmd_show, "open": cmd_open, "rename": cmd_rename, "close": cmd_close,
             "continue": cmd_continue, "reap": cmd_reap, "answer": cmd_answer,
             "service": lambda a: cmd_svc("service", a), "task": lambda a: cmd_svc("task", a)}[verb](args)
 

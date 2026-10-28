@@ -247,3 +247,9 @@ socket 0600）。
 旧 `fleet task` 任务可原位迁入：先暂停并等待当前运行结束，再在同一登录账号的会话中要求接管，提供原任务名及完全相同的提示词、时间、时区和 Agent 选择。`schedule create` 的 `adopt` 指向原任务名，保留原注册表文件、完成文件和历史；不要另建一个同时间的任务。尚在运行、参数不一致或已经被接管的任务会被拒绝。
 
 命令行登记可用 `fleet task add daily --at 07:00 --prompt "/daily-brief" --agent claude`。已有 CLI 任务可用 `fleet task schedule daily --agent claude` 只修改 Agent，保留运行时间；`fleet task ls` 显示选择。不要用 `--env FLEET_AGENT=…` 代替。
+
+## 手动归档会话
+
+在 Web 会话列表每行右侧点「归档」，从「已归档」查看并取消归档。Terminal 在面板选中会话，Tab →「归档」；展开「已归档」后，同一菜单可取消归档。
+
+也可运行 `fleet archive <会话>`、`fleet ls --archived`、`fleet unarchive <会话>`。归档两端同步，只影响展示，不停止运行或删除历史；运行仍占额度，新回复不会自动取消归档。

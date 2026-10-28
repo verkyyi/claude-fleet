@@ -59,6 +59,8 @@ const (
 
 // BoardRow is one row of the list.
 type BoardRow struct {
+	archiveSet    bool
+	Archived      bool   `json:"archived,omitempty"`
 	ScheduleID    string `json:"schedule_id,omitempty"`
 	RunID         string `json:"run_id,omitempty"`
 	CancelRequest string `json:"cancel_request,omitempty"`
@@ -132,7 +134,8 @@ type Board struct {
 	SessionList SessionListPreferences `json:"session_list"`
 	Rows        []BoardRow             `json:"rows"`
 	Count       int                    `json:"count"`
-	// Active is how many of the counted rows have an agent running right now
+	// Active includes archived sessions: hiding a row does not free runtime capacity.
+	// It is how many of the non-lost rows have an agent running right now
 	// (boardActive): what the panel and the console show as the number (AWVX);
 	// Count stays the list's size.
 	Active   int            `json:"active"`
@@ -280,9 +283,27 @@ func wstr(w map[string]any, k string) string {
 // the live sessions this answer already holds.
 func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*Board, error) {
 	since := now.Add(-boardGoneDays * 24 * time.Hour)
+	archived, err := s.Store.SessionArchivePreferences(owner)
+	if err != nil {
+		return nil, err
+	}
+	remembered := func(id string) bool { _, ok := archived[id]; return ok }
 	ts, err := s.Store.FleetTasksFor(owner, 500)
 	if err != nil {
 		return nil, err
+	}
+	extra, err := s.Store.SessionArchiveTasks(owner)
+	if err != nil {
+		return nil, err
+	}
+	seenTasks := map[int64]bool{}
+	for _, t := range ts {
+		seenTasks[t.ID] = true
+	}
+	for _, t := range extra {
+		if !seenTasks[t.ID] {
+			ts = append(ts, t)
+		}
 	}
 	ids, err := s.Store.BoardIDs(owner, since.Unix())
 	if err != nil {
@@ -440,7 +461,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			continue
 		}
 		lostFor := fs.Availability == "lost" && !fs.ObservedAt.IsZero() && now.Sub(fs.ObservedAt) > boardLostAfter
-		if lostFor && fs.ObservedAt.Before(since) {
+		if lostFor && fs.ObservedAt.Before(since) && !remembered(ident) {
 			continue // not listed; its record (if any) is listed on its own below
 		}
 		r := row(t, b)
@@ -590,12 +611,12 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 				}
 			}
 		case end == "":
-			if t.UpdatedAt.Before(since) {
+			if t.UpdatedAt.Before(since) && !remembered(t.FID) {
 				continue
 			}
 			r.Group, r.Tag = "gone", "ended"
 		default:
-			if t.UpdatedAt.Before(since) {
+			if t.UpdatedAt.Before(since) && !remembered(t.FID) {
 				continue
 			}
 			r.Group, r.Tag, r.At = "gone", end, t.UpdatedAt.Unix()
@@ -629,7 +650,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 	// the sessions that ended with no record of theirs listed
 	for i := range ids {
 		b := &ids[i]
-		if usedID[b.ID] || b.Seq == 0 || b.Closed == 0 || b.Closed < since.Unix() {
+		if usedID[b.ID] || (!remembered(b.ID) && (b.Seq == 0 || b.Closed == 0 || b.Closed < since.Unix())) {
 			continue
 		}
 		if t := taskOfID(b); t != nil && usedTask[t] {
@@ -637,6 +658,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		r := row(nil, b)
 		r.ID, r.Group, r.Tag, r.At = b.ID, "gone", "ended", b.Closed
+		if b.Closed == 0 {
+			r.Group, r.Tag, r.At, r.Lost = "queue", "not_seen", b.Opened, true
+		}
 		rows = append(rows, r)
 	}
 	hidden, err := s.Store.HiddenHistory(owner, s.historyMirrorSession)
@@ -656,6 +680,8 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 	}
 	for i := range kept {
 		r := &kept[i]
+		r.Archived = archived[r.ID]
+		r.archiveSet = remembered(r.ID)
 		fid := r.ID
 		if r.History != nil {
 			fid = r.History.ID
@@ -861,7 +887,7 @@ func finishBoard(rows []BoardRow) *Board {
 	b := &Board{Groups: map[string]int{}, GoneDays: boardGoneDays}
 	gone := 0
 	for _, r := range out {
-		if r.Group == "gone" {
+		if r.Group == "gone" && !r.Archived && !r.archiveSet {
 			gone++
 			if gone > boardGoneMax {
 				b.GoneMore++
@@ -869,9 +895,15 @@ func finishBoard(rows []BoardRow) *Board {
 			}
 		}
 		b.Rows = append(b.Rows, r)
-		b.Groups[r.Group]++
+		if r.Archived {
+			b.Groups["archived"]++
+		} else {
+			b.Groups[r.Group]++
+		}
 		if r.Group != "gone" && !r.Lost {
-			b.Count++
+			if !r.Archived {
+				b.Count++
+			}
 			if r.Active {
 				b.Active++
 			}

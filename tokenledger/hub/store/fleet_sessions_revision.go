@@ -14,7 +14,7 @@ func (s *Store) ensureSessionListRevision() error {
 			return err
 		}
 	}
-	for _, table := range []string{"fleet_fleets", "fleet_machines", "fleet_ids", "fleet_id_results", "fleet_history_hides", "fleet_operations", "fleet_tasks", "hub_chat_mirrors", "fleet_accounts", "fleet_principals", "fleet_settings", "endpoints", "nodes", "pool_usage"} {
+	for _, table := range []string{"fleet_fleets", "fleet_machines", "fleet_ids", "fleet_id_results", "fleet_history_hides", "fleet_session_archives", "fleet_operations", "fleet_tasks", "hub_chat_mirrors", "fleet_accounts", "fleet_principals", "fleet_settings", "endpoints", "nodes", "pool_usage"} {
 		if _, err := s.write.Exec(`INSERT INTO fleet_sessions_revision(name) VALUES(?) ON CONFLICT(name) DO NOTHING`, table); err != nil {
 			return err
 		}

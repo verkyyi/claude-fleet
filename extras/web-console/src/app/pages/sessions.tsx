@@ -1,3 +1,4 @@
+import { ArchiveButton } from "../ArchiveButton";
 // sessions.tsx — 会话 (EPIC #3923 C4, issue #3927; T769): everything the person
 // sent out and every session they have, ONE list — a task and its session one
 // row (src/app/work.ts joins them), grouped as ⌘P's panel groups them: ✦ 消息 ·
@@ -281,6 +282,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
           : <p className="text-muted-foreground">{r.board?.tag === "queued" ? tr("尚未派发，尚未启动会话", "Not dispatched; no session started") : r.board?.tag === "starting" ? tr("会话正在启动", "The session is starting") : t && r.group === "queue" ? tr("现在看不到它的会话 —— 还没开，或在看不到的机器上", "No session seen now — not open yet, or on a machine not visible") : tr("没有会话", "No session")}</p>}
       </Field>
       <div className="flex flex-wrap gap-2">
+        <ArchiveButton row={r} />
         {r.live && !cli ? onTerminal ? <Button className="flex-1" onClick={onTerminal}><TerminalSquare />{tr("终端", "Terminal")}</Button>
           : <Button asChild className="flex-1"><Link to={terminalLink(r.live.id)} state={{ title: r.title }}><TerminalSquare />{tr("终端", "Terminal")}</Link></Button> : null}
         {r.ended ? <Button className="flex-1" disabled={busy || !!viewAs} onClick={() => onResume(r)}><RotateCcw />{tr("接回", "Resume")}</Button> : null}
@@ -372,7 +374,7 @@ export default function SessionsPage() {
   useEffect(() => { if (narrow && pickedID) setSheet(true); }, [narrow, pickedID]);
 
   const match = (r: Row) => !q.trim() || `${r.code} ${r.task ? writtenCode(r.task) : ""} ${r.title}`.toLowerCase().includes(q.trim().toLowerCase());
-  const visible = (rows || []).filter((r) => match(r) || r.kids.some(match));
+  const visible = (rows || []).filter((r) => !r.board?.archived && (match(r) || r.kids.some(match)));
   const current = picked || (!narrow && rows ? rowsIn(visible, "ask")[0] || rowsIn(visible, "work")[0] || visible[0] : undefined);
   const open = (r: Row) => {
     setParams((p) => { p.delete("q"); p.set("open", r.code ? (r.task ? writtenCode(r.task) : r.code) : r.id); return p; }, { replace: true });
@@ -388,7 +390,7 @@ export default function SessionsPage() {
         : <Button size="sm" disabled={!!viewAs} onClick={() => setNewOpen(true)}><Plus />{tr("新建", "New")}</Button>} />
     : (
       <div className="space-y-4">
-        <Messages rows={rows} onOpen={open} />
+        <Messages rows={visible} onOpen={open} />
         {GROUPS.map(({ g, label }) => {
           const rs = rowsIn(visible, g);
           if (!rs.length) return null;

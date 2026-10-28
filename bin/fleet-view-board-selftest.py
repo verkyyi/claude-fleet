@@ -82,7 +82,7 @@ class Board(unittest.TestCase):
         rec = out["queue"][0]
         self.assertTrue(rec["record_only"] and rec["target"] == "id:f-rec" and rec["word"] == "排着")
         self.assertFalse(rec.get("gone"), "an open record is drawn and counted even when its session closed here")
-        self.assertEqual(v.menu_of(rec), [], "a record with no session has nothing to act on")
+        self.assertEqual([a["id"] for a, _ in v.menu_of(rec)], ["archive"], "an unstarted record can be archived without any execution action")
         self.assertEqual([e["fid"] for e in out_gone], ["f-exit", "f-end"], "the hub's 已收起, in its order")
         self.assertNotIn("f-local", [e["fid"] for e in out_gone])
         items = [e for g in v.GROUPS for e in out[g]] + out_gone

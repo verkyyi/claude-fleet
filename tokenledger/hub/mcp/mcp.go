@@ -1295,6 +1295,12 @@ func fleetToolSpecs() []toolSpec {
 				"idempotency_key": idemProp}, "worker_id", "policy", "idempotency_key"),
 		},
 		{
+			Name:        "session_archive",
+			Title:       "Archive or unarchive one session",
+			Description: "Set the owner's session list visibility by its lifelong ID. Archiving does not stop execution, delete history or change retention. Takes effect on Web and Terminal. Needs worker:message.",
+			InputSchema: obj(map[string]any{"id": map[string]any{"type": "string"}, "archived": map[string]any{"type": "boolean"}}, "id", "archived"),
+		},
+		{
 			Name:  "worker_pin",
 			Title: "Pin or unpin a worker to the top of the lists",
 			Description: "Set (on) or clear (off) the worker window's @pin on its node: a pinned session " +

@@ -2323,6 +2323,7 @@ def board_apply(board, groups, shut, gone, here, me):
                 e.pop("gone", None)
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
         e["board"] = r.get("id")
+        e["archived"] = bool(r.get("archived"))
         e["worker_id"] = r.get("worker_id") or ""
         # the identity worker_id a closed ID reopens under on its own machine (the
         # hub's history.resume_id: <its fleet UUID>/<fid>) — far 恢复's address
@@ -2737,7 +2738,8 @@ def needs_attention(e):
 def compact_task_list(items, current="", preferences=None, now=None, selected=""):
     """Presentation only: no lifecycle flags change when a live row is folded."""
     ordered = task_list(items)
-    rows = [dict(e) for e in ordered if e["kind"] == "sess"]
+    archived = [dict(e, sec="archived") for e in ordered if e["kind"] == "sess" and e.get("archived")]
+    rows = [dict(e) for e in ordered if e["kind"] == "sess" and not e.get("archived")]
     prefs = list_preferences(preferences if preferences is not None else
                              next((e.get("list_preferences") for e in rows if e.get("list_preferences")), None))
     now = time.time() if now is None else now
@@ -2785,6 +2787,9 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
             label += (" · %d running" if ui_lang() == "en" else " · %d 个运行中") % running
         out.append({"kind": "sec", "sec": "gone", "text": label, "n": len(history), "older": sum(e.get("n", 0) for e in older)})
         out += history + older
+    if archived:
+        out.append({"kind": "sec", "sec": "archived", "text": "Archived" if ui_lang() == "en" else "已归档", "n": len(archived)})
+        out += archived
     return out
 
 
@@ -2792,7 +2797,7 @@ def visible(items, query, opened, current="", selected=""):
     """Flat, single-line tasks; search includes folded history without opening it."""
     items = compact_task_list(items, current, selected=selected)
     if query.split():
-        hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess"]
+        hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess" and (not e.get("archived") or "archived" in opened)]
         toks = query.split()
         if len(toks) == 1 and any(e.get("open_id") and id_code_hit(toks[0].lower(), e) for _, _, e in hits):
             hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
@@ -4721,7 +4726,13 @@ def reopen_label(r):
 
 # Each entry: id · label · when · local · far · ask (+ prompt / choices / slow: run
 # in the background from the popup — a stop, a reap, a move take seconds).
+def archive_action(r, answer, fleet):
+    return sh("fleet-hub-write.sh", "session_archive", json.dumps({"id": r["board"], "archived": not r.get("archived", False)}))
+
+
 ACTIONS = [
+    {"id": "archive", "label": lambda r: (("Unarchive" if r.get("archived") else "Archive") if ui_lang() == "en" else ("取消归档" if r.get("archived") else "归档")),
+     "when": lambda r: bool(r.get("board")), "local": archive_action, "far": archive_action, "ask": None, "slow": True, "thread": True},
     {"id": "continue", "label": lambda r: "Continue task" if ui_lang() == "en" else "继续任务",
      "when": lambda r: bool(controlled_stop_task(r)) and bool(r.get("cancel_request")) and not r.get("running") and not pending_start_task(r),
      "local": lambda r, a, f: "taskcontinue", "far": lambda r, a, f: "taskcontinue", "ask": "choice",
@@ -4857,10 +4868,12 @@ def menu_of(r):
     """The actions a row gets, in the table's order: (action, label)."""
     if reopen_row(r) or far_reopen_row(r):
         a = ACTION["resume"]
-        return [(a, a["label"](r))]
+        return [(a, a["label"](r))] + ([(ACTION["archive"], ACTION["archive"]["label"](r))] if r.get("board") else [])
     if r.get("record_only"):
         a = ACTION["cancelstart"] if pending_start_task(r) else ACTION["stop"]
         items = [(a, a["label"](r))] if pending_start_task(r) or controlled_stop_task(r) else []
+        if r.get("board"):
+            items.append((ACTION["archive"], ACTION["archive"]["label"](r)))
         c = ACTION['continue']
         return [(c, c['label'](r))] + items if c['when'](r) else items
     out = []
@@ -4882,7 +4895,7 @@ def menu_of(r):
 PAGE_ACTIONS = ("continue", "resume", "enter", "pr", "rename", "agent", "webopen", "stop", "cancelstart")
 
 
-def page_of(r, missing=None):
+def _page_of(r, missing=None):
     """The actions page of row `r`: [(action, label, why)] in PAGE_ACTIONS order;
     `why` non-empty = shown grey, unnumbered, skipped — the switch to an agent
     this machine lacks (`missing`: grid_read's {agent: why})."""
@@ -4927,6 +4940,15 @@ def page_of(r, missing=None):
     return out
 
 
+def page_of(r, missing=None):
+    out = _page_of(r, missing)
+    # Visibility is editable for a live, closed, pending or offline session.
+    a = ACTION["archive"]
+    if a["when"](r) and not any(item[0]["id"] == "archive" for item in out):
+        out.append((a, a["label"](r), ""))
+    return out
+
+
 def act_ask(a, r):
     ask = a["ask"]
     return ask(r) if callable(ask) else ask
@@ -4956,6 +4978,19 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     fn = a["far"] if r.get("far") else a["local"]
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
+    if a["id"] == "archive":
+        # A Hub preference works even when the session's node is offline.
+        # Wait off the UI thread: success means saved, not merely spawned.
+        try:
+            p = subprocess.run(argv, env=act_env(fleet), capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return 1, say("view_act_failed_fmt", label, ""), False
+        if p.returncode != 0:
+            said = (p.stderr.strip() or p.stdout.strip()).splitlines()
+            return p.returncode, say("view_act_failed_fmt", label, one_line(said[-1] if said else "", 120)), False
+        hub_reread(fleet)
+        return 0, say("view_act_done_fmt", label), False
     if argv == 'taskcontinue':
         if ans not in ('', 'same', 'claude', 'codex'):
             return 1, 'Choose the continuation agent explicitly', False

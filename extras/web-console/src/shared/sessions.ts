@@ -45,6 +45,7 @@ export type SessionRow = {
 // the console and the ⌘P panel both draw it as it is.
 export type BoardGroup = "pin" | "ask" | "work" | "queue" | "gone";
 export type BoardRow = {
+  archived?: boolean;
   schedule_id?: string; run_id?: string;
   agent?: string; agent_basis?: "planned" | "native" | "actual" | "runtime";
   agent_words?: [string, string]; context?: [string, string]; coordinator?: string; outcome?: string;
