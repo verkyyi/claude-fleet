@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { tr } from "@/shared/i18n";
-import { getJSON, sendJSON } from "@/shared/api";
+import { sendJSON } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
 
 import { useSchedules, scheduleDate as date, schedulePath, recurrence, scheduleAgent, type Spec, type ScheduleRow as Row, type Run } from "../schedules";
@@ -30,8 +30,8 @@ export default function SchedulesPage() {
 export function SchedulePanel() {
   usePage(tr("定时任务", "Schedules"));
   const { me } = useShell();
-  const readOnly = !me || !!(me.read_only || me.view_as);
-  const { rows, error: feedError, refresh } = useSchedules();
+  const { rows, error: feedError, refresh, read, expired } = useSchedules();
+  const readOnly = expired || !me || !!(me.read_only || me.view_as);
   const go = useNavigate();
   const { search, state } = useLocation();
   const selected = new URLSearchParams(search).get("schedule");
@@ -50,9 +50,9 @@ export function SchedulePanel() {
     if (!edit) return;
     let live = true;
     const q = new URLSearchParams({ preview: "1", timezone: edit.timezone, ...(edit.cron ? { cron: edit.cron } : { at: edit.at ?? "" }) });
-    const timer = setTimeout(async () => { const data = await getJSON<{ next_run: number }>(`/v1/schedules?${q}`); if (live) { setPreview(data?.next_run ?? null); setPreviewError(!data); } }, 250);
+    const timer = setTimeout(async () => { const data = await read<{ next_run: number }>(`/v1/schedules?${q}`); if (live) { setPreview(data?.next_run ?? null); setPreviewError(!data); } }, 250);
     return () => { live = false; clearTimeout(timer); };
-  }, [edit?.at, edit?.cron, edit?.timezone, !!edit]);
+  }, [edit?.at, edit?.cron, edit?.timezone, !!edit, read]);
   const idem = useRef<{ signature: string; key: string } | null>(null);
   const [detail, setDetail] = useState<Row | null>(null);
   const [runsVersion, setRunsVersion] = useState(0);
@@ -60,8 +60,8 @@ export function SchedulePanel() {
     setRuns(null); setDetail(null);
     if (!selected || selected === "new") return;
     let live = true, lastRead = "";
-    const read = async () => {
-      const data = await getJSON<Reply>(`/v1/schedules?id=${encodeURIComponent(selected)}`);
+    const readRuns = async () => {
+      const data = await read<Reply>(`/v1/schedules?id=${encodeURIComponent(selected)}`);
       if (!live) return;
       if (data) {
         setRuns(data.runs ?? []); setDetail(data.schedule ?? null);
@@ -73,9 +73,9 @@ export function SchedulePanel() {
         }
       } else setError(tr("暂时无法读取任务详情，请稍后重试。", "Could not read schedule details. Please retry."));
     };
-    void read(); const timer = setInterval(() => { if (!document.hidden) void read(); }, 15000);
+    void readRuns(); const timer = setInterval(() => { if (!document.hidden) void readRuns(); }, 15000);
     return () => { live = false; clearInterval(timer); };
-  }, [selected, readOnly, refresh, runsVersion]);
+  }, [selected, readOnly, refresh, read, runsVersion]);
   async function act(action: string, spec: Spec) {
     if (busy || readOnly) return;
     const requestedSelection = selected;
@@ -95,7 +95,7 @@ export function SchedulePanel() {
   return <div className="mx-auto max-w-4xl space-y-5 p-4 md:p-6">
     <header className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">⏰ {selectedRow?.spec.name || tr("定时任务", "Schedules")}</h1><p className="mt-1 text-sm text-muted-foreground">{tr("运行使用你自己的额度。", "Runs use your own allowance.")}</p></div><Button disabled={readOnly} onClick={() => go(schedulePath("new"))}>{tr("新建定时任务", "New schedule")}</Button></header>
     {!selected && <p className="text-sm text-muted-foreground">{tr("已建", "Saved")} {rows?.length ?? "—"} / 10 · {tr("最快每小时一次，每天最多 24 次计划运行", "Hourly or slower; up to 24 planned runs a day")}</p>}
-    {feedError && <p role="status" className="text-sm text-muted-foreground">{feedError}</p>}
+    {feedError && <p role="status" className="text-sm text-muted-foreground">{feedError}{expired && <Link to="/signin" className="ml-2 underline">{tr("重新登录", "Sign in")}</Link>}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {edit && <form className={panel} onSubmit={e => { e.preventDefault(); void act(edit.id ? "update" : "create", edit); }}>
       <h2 className="font-semibold">{edit.id ? tr("编辑任务", "Edit schedule") : tr("新建任务", "New schedule")}</h2>

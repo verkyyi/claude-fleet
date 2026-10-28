@@ -5700,6 +5700,14 @@ drill_codex_resume_history() {
   SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
 }
 
+drill_schedule_background_auth() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(cd "$ROOT/extras/web-console" && node --experimental-strip-types test/schedule-feed.mjs 2>&1) \
+    || { WHY="schedule background authentication: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='401 stops background reads; no navigation or late private-data revival'
+}
+
 drill_schedule_agent_selection() {
   CAP=30; local t0 out
   t0=$(now)

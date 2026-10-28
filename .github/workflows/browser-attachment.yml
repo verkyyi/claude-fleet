@@ -35,6 +35,8 @@ jobs:
         working-directory: extras/browser-transport
       - run: npx playwright install --with-deps chromium
         working-directory: extras/browser-transport
+      - name: Background schedule expiry preserves the current page and draft
+        run: node extras/web-console/test/schedule-auth-browser.mjs
       - name: Pending task cancellation, conflicts and read-only controls
         run: node extras/web-console/test/task-cancel-browser.mjs
       - name: Explicit Task continue in the real app
