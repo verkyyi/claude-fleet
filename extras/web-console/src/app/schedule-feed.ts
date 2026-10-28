@@ -4,10 +4,10 @@ export type ScheduleRead<T> = { kind: "ok"; data: T } | { kind: "expired" | "err
 // terminal. Expiry fences both future reads and older in-flight responses.
 export class ScheduleReader {
   private expired = false;
-  async read<T>(url: string): Promise<ScheduleRead<T>> {
+  async read<T>(url: string, init?: RequestInit): Promise<ScheduleRead<T>> {
     if (this.expired) return { kind: "expired" };
     try {
-      const response = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" });
+      const response = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store", ...init });
       if (response.status === 401) this.expired = true;
       if (this.expired) return { kind: "expired" };
       if (!response.ok) return { kind: "error" };

@@ -21,4 +21,8 @@ reply=()=>Promise.reject(Error('network'));
 assert.deepEqual(await retry.read('/v1/schedules'),{kind:'error'});
 reply=()=>Promise.resolve(new Response('{"value":"restored"}',{status:200}));
 assert.deepEqual(await retry.read('/v1/schedules'),{kind:'ok',data:{value:'restored'}});
+const acknowledgment=new ScheduleReader();
+reply=()=>Promise.resolve(new Response('',{status:401}));
+assert.deepEqual(await acknowledgment.read('/v1/schedules',{method:'POST',body:'{\"action\":\"read\"}'}),{kind:'expired'});
+assert.equal(navigations,0);
 console.log('PASS schedule feed: expiry, late response fence, stopped polling, no navigation and network recovery');

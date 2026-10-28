@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 export type Spec = { id: string; revision: number; name: string; prompt: string; agent?: "" | "claude" | "codex"; at?: string; cron?: string; timezone: string; enabled: boolean; deleted: boolean; delivery: { wechat: boolean; livepage: boolean }; repo?: string };
 export type ScheduleRow = { spec: Spec; sync_state: string; sync_note: string; observed: { status?: string; last_run?: number; next_run?: number; last_result?: string; last_line?: string; last_error?: string; stale?: boolean } };
 export type Run = { id: string; schedule_id: string; state: string; started: number; ended: number; summary: string; error: string; delivery: { wechat?: string; wechat_channel?: string; livepage?: string; url?: string }; session_id: string };
-type Feed = { expired: boolean; read: <T>(url: string) => Promise<T | null>; rows: ScheduleRow[] | null; unread: Run[]; error: string; refresh: () => Promise<void> };
+type Feed = { expired: boolean; read: <T>(url: string, init?: RequestInit) => Promise<T | null>; rows: ScheduleRow[] | null; unread: Run[]; error: string; refresh: () => Promise<void> };
 const Context = createContext<Feed>({ expired: false, read: async () => null, rows: null, unread: [], error: "", refresh: async () => {} });
 export const useSchedules = () => useContext(Context);
 export const schedulePath = (id: string) => `/?schedule=${encodeURIComponent(id)}`;
@@ -33,8 +33,8 @@ export function SchedulesProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState("");
   const reader = useRef(new ScheduleReader());
   const [expired, setExpired] = useState(false);
-  const read = useCallback(async <T,>(url: string): Promise<T | null> => {
-    const result = await reader.current.read<T>(url);
+  const read = useCallback(async <T,>(url: string, init?: RequestInit): Promise<T | null> => {
+    const result = await reader.current.read<T>(url, init);
     if (result.kind === "expired") { setExpired(true); setRows([]); setUnread([]); }
     return result.kind === "ok" ? result.data : null;
   }, []);
@@ -54,7 +54,7 @@ export function NewScheduleButton() {
 export function ScheduleGroup({ phone = false }: { phone?: boolean }) {
   const { rows, error, expired } = useSchedules();
   const [open, setOpen] = useState(true);
-  if (!rows?.length) return error ? <p role="status" className="p-3 text-xs text-muted-foreground">{error}{expired && <Link to="/signin" className="ml-2 underline">{tr("重新登录", "Sign in")}</Link>}</p> : null;
+  if (!rows?.length) return error ? <p role="status" className="p-3 text-xs text-muted-foreground">{error}{expired && <a href="/app/signin" className="ml-2 underline">{tr("重新登录", "Sign in")}</a>}</p> : null;
   const running = rows.filter(r => r.observed.status === "running").length;
   const failed = rows.filter(r => r.observed.status === "failed" || r.observed.last_result === "failed").length;
   if (phone) return <div className="border-b px-4 py-3"><Link to="/?schedules=1" className="block text-sm no-underline">⏰ {tr("定时任务", "Schedules")} {rows.length}{running > 0 && ` · ${running} ${tr("个运行中", "running")}`}{failed > 0 && <span className="ml-2 text-destructive">{failed} {tr("个失败", "failed")}</span>}</Link></div>;
