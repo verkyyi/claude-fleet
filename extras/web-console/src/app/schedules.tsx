@@ -54,7 +54,7 @@ export function NewScheduleButton() {
 export function ScheduleGroup({ phone = false }: { phone?: boolean }) {
   const { rows, error, expired } = useSchedules();
   const [open, setOpen] = useState(true);
-  if (!rows?.length) return error ? <p role="status" className="p-3 text-xs text-muted-foreground">{error}{expired && <a href="/app/signin" className="ml-2 underline">{tr("重新登录", "Sign in")}</a>}</p> : null;
+  if (!rows?.length) return error ? <p role="status" className="p-3 text-xs text-muted-foreground">{error}{expired && <a href="/app/signin" className="ml-2 underline">{tr("重新登录", "Sign in again")}</a>}</p> : null;
   const running = rows.filter(r => r.observed.status === "running").length;
   const failed = rows.filter(r => r.observed.status === "failed" || r.observed.last_result === "failed").length;
   if (phone) return <div className="border-b px-4 py-3"><Link to="/?schedules=1" className="block text-sm no-underline">⏰ {tr("定时任务", "Schedules")} {rows.length}{running > 0 && ` · ${running} ${tr("个运行中", "running")}`}{failed > 0 && <span className="ml-2 text-destructive">{failed} {tr("个失败", "failed")}</span>}</Link></div>;

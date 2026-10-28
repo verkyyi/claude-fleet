@@ -94,7 +94,7 @@ export function SchedulePanel() {
   return <div className="mx-auto max-w-4xl space-y-5 p-4 md:p-6">
     <header className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">⏰ {selectedRow?.spec.name || tr("定时任务", "Schedules")}</h1><p className="mt-1 text-sm text-muted-foreground">{tr("运行使用你自己的额度。", "Runs use your own allowance.")}</p></div><Button disabled={readOnly} onClick={() => go(schedulePath("new"))}>{tr("新建定时任务", "New schedule")}</Button></header>
     {!selected && <p className="text-sm text-muted-foreground">{tr("已建", "Saved")} {rows?.length ?? "—"} / 10 · {tr("最快每小时一次，每天最多 24 次计划运行", "Hourly or slower; up to 24 planned runs a day")}</p>}
-    {feedError && <p role="status" className="text-sm text-muted-foreground">{feedError}{expired && <a href="/app/signin" className="ml-2 underline">{tr("重新登录", "Sign in")}</a>}</p>}
+    {feedError && <p role="status" className="text-sm text-muted-foreground">{feedError}{expired && <a href="/app/signin" className="ml-2 underline">{tr("重新登录", "Sign in again")}</a>}</p>}
     {error && <p role="alert" className="rounded-lg border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {edit && <form className={panel} onSubmit={e => { e.preventDefault(); void act(edit.id ? "update" : "create", edit); }}>
       <h2 className="font-semibold">{edit.id ? tr("编辑任务", "Edit schedule") : tr("新建任务", "New schedule")}</h2>

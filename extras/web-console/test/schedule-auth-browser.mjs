@@ -45,7 +45,7 @@ try {
   const stopped=reads;
   await page.clock.fastForward(60000);
   assert.equal(reads,stopped,'background polling continued after expiry');
-  assert.equal(await page.getByRole('link',{name:'Sign in',exact:true}).first().getAttribute('href'),'/app/signin');
+  assert.equal(await page.getByRole('link',{name:'Sign in again',exact:true}).first().getAttribute('href'),'/app/signin');
   await context.close();
   console.log('PASS schedule auth: no navigation, private data cleared, draft kept, polling stopped');
 } finally { await browser.close(); }
