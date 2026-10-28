@@ -251,3 +251,9 @@ Final answers appear in the app with an unread notification; run history is reta
 To adopt an existing CLI task without duplicating it, pause it and wait for its active run to finish. In the same login, ask the agent to create a schedule with `adopt` set to that task's name and the exact existing prompt, recurrence, timezone and agent choice. This retains the registry entry, completion file and history. An active, mismatched or already adopted entry is refused.
 
 CLI example: `fleet task add daily --at 07:00 --prompt "/daily-brief" --agent claude`. For an existing CLI task, `fleet task schedule daily --agent claude` changes only the agent, keeping its recurrence. `fleet task ls` shows the choice. Do not substitute `--env FLEET_AGENT=…`.
+
+## Archive a session
+
+In the Web session list, choose Archive beside a session. Open Archived to find it and choose Unarchive. In Terminal, select a session and press Tab → Archive; expand Archived to unarchive it from the same menu.
+
+You can also use `fleet archive <session>`, `fleet ls --archived`, and `fleet unarchive <session>`. Archiving syncs across both interfaces and only changes visibility. It does not stop execution or delete history; running sessions still use capacity, and new replies do not unarchive them.

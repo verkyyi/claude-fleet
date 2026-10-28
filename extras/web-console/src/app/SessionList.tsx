@@ -1,3 +1,4 @@
+import { ArchiveButton } from "./ArchiveButton";
 import { ScheduleGroup, NewScheduleButton } from "./schedules";
 // Task list: PIN, ordinary tasks, then folded earlier sessions. One status slot.
 import { createContext, useContext, useEffect, useRef, useState, type FC, type PointerEvent, type ReactNode } from "react";
@@ -162,15 +163,15 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
       </span>
     </Link>
   );
-  if (variant === "page") return <li>{body}</li>;
+  if (variant === "page") return <li className="flex items-center"><div className="min-w-0 flex-1">{body}</div><ArchiveButton row={r} /></li>;
   return (
-    <SidebarMenuItem>
-      <Tooltip delayDuration={200}>
+    <SidebarMenuItem className="flex items-center">
+      <div className="min-w-0 flex-1"><Tooltip delayDuration={200}>
         <TooltipTrigger asChild>
           <SidebarMenuButton asChild isActive={active} className="data-[active=true]:font-[inherit]">{body}</SidebarMenuButton>
         </TooltipTrigger>
         <TooltipContent side="right" align="start" className="max-w-80 text-xs leading-relaxed"><RowDetail r={r} /></TooltipContent>
-      </Tooltip>
+      </Tooltip></div><ArchiveButton row={r} />
     </SidebarMenuItem>
   );
 };
@@ -224,7 +225,10 @@ function useOpenRef() {
 // The list itself. `variant` side = inside the computer's left column (shadcn
 // SidebarMenu, folds to its glyphs); page = the phone's whole screen.
 export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ variant, chatHome }) => {
-  const { rows, board, failed, reload } = useWorkRows();
+  const { rows: allRows, board, failed, reload } = useWorkRows();
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedCount = allRows?.filter(r => r.board?.archived).length || 0;
+  const rows = allRows?.filter(r => !!r.board?.archived === showArchived) ?? null;
   const { q } = useListUi();
   // 会话合一: the web's old conversation is a session of the list now (「我的对话」),
   // no row of its own — kept only on the old road
@@ -263,7 +267,10 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const searching = !!q.trim();
   const web = <WebChatRow key="web" variant={variant} active={webActive} />;
   let body: ReactNode;
-  if (searching) {
+  if (showArchived) {
+    const found = searching ? searchRows(ordered, q) : ordered;
+    body = found.length ? <List>{timeline(found)}</List> : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有已归档会话", "No archived sessions")}</p>;
+  } else if (searching) {
     const found = searchRows(ordered, q);
     const webHit = `${tr("我的对话", "My chat")} chat`.toLowerCase().includes(q.trim().toLowerCase());
     body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map(row)}</List>
@@ -303,6 +310,8 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
       onPointerCancel={() => setPointing(false)} onPointerUp={(e) => { if (e.pointerType !== "mouse") setPointing(false); }}
       onKeyDownCapture={() => { setFocused(true); clearTimeout(keyTimer.current); keyTimer.current = window.setTimeout(() => setFocused(false), 1200); }} onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false); }}>
       <SearchBox />
+      <button type="button" aria-pressed={showArchived} onClick={() => { previous.current = undefined; setShowArchived(!showArchived); }} className="text-muted-foreground px-4 py-2 text-sm">{showArchived ? tr("返回会话", "Back to sessions") : tr(`已归档 · ${archivedCount}`, `Archived · ${archivedCount}`)}</button>
+      {showArchived ? <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档只隐藏会话，不会停止运行。取消归档即可恢复显示。", "Archiving hides sessions without stopping them. Unarchive to show them again.")}</p> : null}
       {body}
       {variant === "page" ? <PressSheet r={pressed} onClose={() => setPressed(null)} /> : null}
     </div>

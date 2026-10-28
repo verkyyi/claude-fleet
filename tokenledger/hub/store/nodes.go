@@ -240,6 +240,9 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureOperationSessions(); err != nil {
 		return err
 	}
+	if err := s.ensureSessionArchives(); err != nil {
+		return err
+	}
 	return s.ensureSessionListRevision()
 }
 

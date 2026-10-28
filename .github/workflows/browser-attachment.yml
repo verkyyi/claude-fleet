@@ -59,6 +59,8 @@ jobs:
         run: node chat-scroll.mjs
         working-directory: extras/browser-transport
       - run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Session archive on phone and desktop
+        run: node extras/web-console/test/session-archive-browser.mjs
       - name: Actual browser to node adapter, UDP denial, no replay and cleanup
         # the联调 tests' block since claude-fleet#4814 (a real node against a real hub)
         working-directory: tokenledger/e2e

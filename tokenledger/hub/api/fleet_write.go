@@ -71,7 +71,7 @@ var fleetScopeOf = map[string]string{
 	"worker_reap_policy": "worker:reap",
 	// 置顶 / 取消置顶 on another machine's row (claude-fleet#3517): the list's
 	// order only — a rename's authority.
-	"worker_pin": "worker:message",
+	"worker_pin": "worker:message", "session_archive": "worker:message",
 	// 换 Codex / 换 Claude on another machine's row (claude-fleet#4184): close
 	// the session and continue the same task in the other agent, in the same
 	// pane — a switch's authority, a stop's.
@@ -111,7 +111,7 @@ var fleetConfigKeys = map[string][2]int{
 // fleetWriteTools are the journalled tools; fleetGHReads the synchronous
 // GitHub reads.
 var (
-	fleetWriteTools = map[string]bool{"worker_start": true, "worker_message": true, "worker_stop": true,
+	fleetWriteTools = map[string]bool{"session_archive": true, "worker_start": true, "worker_message": true, "worker_stop": true,
 		"worker_resume": true, "worker_answer": true, "worker_reap": true, "worker_switch": true, "worker_rename": true,
 		"worker_reap_policy": true, "worker_pin": true, "worker_transfer": true, "config_set": true, "gh_comment": true,
 		"service_control": true}

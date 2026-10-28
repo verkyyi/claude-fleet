@@ -87,7 +87,7 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "args_json must be one JSON object of tool arguments")
 		return
 	}
-	if req.Tool == "task_continue" {
+	if req.Tool == "task_continue" || req.Tool == "session_archive" {
 		var extra any
 		if dec.Decode(&extra) != io.EOF {
 			httpError(w, http.StatusBadRequest, "args_json must contain exactly one object")
@@ -182,4 +182,4 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 // /v1/node/place), configuration, a service or a GitHub comment.
 var nodeWriteTools = map[string]bool{"worker_message": true, "worker_stop": true, "worker_resume": true,
 	"worker_answer": true, "worker_reap": true, "worker_reap_policy": true, "worker_rename": true,
-	"worker_pin": true, "worker_switch": true, "worker_transfer": true, "operation_get": true}
+	"session_archive": true, "worker_pin": true, "worker_switch": true, "worker_transfer": true, "operation_get": true}

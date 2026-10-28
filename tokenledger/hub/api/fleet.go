@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -985,6 +986,10 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 		a, _ := args["action"].(string)
 		fleetID = "service:" + m + "/" + l + "/" + n + " " + a
 	}
+	if tool == "session_archive" {
+		id, _ := args["id"].(string)
+		fleetID = "session:" + id
+	}
 	opID := ""
 	defer func() {
 		if m, ok := out.(map[string]any); ok && opID == "" {
@@ -1013,6 +1018,8 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 		return nil, err
 	}
 	switch tool {
+	case "session_archive":
+		return s.archiveSession(req, args)
 	case "fleet_list":
 		refresh, _ := args["refresh"].(bool)
 		return s.FleetList(req, refresh)
@@ -1048,7 +1055,7 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 var FleetTools = []string{"fleet_list", "fleet_sessions", "fleet_status", "config_get", "operation_get",
 	"gh_issue_view", "gh_pr_view", "gh_pr_checks",
 	"worker_start", "worker_message", "worker_stop", "worker_resume", "worker_answer", "worker_reap", "worker_switch", "worker_rename", "worker_reap_policy",
-	"worker_pin", "worker_transfer", "config_set", "gh_comment", "service_control"}
+	"session_archive", "worker_pin", "worker_transfer", "config_set", "gh_comment", "service_control"}
 
 // handleFleet serves /v1/fleet/<tool>: a read as GET with query arguments
 // (?fleet_id=…&operation_id=…&refresh=1&number=…&repo=…&fields=…), or any tool
@@ -1068,6 +1075,10 @@ func (s *Server) handleFleet(w http.ResponseWriter, r *http.Request) {
 		dec.UseNumber()
 		if err := dec.Decode(&args); err != nil || args == nil {
 			httpError(w, http.StatusBadRequest, "the body must be one JSON object of tool arguments")
+			return
+		}
+		if tool == "session_archive" && dec.Decode(new(any)) != io.EOF {
+			httpError(w, http.StatusBadRequest, "one JSON object required")
 			return
 		}
 	case http.MethodGet:

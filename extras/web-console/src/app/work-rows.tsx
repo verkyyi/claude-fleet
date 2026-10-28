@@ -130,7 +130,7 @@ export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
     const prev = glyphs.current;
     glyphs.current = fresh ? Object.fromEntries(rows.map((r) => [r.id, r.glyph])) : null;
     if (!prev || !fresh) return;
-    const fin = repliesDone(prev, rows).filter((r) => r.id !== openRow.current);
+    const fin = repliesDone(prev, rows).filter((r) => !r.board?.archived && r.id !== openRow.current);
     if (!fin.length) return;
     setReplied((old) => {
       const next: Record<string, string> = {};

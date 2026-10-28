@@ -153,6 +153,9 @@ drill_thin_notify_two_views() {
   until_ok 3 osc9_in a || { WHY="the primary's 看台 (a) got no OSC 9"; th_done; return 1; }
   osc9_in b && { WHY="both 看台 were notified (one person, two copies)"; th_done; return 1; }
   # the person picks up the other device and types: the hub's primary is now b
+  # tmux client_activity is whole seconds. Cross the last beat's second so
+  # this input is newer even on a fast runner; setup time is outside CAP.
+  sleep 1.1
   printf 'L-dev-b\n' > "$B/PRIMARY"; printf 'x' > "$B/ctl-b"; t0=$(now)
   sleep 0.3
   python3 "$BIN/fleet_thin_lease.py" beat

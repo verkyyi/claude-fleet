@@ -310,5 +310,54 @@ class TaskList(unittest.TestCase):
             stop.assert_called_once_with("worker_stop", {"worker_id": "fleet/fid"}, wait=90)
 
 
+class SessionArchive(unittest.TestCase):
+    def test_running_pinned_current_session_stays_archived(self):
+        a = row("a", archived=True, board="fid-a", group="pin", state="working", running=True)
+        b = row("b", state="idle")
+        for current in ("", "a"):
+            shown = v.visible([a, b], "", set(), current=current, selected="a")
+            self.assertNotIn("a", [r.get("target") for r in shown])
+            self.assertIn("archived", [r.get("sec") for r in shown])
+        self.assertNotIn("a", [r.get("target") for r in v.visible([a,b], "a", set())])
+        self.assertIn("a", [r.get("target") for r in v.visible([a,b], "a", {"archived"})])
+        self.assertIn("a", [r.get("target") for r in v.visible([a,b], "", {"archived"})])
+        for e in (a, dict(a, record_only=True), dict(a, gone=True, home=True, ledger=True, fid="fid-a", target="id:fid-a")):
+            self.assertIn("archive", [act["id"] for act, label in v.menu_of(e)])
+            with patch.object(v,"reopen_why",return_value="offline"):
+                self.assertIn("archive", [act["id"] for act, label, why in v.page_of(e) if not why])
+        argv = v.archive_action(a, "", "fleet")
+        self.assertEqual(json.loads(argv[-1]), {"id": "fid-a", "archived": False})
+
+    def test_archive_waits_for_saved_result_even_on_offline_rows(self):
+        import subprocess
+        e = row("id:fid-a", archived=False, board="fid-a", far=True, lost=True)
+        for rc in (0,1):
+            result = subprocess.CompletedProcess([],rc,'{"status":"succeeded"}' if rc==0 else '', 'save refused' if rc else '')
+            with patch.object(v,"ui_lang",return_value="zh"), patch.object(v,"say",side_effect=lambda key,*args:key), \
+                    patch.object(v.subprocess,"run",return_value=result) as run, patch.object(v,"act_env",return_value={}), patch.object(v,"hub_reread") as refresh:
+                got = v.act_run(qo,"view","fleet",v.ACTION["archive"],e,"",wait=False)
+                self.assertEqual(got[0],rc)
+                run.assert_called_once()
+                self.assertEqual(refresh.called,rc==0)
+
+    def test_cli_archives_are_explicit_and_use_stable_identity(self):
+        board = {"rows": [{"id":"fid-a", "code":"AB12", "title":"Old archive", "group":"gone", "archived":True, "state":"exited"}]}
+        with patch.object(v, "board_read", return_value=board):
+            rs = cli.pending_rows([])
+        self.assertEqual(rs[0]["state"], "exited")
+        self.assertTrue(rs[0]["archived"])
+        with patch.object(cli, "rows", return_value=rs), patch.object(cli, "attach_bus", side_effect=lambda x:x), patch.object(cli,"hub_freshen"):
+            for args, want in ((["--json"],0),(["--all","--json"],0),(["--archived","--json"],1)):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(cli.cmd_ls(args), 0)
+                self.assertEqual(len(json.loads(out.getvalue())), want)
+            with patch.object(cli, "hub_write", return_value=(True,"ok")) as write, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.cmd_archive(["AB12"], False), 0)
+                write.assert_called_once_with("session_archive", {"id":"fid-a", "archived":False})
+            with patch.object(cli, "hub_write", return_value=(False,"offline")), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.cmd_archive(["AB12"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
