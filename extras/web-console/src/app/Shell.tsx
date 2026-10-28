@@ -159,7 +159,7 @@ const Side: FC = () => (
       </span>
     </SidebarHeader>
     <SidebarContent>
-      <div className="flex justify-end px-2 group-data-[collapsible=icon]:hidden"><NewButton /><NewScheduleButton /></div>
+      <div className="flex gap-2 px-2 group-data-[collapsible=icon]:hidden"><NewButton label className="flex-1" /><NewScheduleButton /></div>
       <ScheduleGroup />
       <SidebarGroup className="px-1.5">
         <SidebarGroupContent><SessionRows variant="side" chatHome /></SidebarGroupContent>

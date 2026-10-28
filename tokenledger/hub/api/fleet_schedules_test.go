@@ -115,9 +115,19 @@ func TestScheduleAgentCreateUpdateAndDefault(t *testing.T) {
 			t.Fatalf("%d: %s", w.Code, w.Body.String())
 		}
 		var response struct {
+			Action   string         `json:"action"`
 			Schedule store.Schedule `json:"schedule"`
 		}
 		_ = json.Unmarshal(w.Body.Bytes(), &response)
+		if status == 200 {
+			var input struct {
+				Action string `json:"action"`
+			}
+			_ = json.Unmarshal([]byte(body), &input)
+			if response.Action != input.Action {
+				t.Fatalf("receipt action = %q, want %q", response.Action, input.Action)
+			}
+		}
 		return response.Schedule
 	}
 	row := request(`{"action":"create","idempotency_key":"agent-create","name":"Brief","prompt":"Summarize","at":"07:00","agent":"claude"}`, 200)

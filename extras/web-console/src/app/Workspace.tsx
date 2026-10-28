@@ -143,7 +143,7 @@ export function Workspace({ r }: { r: Row }) {
             {canOpen ? <DropdownMenuItem onSelect={() => void copyOpen(open)} data-testid="ws-copy-open">
               <TerminalSquare />{tr(`在终端里打开 · 复制 ${open}`, `Open in terminal · copy ${open}`)}
             </DropdownMenuItem> : null}
-            <DropdownMenuItem disabled={readOnly || scheduling || !head.firstPrompt} onSelect={() => void makeSchedule()}>⏰ {scheduling ? tr("读取首条消息…", "Reading first message…") : tr("设为定时任务", "Create schedule")}</DropdownMenuItem>
+            <DropdownMenuItem className="bg-clay/10 text-clay" disabled={readOnly || scheduling || !head.firstPrompt} onSelect={() => void makeSchedule()}>⏰ {scheduling ? tr("读取首条消息…", "Reading first message…") : tr("设为定时任务", "Create schedule")}</DropdownMenuItem>
             {r.board?.schedule_id && <DropdownMenuItem onSelect={() => go(schedulePath(r.board!.schedule_id!))}>⏰ {tr("查看定时任务", "View schedule")}</DropdownMenuItem>}
             <DropdownMenuItem onSelect={() => setDetails(true)}><Info />{tr("详情", "Details")}</DropdownMenuItem>
           </DropdownMenuContent>

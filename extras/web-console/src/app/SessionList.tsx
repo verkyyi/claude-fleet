@@ -20,7 +20,7 @@ import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
 
-const Spin: FC<{ className?: string }> = ({ className }) => <Loader className={cn("animate-spin motion-reduce:animate-none [animation-duration:2.4s]", className)} />;
+const Spin: FC<{ className?: string; label?: boolean }> = ({ className, label }) => <Loader className={cn("animate-spin motion-reduce:animate-none [animation-duration:2.4s]", className)} />;
 export const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
   ask: CircleAlert, fail: CircleX, work: Spin, pr: GitPullRequest, done: CircleCheck, idle: CircleDot, wait: Clock,
 };
@@ -53,7 +53,7 @@ export const ListUiProvider: FC<{ children: ReactNode }> = ({ children }) => {
   );
 };
 
-export const SearchButton: FC<{ className?: string }> = ({ className }) => {
+export const SearchButton: FC<{ className?: string; label?: boolean }> = ({ className, label }) => {
   const { searching, setSearching } = useListUi();
   return (
     <Button variant="ghost" size="icon" className={cn("size-8", searching && "text-clay", className)} aria-pressed={searching}
@@ -65,27 +65,19 @@ export const SearchButton: FC<{ className?: string }> = ({ className }) => {
 
 // 新建 opens the new-session screen (GR5E C3)
 export const NEW_PATH = "/new";
-export const NewButton: FC<{ className?: string }> = ({ className }) => {
+export const NewButton: FC<{ className?: string; label?: boolean }> = ({ className, label }) => {
   const go = useNavigate();
   const { pathname } = useLocation();
   return (
-    <Button variant="ghost" size="icon" className={cn("size-8", pathname === NEW_PATH && "text-clay", className)} disabled={!!viewAs}
+    <Button variant={label ? "default" : "ghost"} size={label ? "sm" : "icon"} className={cn(!label && "size-8", pathname === NEW_PATH && "text-clay", className)} disabled={!!viewAs}
       aria-label={tr("新会话", "New session")} title={tr("新会话", "New session")} onClick={() => go(NEW_PATH)}>
-      <Plus />
+      <Plus />{label && tr("新建会话", "New session")}
     </Button>
   );
 };
 
-// The phone's 新建, at the bottom right above the home bar.
-export const NewFab: FC = () => {
-  const go = useNavigate();
-  return (
-    <Button size="lg" disabled={!!viewAs} onClick={() => go(NEW_PATH)}
-      className="fixed end-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-20 h-12 rounded-full px-5 text-base shadow-lg">
-      <Plus />{tr("新会话", "New session")}
-    </Button>
-  );
-};
+// Both creation paths stay within reach above the phone's home bar.
+export const NewFab: FC = () => <div className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-center gap-2 border-t bg-background p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"><NewButton label className="flex-1" /><NewScheduleButton /></div>;
 
 const SearchBox: FC = () => {
   const { searching, setSearching, q, setQ } = useListUi();
@@ -166,7 +158,7 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
       className={cn(rowCls, listStatus(r).unknown && "opacity-60", variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
       <RowGlyph r={r} />
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal")}>
-        <span className="min-w-0 truncate">{r.board?.schedule_id && <span aria-label={tr("定时运行", "Scheduled run")}>⏰ </span>}{it.title}</span>
+        <span className="min-w-0 truncate">{r.board?.schedule_id && <span className="mr-1 rounded bg-clay/10 px-0.5" aria-label={tr("定时运行", "Scheduled run")}>⏰</span>}{it.title}</span>
       </span>
     </Link>
   );
@@ -320,7 +312,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
 // The phone's first screen: the list, and 新建 at the bottom right.
 export const SessionListPage: FC = () => (
   <div className="pb-[calc(env(safe-area-inset-bottom)+5rem)]">
-    <ScheduleGroup phone /><div className="flex justify-end px-2"><NewScheduleButton /></div>
+    <ScheduleGroup phone />
     <SessionRows variant="page" />
     <NewFab />
   </div>

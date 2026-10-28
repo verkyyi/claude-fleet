@@ -1773,6 +1773,12 @@ def tool_result(name, data, error=False):
     if error:
         return {"content": [{"type": "text", "text": data}], "isError": True}
     text = status_text(data) if name == "status" else ask_text(data) if name == "ask" else report(data)
+    # A complete short create receipt survives the conversation viewer's 160
+    # character tool preview. The full result remains available to the agent.
+    if name == "schedule" and isinstance(data, dict) and data.get("action") == "create":
+        sid = data.get("schedule", {}).get("spec", {}).get("id")
+        if isinstance(sid, str) and re.fullmatch(r"schedule-[a-zA-Z0-9-]+", sid):
+            text = json.dumps({"action": "create", "schedule_id": sid}, separators=(",", ":")) + "\n" + text
     return {"content": [{"type": "text", "text": text}], "structuredContent": data}
 
 

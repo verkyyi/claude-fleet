@@ -1,14 +1,14 @@
 import { ScheduleReader } from "./schedule-feed";
 // One owner-scoped feed shared by the sidebar, main panel and result notice.
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { useMe } from "@/shared/api";
 import { lang, tr } from "@/shared/i18n";
 import { Button } from "@/components/ui/button";
 
 export type Spec = { id: string; revision: number; name: string; prompt: string; agent?: "" | "claude" | "codex"; at?: string; cron?: string; timezone: string; enabled: boolean; deleted: boolean; delivery: { wechat: boolean; livepage: boolean }; repo?: string };
 export type ScheduleRow = { spec: Spec; sync_state: string; sync_note: string; observed: { status?: string; last_run?: number; next_run?: number; last_result?: string; last_line?: string; last_error?: string; stale?: boolean } };
-export type Run = { id: string; schedule_id: string; state: string; started: number; ended: number; summary: string; error: string; delivery: { wechat?: string; wechat_channel?: string; livepage?: string; url?: string }; session_id: string };
+export type Run = { attempt: number; id: string; schedule_id: string; state: string; started: number; ended: number; summary: string; error: string; delivery: { wechat?: string; wechat_channel?: string; livepage?: string; url?: string }; session_id: string };
 type Feed = { expired: boolean; read: <T>(url: string, init?: RequestInit) => Promise<T | null>; rows: ScheduleRow[] | null; unread: Run[]; error: string; refresh: () => Promise<void> };
 const Context = createContext<Feed>({ expired: false, read: async () => null, rows: null, unread: [], error: "", refresh: async () => {} });
 export const useSchedules = () => useContext(Context);
@@ -49,22 +49,27 @@ export function SchedulesProvider({ children }: { children: ReactNode }) {
 export function NewScheduleButton() {
   const { me } = useMe();
   const { expired } = useSchedules();
-  return <Button asChild variant="ghost" size="sm" disabled={expired || !me || !!(me.read_only || me.view_as)}><Link to={schedulePath("new")} aria-disabled={expired || !me || !!(me.read_only || me.view_as)} onClick={e => { if (expired || !me || me.read_only || me.view_as) e.preventDefault(); }}>⏰ {tr("新建定时", "Schedule")}</Link></Button>;
+  return <Button asChild variant="outline" size="sm" className="border-clay/30 bg-clay/10 text-clay hover:bg-clay/15" disabled={expired || !me || !!(me.read_only || me.view_as)}><Link to={schedulePath("new")} aria-disabled={expired || !me || !!(me.read_only || me.view_as)} onClick={e => { if (expired || !me || me.read_only || me.view_as) e.preventDefault(); }}>⏰ {tr("新建定时", "Schedule")}</Link></Button>;
 }
 export function ScheduleGroup({ phone = false }: { phone?: boolean }) {
   const { rows, error, expired } = useSchedules();
   const [open, setOpen] = useState(true);
+  const selected = new URLSearchParams(useLocation().search).get("schedule");
   if (!rows?.length) return error ? <p role="status" className="p-3 text-xs text-muted-foreground">{error}{expired && <a href="/app/signin" className="ml-2 underline">{tr("重新登录", "Sign in again")}</a>}</p> : null;
   const running = rows.filter(r => r.observed.status === "running").length;
   const failed = rows.filter(r => r.observed.status === "failed" || r.observed.last_result === "failed").length;
-  if (phone) return <div className="border-b px-4 py-3"><Link to="/?schedules=1" className="block text-sm no-underline">⏰ {tr("定时任务", "Schedules")} {rows.length}{running > 0 && ` · ${running} ${tr("个运行中", "running")}`}{failed > 0 && <span className="ml-2 text-destructive">{failed} {tr("个失败", "failed")}</span>}</Link></div>;
-  return <section aria-label={tr("定时任务", "Schedules")} className="border-b pb-2 group-data-[collapsible=icon]:hidden">
-    {failed > 0 && <Link role="status" to={schedulePath(rows.find(r => r.observed.status === "failed" || r.observed.last_result === "failed")!.spec.id)} className="block px-3 py-2 text-xs text-destructive">✗ {failed} {tr("个定时任务失败，查看结果", "schedules failed · view results")}</Link>}
-    <button aria-expanded={open} className="w-full px-3 py-2 text-left text-sm font-medium" onClick={() => setOpen(!open)}>⏰ {tr("定时任务", "Schedules")} ({rows.length}) <span className="float-right">{open ? "⌄" : "›"}</span></button>
-    {open && rows.map(r => <Link key={r.spec.id} to={schedulePath(r.spec.id)} className="mx-1 block rounded-lg px-3 py-2 text-xs no-underline hover:bg-muted">
-      <div className="flex items-baseline justify-between gap-2"><span className="truncate font-medium">{r.spec.name}</span><span className={scheduleStatus(r).startsWith("✗") ? "shrink-0 text-destructive" : "shrink-0 text-muted-foreground"}>{scheduleStatus(r)}</span></div>
-      <div className="mt-1 truncate text-muted-foreground">{recurrence(r.spec)} · {tr("下次", "Next")} {scheduleDate(r.spec.enabled ? r.observed.next_run : undefined, r.spec.timezone)} · {scheduleAgent(r.spec)}</div>
+  if (phone) return <div className="px-3 py-2"><Link to="/?schedules=1" className="flex items-center rounded-xl border border-clay/30 bg-clay/10 p-3 text-sm no-underline">⏰ {tr("定时任务", "Schedules")} {rows.length}{running > 0 && ` · ${running} ${tr("个运行中", "running")}`}{failed > 0 && <span className="ml-2 text-destructive">{failed} {tr("个失败", "failed")}</span>}<span className="ml-auto pl-2">›</span></Link></div>;
+  return <section aria-label={tr("定时任务", "Schedules")} className="mx-2 mb-2 rounded-xl border border-clay/30 bg-clay/10 pb-1 group-data-[collapsible=icon]:hidden">
+    {failed > 0 && <Link role="status" to={schedulePath(rows.find(r => r.observed.status === "failed" || r.observed.last_result === "failed")!.spec.id)} className="m-1 block rounded-lg border border-destructive/20 bg-destructive/5 px-2 py-2 text-xs text-destructive">✗ {failed} {tr("个定时任务失败，查看结果", "schedules failed · view results")}</Link>}
+    <button aria-expanded={open} className="w-full px-3 py-2 text-left text-sm font-medium text-clay" onClick={() => setOpen(!open)}>⏰ {tr("定时任务", "Schedules")} ({rows.length}) <span className="float-right">{open ? "⌄" : "›"}</span></button>
+    {open && rows.map(r => <Link key={r.spec.id} to={schedulePath(r.spec.id)} aria-current={selected === r.spec.id ? "page" : undefined} className={`mx-1 block rounded-lg border px-2 py-2 text-xs no-underline hover:bg-card/80 ${selected === r.spec.id ? "border-border bg-card" : "border-transparent"}`}>
+      <div className="flex items-baseline justify-between gap-2"><span className="truncate font-medium">{r.spec.name}</span><span className={scheduleStatus(r).startsWith("✗") ? "shrink-0 text-destructive" : r.observed.status === "running" ? "shrink-0 text-blue-600" : "shrink-0 text-muted-foreground"}>{scheduleStatus(r)}</span></div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-1 gap-y-1 text-muted-foreground"><span>{recurrence(r.spec)} · {tr("下次", "Next")} {scheduleDate(r.spec.enabled ? r.observed.next_run : undefined, r.spec.timezone)}</span><AgentChip spec={r.spec} /></div>
     </Link>)}
     {error && <p role="status" className="px-3 text-xs text-muted-foreground">{error}</p>}
   </section>;
+}
+
+export function AgentChip({ spec }: { spec: Spec }) {
+  return <span className="inline-block rounded border bg-card px-1 py-px text-[10px] leading-tight text-foreground">{scheduleAgent(spec)}</span>;
 }

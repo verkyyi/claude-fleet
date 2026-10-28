@@ -315,7 +315,7 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 		s.installSchedule(r.Context(), row)
 		row, _ = s.Store.Schedule(owner, row.Spec.ID)
 	}
-	writeJSON(w, 200, map[string]any{"schedule": s.scheduleView(row)})
+	writeJSON(w, 200, map[string]any{"action": in.Action, "schedule": s.scheduleView(row)})
 }
 func (s *Server) scheduleView(row store.Schedule) any {
 	// Use the existing heartbeat as the live read, with an explicit observed time.

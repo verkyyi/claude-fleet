@@ -24,6 +24,18 @@ class ScheduleTests(unittest.TestCase):
         self.doc = {'id':'schedule-abc', 'revision':1, 'name':'Daily brief', 'prompt':'Summarize my notes',
                     'at':'07:00', 'timezone':'Asia/Shanghai', 'enabled':True, 'deleted':False,
                     'delivery':{'wechat':False,'livepage':False}}
+    def test_create_receipt_survives_native_preview(self):
+        import json
+        mcp = module('fleet-mcp')
+        data = {'action': 'create', 'schedule': {'spec': dict(self.doc, prompt='x' * 16000)}}
+        response = mcp.tool_result('schedule', data)
+        preview = response['content'][0]['text'][:160]
+        self.assertEqual(json.loads(preview.split('\n')[0]), {'action':'create', 'schedule_id':self.doc['id']})
+        self.assertEqual(response['structuredContent'], data)
+        for action in ('update', 'pause', 'list'):
+            other = mcp.tool_result('schedule', dict(data, action=action))
+            self.assertNotIn('schedule_id', json.loads(other['content'][0]['text']))
+
     def test_registration_replay_conflict_and_other_login(self):
         self.schedule.apply(self.sup,self.paths,'alice',self.doc)
         self.schedule.apply(self.sup,self.paths,'alice',self.doc)
