@@ -554,7 +554,12 @@ spec = importlib.util.spec_from_file_location('m', '$WORK/bin/fleet-mcp.py'); m 
 spec.loader.exec_module(m)
 print(m.cred_sign(json.loads(sys.argv[1]), m.cred_key(create=True)))" "$claims")
 call 80 spawn '{"issue":5}' | CRED=$FORGED gsrv "$G/r"; refused "a forged credential (another login's key)" "signature"
-call 80 spawn '{"issue":5}' | CRED="${CRED%??}xx" gsrv "$G/r"; refused "a tampered signature" "signature"
+# Alter a signed byte, not Base64 padding bits (xw -> xx decodes identically).
+TAMPERED=$(py 'head, sig = sys.argv[1].rsplit(".", 1)
+raw = m.b64d(sig); changed = bytes([raw[0] ^ 1]) + raw[1:]
+assert changed != raw
+print(head + "." + m.b64e(changed))' "$CRED")
+call 80 spawn '{"issue":5}' | CRED="$TAMPERED" gsrv "$G/r"; refused "a tampered signature" "signature"
 call 80 spawn '{"issue":5}' | PANE_FID=dddddddd-0000-4000-8000-000000000000 gsrv "$G/r"
 refused "another session's pane (a spawn as someone else's parent)" "is not the credential's session"
 call 80 spawn '{"issue":5}' | GTMUX=/tmp/tmux-501/other,1,0 gsrv "$G/r"; refused "another fleet" "credential is for fleet tf"
