@@ -1,3 +1,5 @@
+import { getJSON } from "@/shared/api";
+
 // A task address opens its conversation; the separate Shell route remains native shell access.
 import { lazy, useEffect, useState } from "react";
 import { Link, useParams } from "react-router";
@@ -15,6 +17,7 @@ import { SHELL_REF } from "../legacy";
 
 const TerminalPage = lazy(() => import("./terminal"));
 // a session's identity (<fleet>/<id>) is a worker its terminal opens as it is
+const isFID = (ref: string) => /^fid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref);
 const isWorker = (ref: string) => ref.includes("/");
 const fresh = (worker: string): Row => ({ id: worker, code: "", title: tr("新会话", "New session"), group: "work", tag: ["回答中", "Replying"],
   glyph: "work", tone: "ok", line: "", quote: false, kids: [], at: Date.now(), origin: "web",
@@ -29,16 +32,25 @@ export default function SessionPage() {
 function OneSession({ ref_: ref }: { ref_: string }) {
   const { rows, markSeen, setOpenRow } = useWorkRows();
   const [found, setFound] = useState<Row | null | undefined>(undefined);
-  const inList = rows ? findRow(rows, ref) : undefined;
+  const lookup = isFID(ref) ? ref.slice(4) : ref;
+  const inList = rows ? findRow(rows, lookup) : undefined;
   const r = inList || found || undefined;
   usePage(r?.title || tr("会话", "Session"));
 
   useEffect(() => {
-    if (!rows || findRow(rows, ref)) return;
+    if (!rows || findRow(rows, lookup)) return;
     let on = true;
+    if (isFID(ref)) {
+      const history: Row = { ...fresh(ref), title: tr("会话", "Session"), glyph: "idle", tag: ["会话", "Session"], origin: "terminal", group: "gone", board: { ...fresh(ref).board!, group: "gone", tag: "unknown", state: "unknown", history: { id: ref.slice(4), status: "unknown", resume_id: "" } } };
+      setFound(history);
+      void getJSON<{run: {id: string; schedule_id: string; title: string}}>(`/v1/schedules?session_id=${encodeURIComponent(ref.slice(4))}`).then(data => {
+        if (on && data) setFound({ ...history, title: data.run.title || history.title, board: { ...history.board!, schedule_id: data.run.schedule_id, run_id: data.run.id } });
+      });
+      return () => { on = false; };
+    }
     findTask(ref).then((f) => { if (on) setFound(f.kind === "one" ? rowOf(f.task, undefined, undefined, writtenCode(f.task)) : null); });
     return () => { on = false; };
-  }, [rows, ref]);
+  }, [rows, ref, lookup]);
   // opened is seen: the row reads plain again in the list
   const mark = inList ? `${inList.id}\t${inList.tag[1]}\t${inList.at}` : "";
   useEffect(() => { if (inList) markSeen(inList); }, [mark]); // eslint-disable-line react-hooks/exhaustive-deps

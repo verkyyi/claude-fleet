@@ -123,3 +123,43 @@ func TestScheduleIdempotencyAndDailyBudget(t *testing.T) {
 		t.Fatal("daily cap", e)
 	}
 }
+
+func TestScheduleSessionBindingAndSnapshot(t *testing.T) {
+	s := newStore(t)
+	now := time.Now()
+	row, err := s.SaveSchedule("alice", "create", "create", scheduleFixture("schedule-test"), 0, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.ScheduleSynced(row, "synced", "", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	run, err := s.AdmitSchedule("alice", "node-a", row.Spec.ID, "slot1", 1, 1, false, now)
+	// Python uuid.uuid5(uuid.NAMESPACE_URL, 'schedule-test:slot1:1').
+	if err != nil || run.SessionID != "78193701-6fac-5c18-bc40-62be38235c5b" {
+		t.Fatalf("admission identity: %+v %v", run, err)
+	}
+	again, err := s.AdmitSchedule("alice", "node-a", row.Spec.ID, "slot1", 1, 1, false, now.Add(time.Minute))
+	if err != nil || again.SessionID != run.SessionID {
+		t.Fatal("replay changed identity", err)
+	}
+	other, err := s.ScheduleSessions("bob")
+	if err != nil || len(other) != 0 {
+		t.Fatal("cross-owner provenance", other, err)
+	}
+	finished, err := s.FinishSchedule("alice", "node-a", run.ID, "succeeded", "answer", "", "arbitrary-other-session", now)
+	if err != nil || finished.SessionID != run.SessionID {
+		t.Fatal("finish rebound admitted session", finished, err)
+	}
+	row.Spec.Name = "Renamed"
+	row.Spec.Revision++
+	row.Spec.Deleted = true
+	row.Spec.Enabled = false
+	if _, err = s.SaveSchedule("alice", "delete", "delete", row, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	own, err := s.ScheduleSessions("alice")
+	if err != nil || own[run.SessionID].ID != run.ID || own[run.SessionID].Title != "Daily "+now.In(time.FixedZone("Shanghai", 8*3600)).Format("2006-01-02") {
+		t.Fatal("rename/delete changed historical source", own, err)
+	}
+}

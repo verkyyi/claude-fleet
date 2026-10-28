@@ -31,12 +31,14 @@ import { LEGACY, legacyTarget } from "./legacy";
 // computer (the left column already is the list). Read before the first paint,
 // so a phone never flashes the conversation.
 const PHONE = "(max-width: 767px)";
+const SchedulePanel = lazy(() => import("./pages/schedules").then(m => ({ default: m.SchedulePanel })));
 const NewSession = lazy(() => import("./NewSession"));
 function Home() {
   const { search } = useLocation();
   const unified = useUnified();
   const [phone, setPhone] = useState(() => matchMedia(PHONE).matches);
   useEffect(() => { const m = matchMedia(PHONE); const f = () => setPhone(m.matches); m.addEventListener("change", f); return () => m.removeEventListener("change", f); }, []);
+  if (new URLSearchParams(search).has("schedule") || new URLSearchParams(search).has("schedules")) return <SchedulePanel />;
   // the old first screen was the conversation: only a link into it (?about=) opens it now
   if (phone && !new URLSearchParams(search).has("about")) return <SessionListPage />;
   // 会话合一 (Y01K): a chat is a session; a computer's front page is a new one

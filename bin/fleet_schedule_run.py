@@ -168,6 +168,9 @@ def run():
                 rec.update(spawned=True,wid=wid)
                 rec['fid']=rec.get('fid') or tmux(session,'display-message','-p','-t',wid,'#{@fleet_id}')
             atomic(local,rec)
+        if wid:
+            tmux(session,'set-option','-w','-t',wid,'@schedule_id',doc['id'])
+            tmux(session,'set-option','-w','-t',wid,'@schedule_run_id',ans['id'])
         started=rec.get('started',ans['started']);last=rec.get('native',{});summary='';why=''
         while time.time()-started<3600:
             if not wid:wid=attempt_window(session,name,rec)
@@ -192,7 +195,7 @@ def run():
                 p=subprocess.run([str(BIN/'fleet-worker-stop.sh'),session,'fid:'+fid],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=90)
                 if p.returncode not in (0,5):raise ValueError('could not stop the timed-out session; admission remains held')
         result={'run_id':ans['id'],'state':'succeeded' if summary else 'failed','summary':summary[:32000],
-                'error':why or ('' if summary else 'no final answer'),'session_id':last.get('fid','')}
+                'error':why or ('' if summary else 'no final answer'),'session_id':rec.get('fid','')}
         rec['result']=result;atomic(local,rec)
         http('finish',result)
         print('schedule: '+result['state']+' — '+(summary.splitlines()[-1][:160] if summary else result['error']))

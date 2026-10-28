@@ -1,3 +1,4 @@
+import { firstUserMessage } from "./first-message";
 import { retryDelay } from "@/shared/terminal-retry";
 // view.ts — 只读 (task F481, EPIC GR5E C5): a session running in a terminal,
 // its conversation followed from the web. GET /v1/chat/view?worker=<id> is the
@@ -318,6 +319,18 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     setLead((x) => x + n); setItems(m.items as Item[]); setOlder(m.held.older);
   }, [worker]);
 
+  const firstPrompt = useCallback(async () => {
+    const snapshot = held.current;
+    const signal = AbortSignal.timeout(20000);
+    const prompt = await firstUserMessage(snapshot, shown.current, async before => {
+      const r = await fetch(`${API}?worker=${encodeURIComponent(worker)}&before=${before}`, { cache: "no-store", signal });
+      if (!r.ok) throw new Error("history unavailable");
+      return r.json();
+    });
+    if (held.current.session !== snapshot.session) throw new Error("history changed");
+    return prompt;
+  }, [worker]);
+
   // a message's id is its item's place counted from the first answer's first
   // item, so a page drawn above keeps every row (and the scroll) where it was
   const messages = useMemo<Msg[]>(() => {
@@ -349,6 +362,6 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
   // 新会话's clock (task PNWW): this page drawn, then the reply's first words from the session's machine
   useEffect(() => { if (worker) clockShown(worker); }, [worker]);
   useEffect(() => { if (worker && replied(items)) sendClock(clockReplied(worker)); }, [worker, layer, items]);
-  return { runtime, state, gate, loaded, live, read, count: items.length, layer, canTalk, access, failed, retry, dismiss, note,
+  return { firstPrompt, runtime, state, gate, loaded, live, read, count: items.length, layer, canTalk, access, failed, retry, dismiss, note,
     busy: !!state?.busy || (canTalk && sending) };
 }

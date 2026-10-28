@@ -327,3 +327,54 @@ func TestSchedulePageDeliveryReceiptNeverPublishesTwice(t *testing.T) {
 		})
 	}
 }
+
+func TestScheduleConversationProvenance(t *testing.T) {
+	h := newFleetHarness(t)
+	st := h.srv.Store
+	now := time.Now()
+	fixture := store.Schedule{Endpoint: "node-a", Spec: schedule.Spec{ID: "schedule-history", Revision: 1, Name: "Group brief", Prompt: "Summary", At: "07:00", Timezone: "Asia/Shanghai", Enabled: true}}
+	row, err := st.SaveSchedule("alice", "create", "create", fixture, 0, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = st.ScheduleSynced(row, "synced", "", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.AdmitSchedule("alice", "node-a", row.Spec.ID, "slot", 1, 1, false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := []FleetSession{{Worker: map[string]any{"identity": run.SessionID, "state": "working", "title": "schedule-internal"}, Availability: "online"}}
+	board, err := h.srv.buildBoard("alice", live, now)
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if err != nil || len(board.Rows) != 1 || board.Rows[0].ScheduleID != row.Spec.ID || board.Rows[0].RunID != run.ID || board.Rows[0].Title != "Group brief "+now.In(loc).Format("2006-01-02") {
+		t.Fatalf("running source: %+v %v", board, err)
+	}
+	for _, owner := range []string{"alice", "bob"} {
+		w := httptest.NewRecorder()
+		h.srv.scheduleRequest(w, httptest.NewRequest("GET", SchedulesPath+"?session_id="+run.SessionID, nil), owner, nil)
+		want := 200
+		if owner == "bob" {
+			want = 404
+		}
+		if w.Code != want {
+			t.Fatalf("%s lookup: %d %s", owner, w.Code, w.Body.String())
+		}
+	}
+	w := httptest.NewRecorder()
+	h.srv.scheduleRequest(w, httptest.NewRequest("GET", SchedulesPath+"?session_id="+run.SessionID, nil), "alice", &store.Endpoint{ID: "node-b"})
+	if w.Code != 404 {
+		t.Fatal("another login read provenance", w.Code)
+	}
+	if _, err = st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "alice", EndpointID: "node-a", Machine: "mac-a", Login: "alice", ID: run.SessionID, Events: []map[string]any{
+		{"ev": "opened", "seq": float64(1), "ts": float64(now.Unix()), "title": "internal"},
+		{"ev": "named", "seq": float64(2), "ts": float64(now.Unix()), "title": "My chosen title", "source": "manual"},
+		{"ev": "closed", "seq": float64(3), "ts": float64(now.Unix()), "reason": "reaped"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	board, err = h.srv.buildBoard("alice", nil, now)
+	if err != nil || len(board.Rows) != 1 || board.Rows[0].Title != "My chosen title" || board.Rows[0].RunID != run.ID {
+		t.Fatalf("closed/manual source: %+v %v", board, err)
+	}
+}

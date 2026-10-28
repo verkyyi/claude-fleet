@@ -1,3 +1,4 @@
+import { SchedulesProvider, ScheduleGroup, NewScheduleButton, useSchedules, schedulePath } from "./schedules";
 // Shell.tsx — the member side's frame (EPIC #3923 C3): on a phone (< 768) a
 // top bar (the mark, what is left of the person's limit, on the list its search,
 // the avatar into 我的); on a computer shadcn's Sidebar — the session list
@@ -14,7 +15,7 @@
 // (shadcn's collapsible="icon"), the choice kept in this browser.
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type FC, type ReactNode, type Ref } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { ArrowLeft, ChevronsUpDown, CircleUserRound, Layers, Eye, LogOut, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ChevronsUpDown, CircleUserRound, Eye, LogOut, ShieldCheck } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,7 +31,7 @@ import { Logo } from "@/shared/Logo";
 import { Wordmark } from "@/shared/Wordmark";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
-import { getJSON, isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
+import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
 import { LegacyMigrationNotice } from "./chat/legacy";
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { backStep, phoneBar } from "./phone-screen";
@@ -124,7 +125,6 @@ const PersonMenu: FC = () => {
             {ME_TABS.filter((t) => t.id !== "account").map((t) => (
               <DropdownMenuItem key={t.id} onSelect={() => go(t.path)}><t.icon />{t.label}</DropdownMenuItem>
             ))}
-            <DropdownMenuItem onSelect={() => go("/schedules")}><Layers />{tr("定时任务", "Schedules")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => location.assign("/status")}><ShieldCheck />{tr("服务健康", "Service health")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => go(meTab("account").path)}><CircleUserRound />{tr("我的", "Me")}</DropdownMenuItem>
             {isAdmin(me) ? (
@@ -156,10 +156,11 @@ const Side: FC = () => (
       <span className="ms-auto flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">
         <QuotaPillOf />
         <SearchButton />
-        <NewButton />
       </span>
     </SidebarHeader>
     <SidebarContent>
+      <div className="flex justify-end px-2 group-data-[collapsible=icon]:hidden"><NewButton /><NewScheduleButton /></div>
+      <ScheduleGroup />
       <SidebarGroup className="px-1.5">
         <SidebarGroupContent><SessionRows variant="side" chatHome /></SidebarGroupContent>
       </SidebarGroup>
@@ -263,16 +264,10 @@ function useSideOpen(): [boolean, (o: boolean) => void] {
 
 // One persistent in-app result notice, also available without external delivery.
 const ScheduleNotice: FC = () => {
-  const { pathname } = useLocation();
-  const [unread, setUnread] = useState<{ schedule_id: string; summary: string; error: string }[]>([]);
-  useEffect(() => {
-    let live = true;
-    const read = async () => { if (document.hidden) return; const r = await getJSON<{ unread: typeof unread }>("/v1/schedules"); if (live && r) setUnread(r.unread ?? []); };
-    void read(); const timer = setInterval(() => void read(), 30000);
-    return () => { live = false; clearInterval(timer); };
-  }, [pathname]);
-  if (!unread.length || pathname === "/schedules") return null;
-  return <Link role="status" to={`/schedules?id=${encodeURIComponent(unread[0].schedule_id)}`} className="border-b bg-muted px-4 py-2 text-sm no-underline">
+  const { search } = useLocation();
+  const { unread } = useSchedules();
+  if (!unread.length || new URLSearchParams(search).has("schedule")) return null;
+  return <Link role="status" to={schedulePath(unread[0].schedule_id)} className="border-b bg-muted px-4 py-2 text-sm no-underline">
     <span className="font-medium">{tr("定时任务有新结果", "New schedule results")} ({unread.length})</span>
     <span className="ml-2 line-clamp-2 break-words">{(unread[0].summary || unread[0].error).slice(0, 160)}</span>
   </Link>;
@@ -289,6 +284,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
     <Ctx.Provider value={{ me, quota, trial, setTrial, bumpQuota }}>
      <TitleCtx.Provider value={setTitle}>
      <WorkRowsProvider>
+     <SchedulesProvider>
      <ListUiProvider>
       <ReplyToast />
       <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none"
@@ -305,6 +301,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
         </div>
       </SidebarProvider>
      </ListUiProvider>
+     </SchedulesProvider>
      </WorkRowsProvider>
       <Toaster position="top-center" />
      </TitleCtx.Provider>

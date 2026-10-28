@@ -1,3 +1,4 @@
+import { schedulePath } from "./schedules";
 // A task opens its web conversation. Native interactions continue in iTerm2.
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
@@ -40,15 +41,28 @@ export function Workspace({ r }: { r: Row }) {
   const [cancelError, setCancelError] = useState("");
   const [stopping, setStopping] = useState(false);
   const [continuing, setContinuing] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const [details, setDetails] = useState(false);
   const [head, setHead] = useState<Head>({ sync: "" });
-  const onHead = useCallback((h: Head) => setHead((o) => (o.sync === h.sync && o.busy === h.busy ? o : h)), []);
+  const onHead = useCallback((h: Head) => setHead((o) => (o.sync === h.sync && o.busy === h.busy && o.firstPrompt === h.firstPrompt && o.agent === h.agent ? o : h)), []);
   const back = useBack();
   const agent = rowAgent(r);
   const open = openLine(r);
   const canOpen = !!(r.live || r.board?.worker_id) && r.group !== "gone";
   const canContinue = canContinueRow(r);
   const readOnly = !me || !!me.read_only || !!me.view_as || !!viewAs;
+
+  const makeSchedule = async () => {
+    if (readOnly || scheduling || !head.firstPrompt) return;
+    setScheduling(true);
+    try {
+      const prompt = await head.firstPrompt();
+      const engine = head.agent || r.board?.agent || r.task?.actual_agent || "";
+      go(schedulePath("new"), { state: { prompt, name: r.title.slice(0, 120), repo: r.board?.repo || r.live?.repo || r.task?.repo || "", agent: engine === "codex" || engine === "claude" ? engine : "" } });
+    } catch {
+      toast.error(tr("无法确认首条消息，请重试或从「新建定时」填写任务内容。", "Could not read the first message. Retry or enter your prompt in New schedule."));
+    } finally { setScheduling(false); }
+  };
 
   const continueTask = async (nextAgent?: ContinueAgent) => {
     if (!canContinue || continuing || readOnly) return;
@@ -129,6 +143,8 @@ export function Workspace({ r }: { r: Row }) {
             {canOpen ? <DropdownMenuItem onSelect={() => void copyOpen(open)} data-testid="ws-copy-open">
               <TerminalSquare />{tr(`在终端里打开 · 复制 ${open}`, `Open in terminal · copy ${open}`)}
             </DropdownMenuItem> : null}
+            <DropdownMenuItem disabled={readOnly || scheduling || !head.firstPrompt} onSelect={() => void makeSchedule()}>⏰ {scheduling ? tr("读取首条消息…", "Reading first message…") : tr("设为定时任务", "Create schedule")}</DropdownMenuItem>
+            {r.board?.schedule_id && <DropdownMenuItem onSelect={() => go(schedulePath(r.board!.schedule_id!))}>⏰ {tr("查看定时任务", "View schedule")}</DropdownMenuItem>}
             <DropdownMenuItem onSelect={() => setDetails(true)}><Info />{tr("详情", "Details")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
