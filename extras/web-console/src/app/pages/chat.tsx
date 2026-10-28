@@ -1,5 +1,5 @@
-import { scheduleReceipt } from "@/shared/schedule-receipt";
-import { ScheduleReceipt } from "../ScheduleReceipt";
+import { scheduleReceipt, scheduleReceiptRef, isScheduleTool } from "@/shared/schedule-receipt";
+import { ScheduleReceipt, ScheduleReceiptByID } from "../ScheduleReceipt";
 // chat.tsx — 对话, the member side's front page (EPIC #3923 C3): assistant-ui's
 // Thread on the person's one conversation, moved here from extras/web-chat/ui
 // (issues #3637, #3646). The shell draws the bars; this page draws the thread,
@@ -64,7 +64,8 @@ const ToolStep: ToolCallMessagePartComponent = (p) => {
   const waiting = !!p.approval && p.approval.approved === undefined && p.approval.resolution === undefined;
   const status = waiting ? ({ type: "requires-action", reason: "interrupt" } as const) : p.status;
   const receipt = p.isError ? null : scheduleReceipt(p.toolName, p.result);
-  return <>{receipt && <ScheduleReceipt receipt={receipt} />}<ToolFallback {...p} status={status} toolName={summary || p.toolName} /></>;
+  const receiptID = p.isError ? null : scheduleReceiptRef(p.toolName, p.result);
+  return <>{receipt ? <ScheduleReceipt receipt={receipt} /> : receiptID ? <ScheduleReceiptByID id={receiptID} /> : null}<ToolFallback {...p} status={status} toolName={summary || p.toolName} /></>;
 };
 
 const ModelPicker: FC = () => {
@@ -97,6 +98,13 @@ const ViewToolStep: ToolCallMessagePartComponent = (p) => {
       if (typeof j?.text === "string") setFull(j.text);
     } catch { /* the button stays */ } finally { setBusy(false); }
   };
+  const attempted = useRef("");
+  useEffect(() => {
+    const key = `${worker}:${p.toolCallId}`;
+    if (more && !p.isError && isScheduleTool(p.toolName) && !scheduleReceiptRef(p.toolName, p.result) && attempted.current !== key) {
+      attempted.current = key; void load();
+    }
+  }, [more, worker, p.toolCallId, p.toolName, p.isError, p.result]);
   return (
     <>
       <ToolStep {...p} result={full ?? p.result} />

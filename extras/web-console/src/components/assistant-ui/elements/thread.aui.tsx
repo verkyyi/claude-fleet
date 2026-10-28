@@ -1,4 +1,4 @@
-import { scheduleReceipt } from "@/shared/schedule-receipt";
+import { isScheduleTool } from "@/shared/schedule-receipt";
 "use client";
 
 import {
@@ -110,7 +110,7 @@ export type ThreadComponents = {
   ComposerTop?: ComponentType | undefined;
 };
 
-const messageGroupBy = groupPartByType({
+const defaultMessageGroupBy = groupPartByType({
   reasoning: ["group-chainOfThought", "group-reasoning"],
   "tool-call": ["group-chainOfThought", "group-tool"],
   "standalone-tool-call": [],
@@ -127,11 +127,13 @@ const TASK_GROUP_PATH: readonly ThreadGroupKey[] = [
   "group-task",
 ];
 
+const messageGroupBy = (part: Parameters<typeof defaultMessageGroupBy>[0], context?: Parameters<typeof defaultMessageGroupBy>[1]) =>
+  part.type === "tool-call" && isScheduleTool(part.toolName) ? [] : defaultMessageGroupBy(part, context);
+
 const taskAwareGroupBy = (
   part: Parameters<typeof messageGroupBy>[0],
   context?: Parameters<typeof messageGroupBy>[1],
 ): readonly ThreadGroupKey[] => {
-  if (part.type === "tool-call" && !part.isError && scheduleReceipt(part.toolName, part.result)) return [];
   const path = messageGroupBy(part, context);
   return part.type === "tool-call" &&
     part.messages !== undefined &&

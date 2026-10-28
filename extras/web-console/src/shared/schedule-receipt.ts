@@ -2,8 +2,13 @@
 // partial streamed JSON or an MCP error must never claim a task was created.
 export type ScheduleReceipt = { id: string; name: string; at?: string; cron?: string; timezone: string; agent: "" | "claude" | "codex"; delivery: { wechat: boolean; livepage: boolean }; synced: boolean; next?: number };
 const object = (v: unknown): Record<string, unknown> | null => v !== null && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : null;
+export const isScheduleTool = (tool: string) => /(?:^|[_.])schedule$/.test(tool);
+export function scheduleReceiptRef(tool: string, result: unknown): string | null {
+  if (!isScheduleTool(tool) || typeof result !== "string") return null;
+  try { const r = JSON.parse(result.split("\n", 1)[0]); return r?.action === "create" && typeof r.schedule_id === "string" && /^schedule-[a-zA-Z0-9-]+$/.test(r.schedule_id) ? r.schedule_id : null; } catch { return null; }
+}
 export function scheduleReceipt(tool: string, result: unknown, depth = 0): ScheduleReceipt | null {
-  if (!/(?:^|[_.])schedule$/.test(tool) || depth > 4) return null;
+  if (!isScheduleTool(tool) || depth > 4) return null;
   if (typeof result === "string") { try { return scheduleReceipt(tool, JSON.parse(result), depth + 1); } catch { return null; } }
   // Claude stores text blocks; Codex may keep the MCP envelope.
   if (Array.isArray(result)) {

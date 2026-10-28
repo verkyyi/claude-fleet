@@ -173,7 +173,16 @@ export function rolloutRead(raw) {
         out.push({ t: "tool_result", id: it.id, text: textOf(it.content_items), error: it.success === false });
         break;
       }
-      case "McpToolCall": out.push({ t: "tool", id: it.id, name: `${it.server}.${it.tool}`, summary: `${it.server} · ${it.tool}` }); break;
+      case "McpToolCall": {
+        out.push({ t: "tool", id: it.id, name: `${it.server}.${it.tool}`, summary: `${it.server} · ${it.tool}` });
+        // Schedule creation receipts must also survive a native Codex replay.
+        // Other MCP history keeps its existing summary-only representation.
+        if (it.tool === "schedule" && (it.result || it.error)) {
+          const result = itemResult({ ...it, type: "mcpToolCall" });
+          out.push({ t: "tool_result", id: it.id, ...result, error: result.error || !!it.result?.isError || it.status === "failed" });
+        }
+        break;
+      }
       case "ImageView": out.push({ t: "image_path", path: pathOf(it.path) }); break;
       case "ImageGeneration": if (it.saved_path) out.push({ t: "image_path", path: pathOf(it.saved_path) }); break;
       default: break;
