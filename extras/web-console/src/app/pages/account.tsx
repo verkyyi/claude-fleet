@@ -40,7 +40,7 @@ export default function AccountPage() {
   const via = me?.via ? VIA[me.via] : undefined;
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-5 md:px-6 md:py-8">
-      {me?.studio ? <a href="/app/studio" className="rounded-xl border p-4 text-sm font-medium hover:bg-muted">活页工作台 →</a> : null}
+      {me?.studio ? <a href="/app/studio" className="rounded-xl border p-4 text-sm font-medium hover:bg-muted">增长运营 Agent →</a> : null}
       <Card className="gap-0 py-0">
         <CardContent className="flex items-center gap-4 px-6 py-5">
           {me ? (

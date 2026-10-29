@@ -294,3 +294,6 @@ word FleetOperationMaxAge T1118 tokenledger/hub/store/
 # T1121: schedules share the conversation sidebar and main panel.
 func date T1121 extras/web-console/src/app/pages/schedules.tsx
 re go\("/schedules"\) T1121 extras/web-console/src/app/Shell.tsx
+
+# Studio is named for its growth and operations value.
+text 活页工作台 T1147 extras/web-console/src

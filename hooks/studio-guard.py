@@ -34,5 +34,5 @@ if __name__ == '__main__':
     try:
         main()
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        print('活页工作台：' + str(exc), file=sys.stderr)
+        print('增长运营 Agent：' + str(exc), file=sys.stderr)
         sys.exit(2)

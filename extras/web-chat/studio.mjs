@@ -31,7 +31,7 @@ export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pend
       ? "读取本人工作区的全部活页项目（list_proposals，含分页），用 fleet.studio_projects 展示。只读，不修改页面。"
       : proposal ? `打开已绑定活页 ${proposal}，读取当前状态和版本，获取预览并 show_page。不自动发布，不改可见范围。`
         : String(a.text || "请先问我想做什么页面；所有改动先 hold 并给预览。").slice(0, 10000);
-    const text = `${instruction}\n\n[活页工作台] 本会话使用 livepage-studio 定义。先 page_target，未绑定时稍后重试。全部改动 hold；只有右栏确认记录可授权上线或推送。`;
+    const text = `${instruction}\n\n[增长运营 Agent] 本会话使用 livepage-studio 定义。先 page_target，未绑定时稍后重试。全部改动 hold；只有右栏确认记录可授权上线或推送。`;
     const result = await spawn(text, a.agent, "livepage-studio");
     if (!result.fid) throw new Error(result.error || "没能开一个工作台会话");
     return book("bind", { key, fid: result.fid, agent: a.agent, proposal_id: proposal, embed_origin: origin.origin });
