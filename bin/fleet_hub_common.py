@@ -615,7 +615,7 @@ def validate_write(action, params, *, task_execution=None):
     if action == "worker_start":
         fields(params, (), ("issue", "kind", "name", "title", "body", "draft", "agent", "repo", "no_repo", "origin_wid",
                             "account_class", "reap", "attachments", "test", "task", "dispatch", "launch", "ticket_ref",
-                            "as", "continuation"))
+                            "as", "continuation", "model"))
         if "continuation" in params:
             from fleet_task_continuation import validate_continuation
             try:
@@ -628,6 +628,9 @@ def validate_write(action, params, *, task_execution=None):
         # ships, found here by name (FLEET_CONTROL_AS → --as); the hub's rule.
         if "as" in params and not (isinstance(params["as"], str) and AGENT_FILE_RE.fullmatch(params["as"])):
             raise Fault("INVALID_ARGUMENT", "as must be an agent file's name")
+        # model (task J7BN P1): the model chosen at creation. Accepted as a field
+        # so a newer hub's start is never refused; only deepseek / deepseek-pro
+        # travel on (the controller drops anything else with one log line).
         # compat-1v: 下一批删 — a hub from before C8 (EPIC T497) with its ID switch
         # off still sends its launch contract; nothing here reads it any more.
         if "ticket_ref" in params:

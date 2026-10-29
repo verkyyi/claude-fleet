@@ -16,6 +16,12 @@ _fl_lib="$BIN/fleet-launch-lib.sh"   # beside this script, else beside its link'
 [ -f "$_fl_lib" ] || _fl_lib="$(cd "$BIN" && cd "$(dirname "$(readlink "$0")")" && pwd)/fleet-launch-lib.sh"
 # shellcheck source=/dev/null
 . "$_fl_lib"
+# A mainland pod (task J7BN P1: render.py sets FLEET_EXEC_REGION=cn) reaches no
+# OpenAI endpoint: Codex never starts there. Unset ⇒ as before.
+if [ "${FLEET_EXEC_REGION:-}" = cn ]; then
+  printf 'fleet-codex: this machine is in the mainland region (FLEET_EXEC_REGION=cn) — Codex does not start here; open a DeepSeek session (--model deepseek|deepseek-pro)\n' >&2
+  fleet_launch_refused region; exit 1
+fi
 if [ "${FLEET_CODEX_NATIVE_USAGE:-0}" = 1 ]; then export FLEET_CODEX_NATIVE_USAGE=1; else unset FLEET_CODEX_NATIVE_USAGE; fi   # #4557: only exported reaches the runtime
 
 # A managed release pins its CLI beside the scripts. A login's inherited PATH

@@ -916,6 +916,14 @@ printf 'unstaged\n' >> "$WT/file"; printf 'untracked\n' > "$WT/untracked"
 BEFORE=$(git -C "$WT" diff --binary HEAD)
 # A newer helper transcript must never win over the source process registry.
 printf '{"type":"user","sessionId":"helper","message":{"content":"helper noise"}}\n' > "$WORK/projects/actual/helper.jsonl"
+# task J7BN P1: a model fixed at creation (@cc_model_fixed 1, a DeepSeek
+# profile) is never transferred — one line, non-zero, the source kept.
+TM set-option -w -t "$WIN" @cc_model_fixed 1; TM set-option -w -t "$WIN" @cc_model deepseek
+transfer --prepare-only && fail 'a fixed-model session must refuse transfer'
+[ "$(printf '%s\n' "$OUT" | grep -c 'model fixed at creation (deepseek)')" = 1 ] || fail 'fixed-model refusal is not its one line'
+kill -0 "$PID" || fail 'fixed-model refusal killed source'
+TM set-option -wu -t "$WIN" @cc_model_fixed; TM set-option -wu -t "$WIN" @cc_model
+ok
 transfer --dry-run || fail 'dry-run'
 ok; [ ! -e "$FLEET_CONF_DIR/handoffs" ] && [ ! -e "$FLEET_CONF_DIR/rotating" ] || fail 'dry-run must not write packages or leases'
 ok; kill -0 "$PID" && [ "$(field cc_agent)" = '' ] || fail 'dry-run changed the source'

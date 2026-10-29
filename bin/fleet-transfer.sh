@@ -285,6 +285,10 @@ PANE=$(TM list-panes -t "$WIN" -F '#{pane_id}|#{@sidebar}' 2>/dev/null \
 # all unsupported and none could leave a walled account (issue #2102).
 [ "$(opt "$FLEET_SESSION_FMT")" = "$SESS" ] || die 'window belongs to a different session'
 case "$(fleet_win_role "$WIN" "$SOCK")" in panel|home) die 'panel windows cannot be transferred' ;; esac
+# A model chosen at creation is the session's for life (task J7BN P1, a DeepSeek
+# profile): another agent would run it on another model — refused, source kept.
+[ "$(opt '#{@cc_model_fixed}')" != 1 ] \
+  || die "this session runs on a model fixed at creation ($(opt '#{@cc_model}')) — no transfer to another agent; source retained"
 fleet_task_relocation_allowed "$(opt '#{@fleet_id}')" "$(opt '#{@task_execution}')" \
   || die 'task execution cannot use the legacy transfer path; source retained'
 _source_meta=$(opt '#{@hub}|#{@cc_agent}|#{@norepo}|#{@issue}|#{@raw}|#{@worktree}') || die 'source metadata unavailable'

@@ -101,7 +101,7 @@ save() {
       # the identity-keyed rows after the pairs — a pin (#3517), a desk ticket
       # (#2676), a remote parent (#3439), an agent file (#4760) — ride along as they are: restore()
       # stamps one only on the WIN row its fleet_id names
-      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" || $1 == "AGENTDEF" { post = post $0 "\n"; pend = ""; fid = ""; next }
+      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" || $1 == "AGENTDEF" || $1 == "MODEL" { post = post $0 "\n"; pend = ""; fid = ""; next }
       { pend = ""; fid = "" }
       END { if (c > 0) printf "%s", post > map; print c + 0 }' "$mf")
     # A fleet with no session open keeps its copy too — the FLEET row alone: its
@@ -176,7 +176,7 @@ restore() {
       $1 == "FLEET" { print; next }
       $1 == "REAP" || $1 == "FID" { pend = pend $0 "\n"; next }
       $1 == "WIN" { if (!($2 in drop)) printf "%s%s\n", pend, $0; pend = ""; next }
-      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" || $1 == "AGENTDEF" { print; pend = ""; next }' "$skip" "$mf" > "$tmp"   # #3517: by identity
+      $1 == "PIN" || $1 == "DESK" || $1 == "OWID" || $1 == "AGENTDEF" || $1 == "MODEL" { print; pend = ""; next }' "$skip" "$mf" > "$tmp"   # #3517: by identity
     if grep -q '^WIN' "$tmp"; then
       log "restore: $sess — $(grep -c '^WIN' "$tmp") pinned session(s)"
       RESTORE_ONLY_MAP="$tmp" RESTORE_UNFINISHED=1 RESTORE_KEEP_DONE=1 bash "$BIN/fleet-restore.sh" >/dev/null 2>&1 || :

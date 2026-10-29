@@ -1477,6 +1477,28 @@ exec bash "$(dirname "$0")/fleet-control-read-real.sh" "$@"
         self.assertEqual(self.node.wait(plain["operation_id"])["status"], "succeeded")
         self.assertEqual((self.node.conf / "spawn.calls").read_text(), "128 demo --print --agent claude --origin hub --repo example/project\n")
 
+    def test_start_carries_its_model(self):
+        # task J7BN P1: the model chosen at creation rides a start as `model` —
+        # bin/fleet_control.py hands only deepseek / deepseek-pro on
+        # (FLEET_CONTROL_MODEL, case-folded), bin/fleet-control-read.sh replays it
+        # as --model to dash-issue-session.sh / dash-raw-session.sh; anything else
+        # is dropped (one log line) and the start opens as it always did.
+        validate_write("worker_start", {"issue": 1, "model": "deepseek"})
+        started = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="ds-issue",
+                                                 params={"issue": 131, "model": "DeepSeek-Pro"}))
+        self.assertEqual(self.node.wait(started["operation_id"])["status"], "succeeded")
+        self.assertEqual((self.node.conf / "spawn.calls").read_text(),
+                         "131 demo --print --agent claude --origin hub --repo example/project --model deepseek-pro\n")
+        seen = []
+        with patch.object(control, "run", side_effect=lambda argv, **kw: seen.append(kw["env"]) or (0, "", "")):
+            for odd in ("opus", "deepseek; rm -rf ~", 7, "DEEPSEEK"):
+                self.node.controller.adapter("start", "demo", "132", model=odd)
+        self.assertEqual([e.get("FLEET_CONTROL_MODEL") for e in seen], [None, None, None, "deepseek"])
+        scratch = self.call("worker_start", dict(fleet_id=self.fleet, idempotency_key="ds-scratch",
+                                                 params={"kind": "scratch", "model": "deepseek"}))
+        self.assertEqual(self.node.wait(scratch["operation_id"])["status"], "succeeded")
+        self.assertIn(" --model deepseek", (self.node.conf / "scratch.calls").read_text())
+
     def test_start_scratch_opens_a_raw_session(self):
         # issue #1541: kind=scratch is a raw scratch session — no issue, no claim;
         # the node runs dash-raw-session.sh and its --print receipt names the

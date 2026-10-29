@@ -1202,7 +1202,10 @@ class LinuxNode(unittest.TestCase):
             self.assertEqual(get('other'), 'https://github.com/Org/other.git')
             shell = Path(ef).read_text()
             for line in ('FLEET_GITHUB_PROXY=http://203.0.113.211:3128', 'npm_config_registry=https://registry.npmmirror.com',
-                         'GOPROXY=https://goproxy.cn,direct', 'FNM_NODE_DIST_MIRROR=https://npmmirror.com/mirrors/node'):
+                         'GOPROXY=https://goproxy.cn,direct', 'FNM_NODE_DIST_MIRROR=https://npmmirror.com/mirrors/node',
+                         # pip / uv from the Tsinghua mirror (task J7BN P1), https: no trusted-host
+                         'PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple',
+                         'UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple'):
                 self.assertIn(line + '\n', shell)
             # what every shell sees, and a login's own value still wins
             self.assertEqual(source_profile(d, ef, '$GOPROXY|$npm_config_registry', npm_config_registry='mine'),

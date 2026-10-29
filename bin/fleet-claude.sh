@@ -184,6 +184,12 @@ if [ -z "${FLEET_MODEL+x}" ]; then
   fi
   unset _fc_p
 fi
+# A mainland pod (task J7BN P1: render.py sets FLEET_EXEC_REGION=cn) reaches no
+# Anthropic endpoint: only a DeepSeek profile starts there. Unset ⇒ as before.
+if [ "${FLEET_EXEC_REGION:-}" = cn ] && [ -z "$_fc_ds" ]; then
+  printf 'fleet-claude: this machine is in the mainland region (FLEET_EXEC_REGION=cn) — only a DeepSeek session (--model deepseek|deepseek-pro) starts here; refusing to start\n' >&2
+  fleet_launch_refused region; exit 1
+fi
 fleet_as_stamp
 
 # Project trust (issue #563; a trusted node's wide form, #2282): every spawn, restore,

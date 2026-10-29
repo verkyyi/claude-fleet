@@ -390,6 +390,20 @@ st_count; has 'tok-walled' "$inbox" || st_fail "the auth frame should carry the 
 st_count; has '/model' "$(cat "$WORK/typed.walled")" || st_fail "sanity: keystrokes are recorded"
 st_count; grep -q 'cross-session-message' "$WORK/typed.walled" && st_fail "the NUDGE must never be typed into the pane"
 
+# --- a model fixed at creation is never switched (task J7BN P1) --------------
+# @cc_model_fixed 1 (a DeepSeek profile, dash-raw-session.sh --model): named, it is
+# refused with one line and exit 1; a --capped sweep passes it by. Nothing typed.
+spawn_worker fixed Fable "Fable 5.1"; W_FIX="$WID"
+tmux -L "$LBL" set-window-option -t "$W_FIX" @cc_model_fixed 1 2>/dev/null
+tmux -L "$LBL" set-window-option -t "$W_FIX" @cc_model deepseek 2>/dev/null
+painted "$W_FIX"
+out=$(RUN --model opus "$W_FIX"); rc=$?
+eq "a fixed-model window named explicitly exits 1" 1 "$rc"
+st_count; [ "$(printf '%s\n' "$out" | grep -c 'model fixed at creation (deepseek)')" = 1 ] || st_fail "the refusal should be one line naming the model" "$out"
+RUN --capped --model opus >/dev/null
+eq "a fixed-model window is never typed into" "" "$(cat "$WORK/typed.fixed")"
+eq "a fixed-model window keeps its model" "deepseek" "$(tmux -L "$LBL" display-message -p -t "$W_FIX" '#{@cc_model}')"
+
 fi
 
 if [ "$SELFTEST_SECTION" = 2 ]; then

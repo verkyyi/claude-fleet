@@ -118,9 +118,10 @@ class Control(NativeExitSubmission):
         return env
 
     def adapter(self, mode, *args, timeout=20, payload=None, op_id=None, task=None, draft=False, dispatch=None, as_file=None,
-                t0=None, execution=None, continuation=None):
+                t0=None, execution=None, continuation=None, model=None):
         env = self.environment()
         env.pop("FLEET_CONTROL_DRAFT", None)
+        env.pop("FLEET_CONTROL_MODEL", None)
         if t0:
             # a start the hub sent here is clocked from this machine's acceptance
             # (T716, fleet_timing.py `session.node`): the ↵ is on another machine
@@ -131,6 +132,16 @@ class Control(NativeExitSubmission):
             # with the release, found here by name. Environment only: the
             # adapter's argv is what it was.
             env["FLEET_CONTROL_AS"] = as_file
+        if model:
+            # The model the asker chose at creation (J7BN P1): only a DeepSeek
+            # profile travels — Claude Code on DeepSeek through the proxy, fixed
+            # for the session's life. Anything else is said once and dropped.
+            m = str(model).strip().lower()
+            if m in ("deepseek", "deepseek-pro"):
+                env["FLEET_CONTROL_MODEL"] = m
+            else:
+                print("fleet-control: start model %r ignored (only deepseek / deepseek-pro)" % (str(model)[:40],),
+                      file=sys.stderr)
         if draft:
             env["FLEET_CONTROL_DRAFT"] = "1"
         if dispatch:
@@ -1070,7 +1081,7 @@ class Control(NativeExitSubmission):
                                                      params.get("account_class", ""), params.get("name", "").strip(),
                                                      *test_arg, payload=body.encode("utf-8") if body else None,
                                                      timeout=180, dispatch=params.get("dispatch"), task=params.get("task"), draft="draft" in params,
-                                                     as_file=params.get("as"), t0=row["created"], execution=execution, continuation=continuation)
+                                                     as_file=params.get("as"), model=params.get("model"), t0=row["created"], execution=execution, continuation=continuation)
                 elif filed:
                     # issue #1953: the client's writing area — the adapter's start
                     # with `new` and the title (validated above) where a scratch
@@ -1083,13 +1094,13 @@ class Control(NativeExitSubmission):
                                                      params.get("account_class", ""), params["title"].strip(),
                                                      *reap_arg, payload=body.encode("utf-8"),
                                                      timeout=240, op_id=op_id, task=params.get("task"), dispatch=params.get("dispatch"),
-                                                     as_file=params.get("as"), t0=row["created"], execution=execution, continuation=continuation)
+                                                     as_file=params.get("as"), model=params.get("model"), t0=row["created"], execution=execution, continuation=continuation)
                 else:
                     code, output, err = self.adapter("start", fleet["name"], str(params["issue"]), params.get("agent", ""),
                                                      params.get("repo", ""), params.get("origin_wid", ""),
                                                      params.get("account_class", ""), *([""] + reap_arg if reap_arg else []),
                                                      timeout=180, task=params.get("task"), dispatch=params.get("dispatch"),
-                                                     as_file=params.get("as"), t0=row["created"], execution=execution)
+                                                     as_file=params.get("as"), model=params.get("model"), t0=row["created"], execution=execution)
                 if code:
                     # 6 = no repo named in a fleet hosting several, or one it does not host (#984).
                     # 7 = a new start with no task record (issue #4898): nothing was opened.
