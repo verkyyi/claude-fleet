@@ -86,7 +86,7 @@ func TestNodeTaskStopRejectsForeignAndLegacyReadException(t *testing.T) {
 			t.Fatal(e)
 		}
 		if version == 0 {
-			if _, e := h.srv.nodeOwnTask("operator", rec.Ref); e != nil {
+			if _, _, e := h.srv.nodeOwnTask([]string{"operator"}, rec.Ref); e != nil {
 				t.Fatalf("fixture must exercise legacy read exception: %v", e)
 			}
 		}
