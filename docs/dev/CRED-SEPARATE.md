@@ -100,10 +100,12 @@ the hub's credentials.
   deepseek` — ALWAYS central, whatever the machine's trust: a hub pass for
   provider `deepseek` (no node holds the key). The session gets
   `ANTHROPIC_BASE_URL=http://127.0.0.1:<proxy port>/deepseek`,
-  `CLAUDE_CODE_OAUTH_TOKEN=<the pass>`, `ANTHROPIC_MODEL` +
-  `ANTHROPIC_DEFAULT_OPUS_MODEL` + `ANTHROPIC_DEFAULT_SONNET_MODEL` =
-  `deepseek-flash[1m]` (`deepseek-v4-pro[1m]` for `deepseek-pro`),
-  `ANTHROPIC_DEFAULT_HAIKU_MODEL` = `CLAUDE_CODE_SUBAGENT_MODEL` = `deepseek-flash`,
+  `CLAUDE_CODE_OAUTH_TOKEN=<the pass>`, tiers in Claude Code's OWN ids
+  (`ANTHROPIC_MODEL` = opus `[1m]`, sonnet `[1m]`, haiku for the haiku tier and
+  `CLAUDE_CODE_SUBAGENT_MODEL` — so it prints no `unrecognized_model`), and ONE
+  `--settings` (the composed file, copied as `agentcfg/settings-ds-<sha>.json`)
+  whose `modelOverrides` send DeepSeek's id on the wire: opus / sonnet →
+  `deepseek-flash` (`deepseek-v4-pro` for `deepseek-pro`), haiku → `deepseek-flash`,
   `CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
   no `--model`, no account (`@cc_model` = the profile). `bin/fleet-cred-proxy.py`
   reads a `/deepseek/<rest>` path as provider `deepseek`, whose ONE route is

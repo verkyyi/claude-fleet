@@ -232,14 +232,16 @@ fi
 # Subagents follow the EFFECTIVE model; an explicit FLEET_SUBAGENT_MODEL wins.
 if [ -z "${FLEET_SUBAGENT_MODEL+x}" ]; then FLEET_SUBAGENT_MODEL="${launch_model:-$FLEET_MODEL}"; fi
 [ -n "$FLEET_SUBAGENT_MODEL" ] && export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_SUBAGENT_MODEL"
-# DeepSeek (task J7BN): every tier is a DeepSeek model — a Claude alias (opus, an
-# agent file's sonnet) resolves through these, a subagent rides the flash model
+# DeepSeek (task J7BN): every tier is a model this Claude Code KNOWS (its own ids:
+# no `unrecognized_model`, its capability and window profile) and the settings'
+# modelOverrides (below, after the composed configuration) send DeepSeek's id on
+# the wire — so the proxy meters deepseek-flash / deepseek-v4-pro, never a Claude name
+FLEET_DS_OPUS=claude-opus-5-5 FLEET_DS_SONNET=claude-sonnet-5-5 FLEET_DS_HAIKU=claude-haiku-5-5
 if [ -n "$_fc_ds" ]; then
-  _fc_dsm='deepseek-flash[1m]'; [ "$_fc_ds" = deepseek-pro ] && _fc_dsm='deepseek-v4-pro[1m]'
-  export ANTHROPIC_MODEL="$_fc_dsm" ANTHROPIC_DEFAULT_OPUS_MODEL="$_fc_dsm" ANTHROPIC_DEFAULT_SONNET_MODEL="$_fc_dsm"
-  export ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-flash CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash
-  export CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432
-  unset ANTHROPIC_SMALL_FAST_MODEL _fc_dsm
+  export ANTHROPIC_MODEL="$FLEET_DS_OPUS[1m]" ANTHROPIC_DEFAULT_OPUS_MODEL="$FLEET_DS_OPUS[1m]"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL="$FLEET_DS_SONNET[1m]" ANTHROPIC_DEFAULT_HAIKU_MODEL="$FLEET_DS_HAIKU"
+  export CLAUDE_CODE_SUBAGENT_MODEL="$FLEET_DS_HAIKU" CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432
+  unset ANTHROPIC_SMALL_FAST_MODEL
 fi
 
 # MCP: an allowlist (FLEET_MCP_CONFIG, issue #473 — every server costs start time and
@@ -283,6 +285,41 @@ if [ "$_fl_cfg_mod" = on ] && [ "${#mod_flag[@]}" -eq 0 ] && command -v fleet_mo
 fi
 fleet_launch_cfg_stamp
 unset _fc_ca
+# DeepSeek (task J7BN): the tiers' Claude ids → DeepSeek's on the wire. One
+# --settings is all Claude Code reads (a second replaces the first), so the
+# composed file is copied with modelOverrides added — content-addressed beside it
+if [ -n "$_fc_ds" ]; then
+  _fc_dsw=deepseek-flash; [ "$_fc_ds" = deepseek-pro ] && _fc_dsw=deepseek-v4-pro
+  _fc_set=''; _fc_cf=()
+  for _fc_a in ${cfg_flag[@]+"${cfg_flag[@]}"}; do
+    case "$_fc_a" in --settings=*) _fc_set="${_fc_a#--settings=}" ;; *) _fc_cf+=("$_fc_a") ;; esac
+  done
+  _fc_set=$(python3 - "$_fc_set" "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agentcfg" \
+      "$FLEET_DS_OPUS=$_fc_dsw" "$FLEET_DS_SONNET=$_fc_dsw" "$FLEET_DS_HAIKU=deepseek-flash" <<'PY'
+import hashlib, json, os, sys
+src, d, pairs = sys.argv[1], sys.argv[2], sys.argv[3:]
+s = {}
+if src:
+    with open(src) as f:
+        s = json.load(f)
+mo = s.get("modelOverrides") if isinstance(s.get("modelOverrides"), dict) else {}
+mo.update(dict(p.split("=", 1) for p in pairs))
+s["modelOverrides"] = mo
+b = json.dumps(s, sort_keys=True, indent=1).encode()
+os.makedirs(d, exist_ok=True)
+out = os.path.join(d, "settings-ds-%s.json" % hashlib.sha256(b).hexdigest()[:16])
+if not os.path.exists(out):
+    tmp = out + ".%d" % os.getpid()
+    with open(tmp, "wb") as f:
+        f.write(b)
+    os.replace(tmp, out)
+print(out)
+PY
+  ) || { echo "fleet-claude: FLEET_MODEL=$_fc_ds could not write its model mapping — refusing to start" >&2
+         fleet_launch_refused deepseek; exit 1; }
+  cfg_flag=(${_fc_cf[@]+"${_fc_cf[@]}"} "--settings=$_fc_set")
+  unset _fc_dsw _fc_set _fc_cf _fc_a
+fi
 
 # (After the composed configuration above, so the early mint — fleet_launch_early —
 # has that long to finish beside it: T683.)
