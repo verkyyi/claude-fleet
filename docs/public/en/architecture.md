@@ -28,6 +28,8 @@ Clients connect to the hub through an encrypted entry.
 
 An optional LivePage studio uses the same native sessions and home relay: the agent reads and edits through its existing MCP connection, stores held versions, and publishes only after a version-specific confirmation. The hub has no additional publishing credential. Access defaults off and is restricted by principal.
 
+Preview renewal is optional and independent of model turns: the native agent grants a bounded, exact-version read capability through LivePage MCP. The home relay keeps it out of the browser projection and exchanges it for short-lived embed tickets. LivePage rechecks membership, source and original authorization on renewal. Publishing credentials and confirmed writes remain with the native agent.
+
 ### 3 · Data
 
 - **Database** — Central accounts, session records, usage and settings; a session record is not the running process. [Learn more](self-host/install.md).

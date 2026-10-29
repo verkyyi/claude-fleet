@@ -10,6 +10,7 @@ try {
   const page = await context.newPage();
   const sent = [];
   let listed = false;
+  let renewals = 0, bootstrap = 0, clock = Date.now();
   await page.addInitScript(({worker}) => {
     const original = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -27,6 +28,7 @@ try {
   const session = {key:'catalog',fid,agent:'claude',proposal_id:'',versions:[]};
   await page.route('**/*', async route => {
     const req=route.request(), u=new URL(req.url());
+    if(u.hostname==='space.24haowan.com') return route.fulfill({contentType:'text/html; charset=utf-8',body:'<h1>预览正文</h1>'});
     if (!u.pathname.startsWith('/v1/')) {
       const rel=u.pathname.replace(/^\/app\/?/,'');
       const file=new URL(`../dist/app/${rel.startsWith('assets/')?rel:'index.html'}`,import.meta.url);
@@ -36,7 +38,15 @@ try {
     if(u.pathname==='/v1/me') body={person:'alice',role:'user',studio:true,pages:['app']};
     if(u.pathname==='/v1/fleet/tasks') body={tasks:[]};
     if(u.pathname==='/v1/fleet/sessions') body={sessions:[],board:{rows:listed?[{id:fid,worker_id:worker,title:'Studio fixture',group:'work',tag:'working',words:['工作中','Working'],at:1,agent:'claude'}]:[],count:listed?1:0,groups:{}}};
-    if(u.pathname==='/v1/chat/studio') body={projects:[],sessions:{catalog:session}};
+    if(u.pathname==='/v1/chat/studio') body={projects:[],sessions:{[session.key]:session}};
+    if(u.pathname==='/v1/chat/studio/preview') {
+      renewals++;
+      const v=session.versions.find(v=>v.version_id===req.postDataJSON().version_id);
+      v.embed=`https://space.24haowan.com/embed/${v.version_id}/ticket-${renewals}`;
+      v.embed_exp=new Date(clock+3600000).toISOString();
+      body={state:'ready'};
+    }
+    if(u.pathname==='/v1/chat/studio/action') { bootstrap++; body={state:'queued'}; }
     if(u.pathname==='/v1/chat/studio/open') body={...session,reused:true};
     if(u.pathname==='/v1/chat/view') body={mirror:null};
     if(u.pathname==='/v1/chat/say') {
@@ -61,6 +71,32 @@ try {
     assert.equal(sent.length,i+1,'refreshing a reused catalog sends once');
     assert.equal(sent[i].worker,worker,'catalog refresh uses the same owned worker as live chat');
   }
+  session.key='page-test'; session.proposal_id='page1';
+  session.versions=[1,2].map(n=>({version_id:`v${n}`,version:String(n),status:'hold',at:n,renewable:true,
+    embed:`https://space.24haowan.com/embed/v${n}/initial`,embed_exp:new Date(clock+240000).toISOString()}));
+  session.operations=[{id:'op1',action:'publish',state:'unknown',at:1,message:'结果待核实'}];
+  await page.goto('http://127.0.0.1:18963/app/studio?project=page-test&version=v1');
+  await page.getByRole('combobox',{name:'版本',exact:true}).waitFor();
+  await page.frameLocator('iframe').getByText('预览正文').waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'版本',exact:true}).inputValue(),'v1');
+  assert.equal(bootstrap,0,'renewal never sends an Agent message');
+  await page.getByLabel('操作记录').getByText(/结果待核实/).waitFor();
+  await page.clock.install({time:clock});
+  for(const hours of [8,25]) {
+    clock=Date.now()+hours*3600000;
+    await page.clock.setSystemTime(clock);
+    const renewed=page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/chat/studio/preview');
+    await page.evaluate(()=>window.dispatchEvent(new Event('online')));
+    await renewed;
+    await page.waitForTimeout(150);
+    await page.getByRole('combobox',{name:'版本',exact:true}).waitFor();
+    assert.equal(await page.getByRole('combobox',{name:'版本',exact:true}).inputValue(),'v1','renewal of v1 never selects v2');
+  }
+  assert.equal(bootstrap,0);
+  await page.goto('http://127.0.0.1:18963/app/studio');
+  await page.waitForURL('**/studio?project=page-test&version=v1');
+  await page.getByLabel('操作记录').getByText(/结果待核实/).waitFor();
+  assert.equal(await page.getByRole('combobox',{name:'版本',exact:true}).inputValue(),'v1','return restores project and inspected version');
   await context.close();
-  console.log('PASS studio native worker: restored binding, live transcript, catalog refresh and reload');
+  console.log('PASS studio: native chat, 8h/25h preview renewal without Agent turns, restored project/version and durable receipts');
 } finally { await browser.close(); }

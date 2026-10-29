@@ -103,4 +103,5 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <text x="32" y="1464" class="small muted">按需工作台 · 原生会话 → 已有 MCP</text>
 <text x="32" y="1494" class="small muted">待发版本 → 明确确认 → 发布</text>
 <desc>按需工作台：浏览器 → 原生会话 → 已有 MCP；待发版本 → 确认 → 发布。</desc>
+<text x="32" y="1492" class="small muted">按需：家节点 → LivePage · 仅预览续期</text>
 </svg>

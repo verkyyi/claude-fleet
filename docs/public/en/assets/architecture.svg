@@ -103,4 +103,5 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <text x="32" y="1464" class="small muted">Optional studio · native session → existing MCP</text>
 <text x="32" y="1494" class="small muted">Held version → explicit confirmation → publish</text>
 <desc>Optional studio: browser → native session → existing MCP; held version → confirmation → publish.</desc>
+<text x="32" y="1492" class="small muted">Optional: node → LivePage · read-only renewal</text>
 </svg>

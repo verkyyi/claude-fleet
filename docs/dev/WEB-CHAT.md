@@ -27,7 +27,7 @@
 4. 右栏「发布当前预览版本」确认后，只有指定版本可以上线；公开、更改范围及发到本人微信分别确认。
    其它按钮也只发送会话指令；Agent 完成后读取真实结果再回传，不把「已送达」当作「已发布」。
    二维码在浏览器本地从 Agent 回传的真实正式链接生成，不向第三方传链接。
-   预览过期需刷新；未读取的阅读与留资显示未知，并保留实际读取时间。
+   预览到期前自动续期，断网恢复、浏览器唤醒时自动重试；未读取的阅读与留资显示未知，并保留实际读取时间。
 5. 官网三语各有独立预览和发布确认；Agent 用 `show_page(related:true)` 登记附属语言，
    项目列表复用同一原生会话，不能一次确认就发布其它语言。其它页面不自动合并会话。
 
@@ -35,7 +35,25 @@
 以 `--as livepage-studio --no-repo` 打开会话；对话、回答、停止仍走原有接口和队列。
 `studio/action` 验证预览与确认，按同一 delivery id 送入队列，重试不重复发送。
 `$FLEET_CONF_DIR/webchat/studio.json` 是家登录的展示投影及绑定；文件锁 + 原子替换，随 webchat 状态迁移，
-不含 space 凭据。公开数据或权限不经过工作台服务，仍由原生 Agent 使用现有 space MCP 执行。
+不含完整 space 登录凭据。可选 `_renewal` 保存精确版本的只读续期授权（文件 0600）；
+`read` / `page_target` 与浏览器投影都剥离该字段。公开数据或权限仍由原生 Agent 使用现有 space MCP 执行。
+
+工作台预览由 Agent 首次调用 `preview_version(embed_origin, embed_renewable:true)` 授权，
+将 `embed.renewal.key` / `expires_at` 经 `show_page(embed_renewal_key, embed_renewal_expires)` 交给家登录。
+`POST /v1/chat/studio/preview` 经过原有 founder gate 与本人 relay，家登录只向固定的
+`https://space.24haowan.com/preview/<版本>/renew` POST，禁止跳转，不接受任意目标地址。
+续期不启动模型回合，不依赖 Agent 当前是否运行；它只能换该版本、该来源的只读短票，不能写入。
+LivePage 每次现查原始 token、成员关系、版本和来源。续期授权最长七天且不超过原 token 寿命；
+短票仍最多六十分钟。到期或撤销后，经原会话重新授权，旧 space 服务 / 旧工具清单保留普通预览回退。
+多标签页在家登录合并续期，LivePage 跨副本缓存与锁防止重复铸票；失败退避，不刷新旧版的生成顺序。
+家机器离线时显示重连状态；无法在家机器离线期间续期，不声称离线持续可用。
+
+项目与选中的版本写入按本人 principal 分隔的浏览器位置记录；明确点「新页面」清空选择。
+同一版本只刷新预览，不跳回最新版；Agent 新建一个版本才自动跟随。会话详情提供既有接回入口。
+右栏操作记录来自持久投影：已送达不等于已完成；Agent 读取真实结果后以
+`show_page(action_id, action_state, action_message)` 回传。发送结果未知时不重发；
+确认已消费但未取得结果、或操作十分钟无结果时显示「结果待核实」，需要先在会话中读回实际状态。
+旧 Agent 的精确版本 `show_page(status=ready)` 仍可完成发布回执，不要求旧清单马上重开。
 
 远程 space 的原生 PreToolUse 钩子 `hooks/studio-guard.py` 与 stdio gateway 使用同一检查：
 `publish_file` / `finalize_upload` / `create_upload_link` 必须 hold；发布、可见范围、微信推送
