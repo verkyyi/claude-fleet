@@ -206,6 +206,7 @@ running after 30 minutes is cancelled). BREAK-IT `train-aws-ssm-fails`.
 | `AWS_BOX_INSTANCE_ID` | optional: `i-…`; unset = the one running instance tagged `Name=tokenman-core` (`AWS_BOX_TAG` changes the tag) |
 | `AWS_BOX_REPO_DIR` | optional, default `/home/ubuntu/src` (the box's checkout `bootstrap.sh` runs from) |
 | `HUB_AWS_PLATFORM` | optional, default `linux/amd64`; `linux/arm64` for a Graviton box |
+| `HUB_MIRROR_ACR` | optional: `1` = after the ECR push, `hub build` also logs into ACR (`.github/actions/hub-acr`) and copies the same tag into `HUB_PUSH_REPO` (ACR's public endpoint, `…/ccquota`), registry to registry, red unless the digest matches — for the mainland region ([`../k8s/overlays/ack-sz-cn`](../k8s/overlays/ack-sz-cn/README.md)); unset = no copy |
 | `FLEET_HUB_URL_AWS` | optional, default `https://core.tokenman.io` (the train's stages) |
 | `HUB_URLS_AWS` | optional: the addresses the health check reads, space-separated (default `FLEET_HUB_URL_AWS`) |
 

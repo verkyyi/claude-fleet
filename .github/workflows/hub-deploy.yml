@@ -69,6 +69,9 @@ name: hub-deploy
 # failed apply puts the previous release back on the box), then the same health
 # check on HUB_URLS_AWS (else FLEET_HUB_URL_AWS, else https://core.tokenman.io);
 # a red health check rolls the box back. BREAK-IT train-aws-ssm-fails.
+# With repo variable HUB_MIRROR_ACR=1 (task J7BN; unset = nothing) the build job
+# also logs into ACR (hub-acr) and copies the tag it just pushed to ECR into
+# HUB_PUSH_REPO, digest checked — the mainland region's credproxy pulls it there.
 #
 # The `check` job (hub-deploy-check.yml, issue #4815) runs on every PR that
 # touches any of it — the PR gate calls it — and needs no credential: the
@@ -358,6 +361,35 @@ jobs:
           where=ubuntu-latest; [ "$ACK" != true ] || where='fleet-ack · buildkitd'
           [ "$AWS" != true ] || where="ubuntu-latest · ECR · $HUB_PLATFORM"
           echo "### 入口镜像 \`$TAG\`：$how · $where · \`$d\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # FLEET_HUB_TARGET=aws-k3s + HUB_MIRROR_ACR=1 (task J7BN): the mainland
+      # execution region (deploy/k8s/overlays/ack-sz-cn) runs `ccquota credproxy`
+      # from this image and pulls from ACR, so the same tag is copied there,
+      # registry to registry (no local pull), and must arrive with the same
+      # digest. Unset = no ACR login, no copy, byte for byte as before. A failed
+      # copy is red — never a quiet skip.
+      - uses: ./.github/actions/hub-acr
+        if: env.AWS == 'true' && vars.HUB_MIRROR_ACR == '1'
+      - name: Mirror the tag into ACR (HUB_MIRROR_ACR)
+        if: env.AWS == 'true' && vars.HUB_MIRROR_ACR == '1'
+        env:
+          ACR_REPO: ${{ vars.HUB_PUSH_REPO }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [ -n "$ACR_REPO" ] || { echo "::error::HUB_MIRROR_ACR=1 but repo variable HUB_PUSH_REPO (the ACR public endpoint …/ccquota) is not set"; exit 1; }
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::HUB_MIRROR_ACR: no digest for $PUSH_REPO:$TAG to copy"; exit 1; }
+          ok=
+          for try in 1 2 3; do
+            if docker buildx imagetools create --tag "$ACR_REPO:$TAG" "$PUSH_REPO@$DIGEST"; then ok=1; break; fi
+            [ "$try" -lt 3 ] || break
+            echo "::warning::HUB_MIRROR_ACR: copy to $ACR_REPO:$TAG failed (try $try of 3) — retrying in $((try * 20))s"
+            sleep $((try * 20))
+          done
+          [ -n "$ok" ] || { echo "::error::HUB_MIRROR_ACR: could not copy $PUSH_REPO@$DIGEST to $ACR_REPO:$TAG (the mainland region's credproxy would stay on an old image)"; exit 1; }
+          got=$(docker buildx imagetools inspect "$ACR_REPO:$TAG" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin).get("digest") or "")')
+          [ "$got" = "$DIGEST" ] || { echo "::error::HUB_MIRROR_ACR: $ACR_REPO:$TAG is '$got', not ECR's $DIGEST"; exit 1; }
+          echo "### ACR 镜像副本 \`$ACR_REPO:$TAG\` · \`$got\`（与 ECR 同 digest）" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     # FLEET_HUB_TARGET=aws-k3s: `deploy-aws` below instead (unset = this job, as always)
