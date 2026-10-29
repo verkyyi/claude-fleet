@@ -68,6 +68,11 @@ if [ "$_fc_explicit" != 1 ]; then
   case " $* " in
     *" --resume "*|*" --continue "*|*" --from-pr "*|*" --fork-session "*|*" --model "*|*" --model="*) _fc_agent=claude ;;
   esac
+  # a DeepSeek profile (task J7BN) is Claude Code on DeepSeek's Anthropic API:
+  # FLEET_MODEL=deepseek|deepseek-pro picks Claude even on a FLEET_AGENT=codex fleet
+  case "$(printf '%s' "${FLEET_MODEL:-}" | tr '[:upper:]' '[:lower:]')" in
+    deepseek|deepseek-pro) _fc_agent=claude ;;
+  esac
 fi
 # A SEPARATED login (credsep.json, #1971) through its credential proxy does not
 # choose its subscription (issue #2412): the session credential names no account

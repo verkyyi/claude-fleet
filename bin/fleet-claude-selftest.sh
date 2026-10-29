@@ -425,6 +425,16 @@ CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash"
   grep -q "@cc_model $p" "$WORK/tmuxlog" || st_fail "J7BN $prof: @cc_model not stamped $p" "$(cat "$WORK/tmuxlog")"
 done
 st_pass "J7BN FLEET_MODEL deepseek / deepseek-pro: proxy /deepseek base URL, the hub pass, DeepSeek tiers, no --model"
+# …and on a FLEET_AGENT=codex fleet the profile still launches Claude Code, never
+# fleet-codex.sh (a DeepSeek profile is Claude Code on DeepSeek's Anthropic API)
+printf '#!/bin/sh\n: > "%s/codex-ran"\n' "$WORK" > "$WORK/bin/fleet-codex.sh"; chmod +x "$WORK/bin/fleet-codex.sh"
+printf 'FLEET_AGENT="codex"\nFLEET_MODEL="deepseek"\n' > "$WORK/conf/fleets/f1/conf"
+rm -f "$WORK/env" "$WORK/codex-ran"
+argv="$( (export FLEET_CRED_SID=sid-ds; run /fleet-history) )"
+[ ! -e "$WORK/codex-ran" ] && grep -q '^ANTHROPIC_BASE_URL=http://127.0.0.1:4321/deepseek$' "$WORK/env" 2>/dev/null \
+  || st_fail "J7BN deepseek on a FLEET_AGENT=codex fleet must launch Claude Code" "codex-ran=$([ -e "$WORK/codex-ran" ] && echo yes || echo no) $(cat "$WORK/env" 2>/dev/null)"
+rm -f "$WORK/bin/fleet-codex.sh" "$WORK/codex-ran"
+st_pass "J7BN deepseek on a FLEET_AGENT=codex fleet: Claude Code, never fleet-codex.sh"
 rm -f "$WORK/argv"
 out=$(printf 'FLEET_MODEL="deepseek"\n' > "$WORK/conf/fleets/f1/conf"
       unset FLEET_CRED_SID FLEET_MODEL; bash "$WORK/bin/fleet-claude.sh" /fleet-history 2>&1 >/dev/null); rc=$?
