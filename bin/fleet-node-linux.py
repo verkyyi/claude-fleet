@@ -421,6 +421,13 @@ def devnet_settings(env):
         pairs += list(cluster_caches(caches))
     elif env.get('FLEET_CN_MIRRORS', '') == '1':
         pairs += list(CN_MIRRORS)
+    # a mainland pod (task J7BN P1, render.py exec_region): every shell's
+    # fleet-claude.sh / fleet-codex.sh sees the region, not only the node program
+    region = env.get('FLEET_EXEC_REGION', '').strip()
+    if region and region != 'cn':
+        raise ValueError('FLEET_EXEC_REGION is cn or nothing, not %r' % region)
+    if region:
+        pairs.append(('FLEET_EXEC_REGION', region))
     return ('\n'.join(git) + '\n' if git else '', ''.join('%s=%s\n' % kv for kv in pairs))
 
 

@@ -64,6 +64,12 @@ kubectl kustomize deploy/k8s/fleet-workers \
   | sed "s#image: fleet-provisioner-image\$#image: $MANAGED_NODE_IMAGE#" | kubectl apply -f -
 ```
 
+**A node pool of its own, a region** (task J7BN P1): `user_pod.node_selector`
+(a label map), `user_pod.tolerations` (a list of `{key, operator, value, effect}`)
+and `user_pod.exec_region` (`cn` only: `FLEET_EXEC_REGION=cn` in the pod, DeepSeek
+sessions only) place every pod this template makes. Left out, the pod renders as
+before. The mainland cluster's template is `../overlays/ack-sz-cn/template.json.tmpl`.
+
 **A new image for the people's pods** (claude-fleet#4174): put its digest in
 `template.json`'s `user_pod.image` (the ConfigMap above, then
 `kubectl -n $NS rollout restart deploy/fleet-provisioner`). A pod already made

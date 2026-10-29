@@ -1,0 +1,52 @@
+# The mainland execution region (task J7BN P1): people's pods for DeepSeek
+# sessions in the Shenzhen ACK cluster, registered with the AWS hub
+# (core.tokenman.io) as its second cluster, `ack-sz`. Only the WORKER side —
+# no hub here (the hub is ../aws-k3s/hub on the EC2 box). Applied by a person
+# (README.md), never by hub-deploy or the release train.
+#
+#   serviceaccounts.yaml  the accounts render.py's pods and the credential proxy
+#                         run as, and fleet-ops' read-only Role
+#   ../../provisioner     fleet-provisioner, its Role, nonce book and the
+#                         cluster-wide admission policy (render.py's template)
+#   credproxy/            the cluster credential proxy (fleet-credproxy:80),
+#                         --direct, asking the AWS hub over its public address
+#   template.json.tmpl    the provisioner's template (NOT a resource: the README
+#                         fills it and makes ConfigMap fleet-provisioner from it)
+#
+# Everything fleet runs here sits on the mainland node pool (label
+# fleet/region=cn, taint fleet/region=cn:NoSchedule) — the people's pods by the
+# provisioner template (node_selector / tolerations), the rest by the patches
+# below. No NetworkPolicy: ACK's flannel enforces none, so a person's pod is
+# walled by its own egress guard (render.py EGRESS — whose defaults ARE this
+# cluster's ranges) plus one allow line, the credential proxy's ClusterIP.
+#
+# Placeholders the README's apply replaces in the render (no registry, address
+# or secret is committed):
+#   acr.invalid/fleet/fleet-managed-node:set-by-person  the managed-node image, by digest
+#   acr.invalid/fleet/ccquota:set-by-person             the ccquota image, the AWS hub's tag
+#
+# Image pulls: the ACR password-free plugin's own Secret for the VPC endpoint,
+# acr-credential-<md5 of the registry VPC endpoint host> — kept fresh
+# by the plugin (a copy under another name would expire with its token).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - serviceaccounts.yaml
+  - ../../provisioner
+  - credproxy
+images:
+  - name: fleet-provisioner-image
+    newName: acr.invalid/fleet/fleet-managed-node
+    newTag: set-by-person
+patches:
+  - target: {kind: Deployment, name: fleet-provisioner}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/imagePullSecrets
+        value: [{name: acr-credential-6731ef77d88edc24b279ebf20860f30f}]
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value: {fleet/region: cn}
+      - op: add
+        path: /spec/template/spec/tolerations
+        value: [{key: fleet/region, operator: Equal, value: cn, effect: NoSchedule}]

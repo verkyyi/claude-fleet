@@ -648,6 +648,69 @@ def pod_login(login, uid):
     return login, uid
 
 
+# Where a person's pod may run (task J7BN P1): a cluster with a node pool of its
+# own (ACK Shenzhen's mainland pool: label fleet/region=cn, taint
+# fleet/region=cn:NoSchedule) names it in the provisioner template's user_pod.
+# node_selector / tolerations; exec_region "cn" puts FLEET_EXEC_REGION=cn into
+# the pod (fleet-claude.sh then starts only a DeepSeek profile, fleet-codex.sh
+# none). None of the three given = the pod renders byte for byte as before.
+EXEC_REGIONS = ('cn',)
+LABEL_KEY_RE = r'([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*/)?' \
+               r'[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?'
+LABEL_VALUE_RE = r'([A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?)?'
+TOLERATION_KEYS = ('key', 'operator', 'value', 'effect', 'tolerationSeconds')
+TOLERATION_EFFECTS = ('NoSchedule', 'PreferNoSchedule', 'NoExecute')
+
+
+def pod_placement(node_selector=None, tolerations=None, exec_region=''):
+    """The checked (nodeSelector, tolerations, exec_region) of a person's pod."""
+    sel = node_selector or {}
+    if not isinstance(sel, dict):
+        raise ValueError('node_selector is a map of label to value, not %r' % (sel,))
+    for k, v in sel.items():
+        if not isinstance(k, str) or not re.fullmatch(LABEL_KEY_RE, k) or len(k) > 317:
+            raise ValueError('node_selector: %r is not a label key' % (k,))
+        if not isinstance(v, str) or not re.fullmatch(LABEL_VALUE_RE, v):
+            raise ValueError('node_selector: %r is not a label value' % (v,))
+    tol = tolerations or []
+    if not isinstance(tol, (list, tuple)):
+        raise ValueError('tolerations is a list, not %r' % (tol,))
+    out = []
+    for t in tol:
+        if not isinstance(t, dict) or not t or set(t) - set(TOLERATION_KEYS):
+            raise ValueError('a toleration takes only %s, not %r' % ('/'.join(TOLERATION_KEYS), t))
+        op = t.get('operator', 'Equal')
+        if op not in ('Equal', 'Exists'):
+            raise ValueError('a toleration\'s operator is Equal or Exists, not %r' % (op,))
+        if 'key' in t and (not isinstance(t['key'], str) or not re.fullmatch(LABEL_KEY_RE, t['key'])):
+            raise ValueError('a toleration\'s key is a taint key, not %r' % (t['key'],))
+        if 'key' not in t and op != 'Exists':
+            raise ValueError('a toleration with no key tolerates every taint: operator Exists, said so')
+        if 'value' in t and (op == 'Exists' or not isinstance(t['value'], str)
+                             or not re.fullmatch(LABEL_VALUE_RE, t['value'])):
+            raise ValueError('a toleration\'s value is a label value under Equal, not %r' % (t['value'],))
+        if 'effect' in t and t['effect'] not in TOLERATION_EFFECTS:
+            raise ValueError('a toleration\'s effect is one of %s, not %r' % ('/'.join(TOLERATION_EFFECTS), t['effect']))
+        if 'tolerationSeconds' in t and (t.get('effect') != 'NoExecute' or isinstance(t['tolerationSeconds'], bool)
+                                         or not isinstance(t['tolerationSeconds'], int)):
+            raise ValueError('tolerationSeconds is a whole number, for effect NoExecute only')
+        out.append(dict(t))
+    if exec_region and exec_region not in EXEC_REGIONS:
+        raise ValueError('exec_region is %s or nothing, not %r' % ('/'.join(EXEC_REGIONS), exec_region))
+    return dict(sel), out, exec_region or ''
+
+
+def toleration_arg(text):
+    """--toleration KEY[=VALUE]:EFFECT as a toleration (Exists when no value)."""
+    kv, sep, effect = text.rpartition(':')
+    if not sep:
+        raise ValueError('--toleration is KEY[=VALUE]:EFFECT, not %r' % text)
+    key, eq, value = kv.partition('=')
+    t = {'key': key, 'operator': 'Equal', 'value': value} if eq else {'key': key, 'operator': 'Exists'}
+    t['effect'] = effect
+    return t
+
+
 def _etc_mounts(names):
     return [{'name': 'pod-etc', 'mountPath': POD_ETC_FILES.get(n, '/etc/ssh/' + n), 'subPath': n,
              'readOnly': True} for n in names]
@@ -656,7 +719,8 @@ def _etc_mounts(names):
 def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers', limits=None, egress=None,
                        pull_secrets=('acr-pull',), github_proxy='', git_mirrors=(), cn_mirrors=False,
                        cred_central='', egress_proxy='', egress_closed=False, cluster_caches=False, relay='',
-                       login='', uid=0, private_mirrors=(), hub_internal='', requests=None):
+                       login='', uid=0, private_mirrors=(), hub_internal='', requests=None,
+                       node_selector=None, tolerations=None, exec_region=''):
     """One person's pod: a Deployment (one replica, Recreate), its ClusterIP
     Service (22, reached only through the cluster's door — C4) and its home disk
     (ReadWriteOncePod). Inside: one login, the one it was made for (--login /
@@ -666,7 +730,9 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
     fleet/principal label — the provisioner writes that once the pod is ready.
     `private_mirrors` (#4002): the mirrors only their lists may read; this pod
     gets the ones whose list names its login, and nothing of the others.
-    `hub_internal` (#4175): the hub's Service its machine-to-hub calls dial."""
+    `hub_internal` (#4175): the hub's Service its machine-to-hub calls dial.
+    `node_selector` / `tolerations` / `exec_region` (J7BN P1): pod_placement()."""
+    node_selector, tolerations, exec_region = pod_placement(node_selector, tolerations, exec_region)
     dns, blocked, metadata, allow = _checked(image, hub, storage_class, pull_secrets, egress, github_proxy,
                                              git_mirrors, cred_central, egress_proxy, egress_closed,
                                              cn_mirrors, cluster_caches, namespace)
@@ -690,6 +756,9 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
     meta = {'name': name, 'namespace': namespace, 'labels': labels}
     devnet = _devnet_env(github_proxy, git_mirrors, cn_mirrors, cred_central, egress_proxy, cluster_caches,
                          namespace)
+    if exec_region:
+        # the node program and pod-etc both: /etc/fleet-devnet.env carries it to every shell
+        devnet.append({'name': 'FLEET_EXEC_REGION', 'value': exec_region})
     who = [{'name': 'FLEET_POD_LOGIN', 'value': login}, {'name': 'FLEET_POD_UID', 'value': str(uid)}]
     env = [{'name': 'FLEET_HUB_URL', 'value': hub},
            {'name': 'FLEET_MACHINE_JOIN_FILE', 'value': '/run/fleet-join/machine'},
@@ -754,7 +823,7 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                             'capabilities': drop(), 'seccompProfile': rt()},
         'volumeMounts': [{'name': 'pod-etc', 'mountPath': '/pod-etc'}],
     }
-    return [
+    items = [
         {'apiVersion': 'v1', 'kind': 'PersistentVolumeClaim', 'metadata': meta,
          'spec': {'accessModes': ['ReadWriteOncePod'], 'storageClassName': storage_class,
                   'resources': {'requests': {'storage': limits['disk']}}}},
@@ -786,6 +855,12 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                                   {'name': 'sshd-key', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}},
                                   {'name': 'egress-run', 'emptyDir': {'medium': 'Memory', 'sizeLimit': '1Mi'}}]}}}},
     ]
+    pod = items[2]['spec']['template']['spec']
+    if node_selector:
+        pod['nodeSelector'] = node_selector
+    if tolerations:
+        pod['tolerations'] = tolerations
+    return items
 
 
 # The cluster's one door (#3549, EPIC #3500 C4): ONE load balancer for every
@@ -1290,6 +1365,13 @@ if __name__ == '__main__':
     p.add_argument('--limits', default='', metavar='cpu=2,memory=6Gi,disk=50Gi',
                    help="the pod's ceiling: the hub's fleet.user_pod_limits.<principal> value (default %s)"
                         % ','.join('%s=%s' % kv for kv in USER_POD_LIMITS.items()))
+    # where it runs (task J7BN P1): a node pool of its own, a mainland region
+    p.add_argument('--node-selector', action='append', default=[], metavar='KEY=VALUE',
+                   help="a --user-pod's nodeSelector label (repeatable), e.g. fleet/region=cn")
+    p.add_argument('--toleration', action='append', default=[], metavar='KEY[=VALUE]:EFFECT',
+                   help="a taint a --user-pod tolerates (repeatable), e.g. fleet/region=cn:NoSchedule")
+    p.add_argument('--exec-region', default='', choices=('',) + EXEC_REGIONS,
+                   help="a --user-pod's execution region: cn = FLEET_EXEC_REGION=cn, DeepSeek sessions only")
     # the cluster's one door (#3549; docs/dev/MANAGED-LINUX.md «The door»)
     p.add_argument('--door', action='store_true',
                    help="render the cluster's one door (LoadBalancer + Deployment) instead of a node")
@@ -1335,6 +1417,8 @@ if __name__ == '__main__':
         if args.mirror_grant:
             print(json.dumps(mirror_grant_patch(json.load(sys.stdin), private), indent=2))
             raise SystemExit(0)
+        if (args.node_selector or args.toleration or args.exec_region) and not args.user_pod:
+            raise ValueError('--node-selector / --toleration / --exec-region are a --user-pod\'s')
         if private and not args.user_pod:
             raise ValueError('--private-mirrors is per login: a --user-pod only (a shared node has many logins)')
         if args.image_patch:
@@ -1379,7 +1463,10 @@ if __name__ == '__main__':
                                        egress_proxy=args.egress_proxy, egress_closed=args.egress_closed,
                                        cluster_caches=args.cluster_caches, relay=args.relay,
                                        login=args.login, uid=args.uid, private_mirrors=private,
-                                       hub_internal=args.hub_internal)
+                                       hub_internal=args.hub_internal,
+                                       node_selector=dict(kv.partition('=')[::2] for kv in args.node_selector),
+                                       tolerations=[toleration_arg(t) for t in args.toleration],
+                                       exec_region=args.exec_region)
         else:
             items = resources(args.image, args.hub, args.storage_class, args.namespace,
                               entry_host=args.entry_host, entry_spec=args.entry_lb_spec, egress=egress,

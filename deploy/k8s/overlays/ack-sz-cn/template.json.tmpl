@@ -1,0 +1,13 @@
+{"cluster": "ack-sz", "namespace": "fleet-workers",
+ "user_pod": {"image": "@MANAGED_NODE_IMAGE@",
+              "hub": "https://core.tokenman.io",
+              "storage_class": "fleet-workers-essd-retain",
+              "cred_central": "http://fleet-credproxy.fleet-workers.svc.cluster.local",
+              "egress": {"allow": ["@CREDPROXY_IP@:80"]},
+              "cn_mirrors": true,
+              "pull_secrets": ["acr-credential-6731ef77d88edc24b279ebf20860f30f"],
+              "requests": {"cpu": "500m", "memory": "3Gi"},
+              "limits": "cpu=4,memory=8Gi,disk=30Gi",
+              "node_selector": {"fleet/region": "cn"},
+              "tolerations": [{"key": "fleet/region", "operator": "Equal", "value": "cn", "effect": "NoSchedule"}],
+              "exec_region": "cn"}}
