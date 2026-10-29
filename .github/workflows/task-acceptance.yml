@@ -11,7 +11,8 @@ on:
 
 jobs:
   fixtures:
-    runs-on: ubuntu-latest
+    # pinned: ubuntu-latest moved to 26.04, where `playwright install chromium` refuses
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
