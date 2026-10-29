@@ -169,6 +169,21 @@ grep -q -- '--agent claude' "$WORK/newwin" || st_fail "D a default spawn freezes
 grep -q 'unknown --agent' "$WORK/spawn.err" || st_fail "D an unknown --agent should be reported on stderr" "$(cat "$WORK/spawn.err")"
 st_pass "D --agent codex rides the launch command; default is frozen; unknown is refused (#4392)"
 
+# ===== SEED M: --model (task J7BN P1) =========================================
+# A DeepSeek profile chosen at creation reaches the launcher as `--model <m>`
+# (bin/fleet-claude.sh reads it), before the seed; it is Claude even when the
+# spawn said codex, and the window is stamped @cc_model_fixed 1 + @cc_model. Any
+# other model is refused, exit 2, one line, nothing opened.
+: > "$WORK/newwin"; run_spawn 234 --agent codex --model DeepSeek
+sed 's/ --as fleet-worker//g' "$WORK/newwin" | grep -qF -- "fleet-session-wrap.sh' --agent claude --model deepseek \"\$(cat '" \
+  || st_fail "M --model deepseek must ride the launch command as Claude" "$(cat "$WORK/newwin")"
+grep -qF -- "@cc_model_fixed '1'" "$WORK/newwin" && grep -qF -- "@cc_model 'deepseek'" "$WORK/newwin" \
+  || st_fail "M the window must be stamped @cc_model_fixed 1 + @cc_model deepseek" "$(cat "$WORK/newwin")"
+: > "$WORK/newwin"; run_spawn 234 --model opus; rc=$?
+[ "$rc" = 2 ] && [ ! -s "$WORK/newwin" ] && [ "$(grep -c 'must be deepseek or deepseek-pro' "$WORK/spawn.err")" = 1 ] \
+  || st_fail "M --model opus must be refused, exit 2, one line, nothing opened (rc $rc)" "$(cat "$WORK/spawn.err")"
+st_pass "M --model deepseek rides the launch as Claude, stamped fixed; --model opus refused"
+
 # ===== SEED R: a PARKED session's return (--resume + --seed-file, issue #2671) ===
 # The same conversation (`--resume <sid>` between the launcher and the seed) and
 # the seed file's text as its first turn — only while the transcript is still in

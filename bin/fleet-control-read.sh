@@ -611,6 +611,11 @@ for line in sys.stdin:
     # release, so it is here too — --as to the spawner. Unset ⇒ the argv as it was.
     asarg="${FLEET_CONTROL_AS:-}"
     case "$asarg" in [A-Za-z0-9]*) case "$asarg" in *[!A-Za-z0-9_.:-]*) asarg='' ;; esac ;; *) asarg='' ;; esac
+    # The model the asker chose at creation (J7BN P1, validated by the
+    # controller): a DeepSeek profile only — --model to the spawner. Unset ⇒ the
+    # argv is exactly what it was.
+    modelarg="${FLEET_CONTROL_MODEL:-}"
+    case "$modelarg" in deepseek|deepseek-pro) ;; *) modelarg='' ;; esac
     if [ "${3:-}" = scratch ]; then
       # A raw scratch session the hub placed here (issue #1541): no issue, no
       # claim — dash-raw-session.sh in its headless form, with $8 (the name the
@@ -632,7 +637,7 @@ for line in sys.stdin:
       # $10 = `test` (issue #2505): the TEST identity's client placed it — the
       # window is marked, named test-… and closed soon (dash-raw-session.sh).
       tiarg=''; [ "${10:-}" = test ] && tiarg=--test-identity
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${asarg:+--as "$asarg"} ${seedf:+"$seedflag=$seedf"}
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" ${srepo:+--repo "$srepo"} ${nrarg:+"$nrarg"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${sname:+--name "$sname"} ${9:+--reap "$9"} $tiarg ${taskarg:+--task "$taskarg"} ${asarg:+--as "$asarg"} ${modelarg:+--model "$modelarg"} ${seedf:+"$seedflag=$seedf"}
     fi
     num="${3:-}"
     if [ "$num" = new ]; then
@@ -647,11 +652,11 @@ for line in sys.stdin:
       first=$nbody; [ -n "${first//[[:space:]]/}" ] || first=${8:-}
       wordsf=$(mktemp "${TMPDIR:-/tmp}/fcr-words.XXXXXX") || { printf 'start: no temp file\n' >&2; exit 1; }
       printf '%s\n' "$first" > "$wordsf"
-      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" --task "$taskarg" ${asarg:+--as "$asarg"} "--prompt-file=$wordsf"
+      exec bash "$BIN/dash-raw-session.sh" "$sess" --origin hub --print --agent "$agent" --repo "$srepo" ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} --name "${8:-}" --reap "${9:-merged}" --task "$taskarg" ${asarg:+--as "$asarg"} ${modelarg:+--model "$modelarg"} "--prompt-file=$wordsf"
     fi
     # --print (issue #2237): the window it opened, last on stdout — the controller
     # reads that one window's row back instead of the whole fleet's.
-    exec bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${taskarg:+--task "$taskarg"} ${asarg:+--as "$asarg"}
+    exec bash "$BIN/dash-issue-session.sh" "$num" "$sess" --print --agent "$agent" --origin hub ${srepo:+--repo "$srepo"} ${owid:+--origin-wid "$owid"} ${here:+--node "$here"} ${acls:+--account "$acls"} ${taskarg:+--task "$taskarg"} ${asarg:+--as "$asarg"} ${modelarg:+--model "$modelarg"}
     ;;
   # --- worker lifecycle by DURABLE key (issue #834) ---------------------------
   # $3 is issue-<N> / scratch-<N>; the window is re-resolved on the fleet at

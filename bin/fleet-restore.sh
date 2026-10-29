@@ -327,6 +327,12 @@ snapshot() {
     # window ⇒ no row, the map byte for byte.
     tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}|#{@agent_def}' 2>/dev/null \
       | awk -F'|' '$1 != "" && $2 ~ /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/ { printf "AGENTDEF\t%s\t%s\n", $1, $2 }' >> "$tmp"
+    # The model a session was created on (task J7BN P1): `MODEL<TAB><fleet_id>
+    # <TAB><deepseek|deepseek-pro>` rows, off @cc_model_fixed 1 + @cc_model. Its
+    # resume used to come back on the fleet's default model — a DeepSeek session
+    # would return on an Anthropic account. No such window ⇒ no row.
+    tmux -L "$sock" list-windows -t "$sess" -F '#{@fleet_id}|#{@cc_model_fixed}|#{@cc_model}' 2>/dev/null \
+      | awk -F'|' '$1 != "" && $2 == "1" && ($3 == "deepseek" || $3 == "deepseek-pro") { printf "MODEL\t%s\t%s\n", $1, $3 }' >> "$tmp"
     # Explicit execution metadata is a restriction, never a new grant. Keep it
     # in its own identity-keyed row so a lost local DB cannot turn a controlled
     # restore into legacy. Base64 keeps even malformed/multiline metadata from
@@ -567,7 +573,7 @@ pullback_run() {
       printf 'FID\t%s\n%s\n' "$fid" "WIN${line#WIN:"$fid"}" >> "$keep"
       n=$((n + 1))
     done < <(fleet_restore_wins "$pb")
-    awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN" || $1 == "AGENTDEF" || $1 == "EXECUTION"' "$mf" >> "$keep" 2>/dev/null   # identity-keyed metadata rides along, including explicit execution restrictions
+    awk -F'\t' '$1 == "DESK" || $1 == "OWID" || $1 == "PIN" || $1 == "AGENTDEF" || $1 == "MODEL" || $1 == "EXECUTION"' "$mf" >> "$keep" 2>/dev/null   # identity-keyed metadata rides along, including explicit execution restrictions
     rm -f "$pb"
     if [ "$n" = 0 ]; then rm -f "$keep"; continue; fi
     log "pullback: $sess — reopening $n killed session window(s)"
@@ -825,6 +831,14 @@ restore() {
         wasdef=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "AGENTDEF" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
         case "$wasdef" in ''|[!A-Za-z0-9]*|*[!A-Za-z0-9_.:-]*) ;; *) launch="$launch --as '$wasdef'" ;; esac ;;
       esac
+      # The model it was created on (task J7BN P1): the map's MODEL row, by
+      # identity — the resume starts `--model <m>` (fleet-claude.sh's DeepSeek
+      # profile) and the window is stamped fixed again. No row ⇒ as before.
+      local wasmodel=''
+      case "$wtag" in WIN:?*)
+        wasmodel=$(awk -F'\t' -v f="${wtag#WIN:}" '$1 == "MODEL" && $2 == f { print $3; exit }' "$mf" 2>/dev/null)
+        case "$wasmodel" in deepseek|deepseek-pro) launch="$launch --model $wasmodel" ;; *) wasmodel='' ;; esac ;;
+      esac
       # NEVER a silent fresh session (issue #1265). A stale/pruned id used to fall
       # through `|| fleet-claude.sh` to a FRESH claude, and a window with no
       # transcript launched one outright — either way the window looked restored
@@ -860,6 +874,7 @@ restore() {
       # A session that binds no issue (a scratch, a no-repo one — its desk ticket is
       # not a binding) may spawn (issue #4334): its @agent_spawn back before its launcher mounts the dispatch group.
       { [ "${wraw:-}" = 1 ] || [ "${wrepo:-}" = - ]; } && stamp="$stamp$(fleet_win_stamp_cmd @agent_spawn 1)"
+      [ -n "$wasmodel" ] && stamp="$stamp$(fleet_win_stamp_cmd @cc_model_fixed 1 @cc_model "$wasmodel")"
       # The wrapper must see its lifelong identity and explicit restriction
       # before its very first instruction. Parent-side writes after new-window
       # race the launch and can bypass a durable stop as a seemingly old session.

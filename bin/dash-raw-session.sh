@@ -134,7 +134,7 @@ set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside 
   AGENT=$1
 }
 RAW_ARGV=("$@")   # as called: a prestart that did not hold starts this run again (T992)
-PRESTART_DIR=""; NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""
+PRESTART_DIR=""; NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""; MODEL_ARG=""
 CX_HOME=""; STRICT_RESUME=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -168,6 +168,12 @@ while [ "$#" -gt 0 ]; do
     # is here). None = a plain scratch, as before.
     --as)          AS_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --as=*)        AS_ARG="${1#--as=}"; shift ;;
+    # --model <m> (task J7BN P1): the model chosen at creation — a DeepSeek
+    # profile only (deepseek | deepseek-pro): Claude Code on DeepSeek through the
+    # credential proxy, so the session is Claude even on a codex fleet, and fixed
+    # for its life (@cc_model_fixed 1). Anything else is refused (exit 2).
+    --model)       MODEL_ARG="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --model=*)     MODEL_ARG="${1#--model=}"; shift ;;
     --bg)          BG=1; shift ;;
     # --pin (issue #1169): stamp @pin 1 so the window sorts to the top of the
     # dash (dash-pin-toggle.sh's tier) — fleet-up's first-fleet guide.
@@ -292,6 +298,15 @@ case "$AS_ARG" in
   *[!A-Za-z0-9_.:-]*|[!A-Za-z0-9]*) printf 'dash-raw-session: not an agent name: %s\n' "$AS_ARG" >&2; exit 1 ;;
   *) ;;
 esac
+if [ -n "$MODEL_ARG" ]; then
+  case "$(printf '%s' "$MODEL_ARG" | tr '[:upper:]' '[:lower:]')" in
+    deepseek)     MODEL_ARG=deepseek ;;
+    deepseek-pro) MODEL_ARG=deepseek-pro ;;
+    *) printf 'dash-raw-session: --model must be deepseek or deepseek-pro (got %s)\n' "$MODEL_ARG" >&2; exit 2 ;;
+  esac
+  [ -z "$CX_HOME" ] || { printf 'dash-raw-session: --model %s is a Claude Code session; it cannot resume a Codex home\n' "$MODEL_ARG" >&2; exit 2; }
+  AGENT=claude   # a DeepSeek profile is Claude Code, whatever the fleet's agent
+fi
 BIN="$(cd "$(dirname "$0")" && pwd)"
 EXPLICIT_AGENT=$AGENT
 DISPATCH="${FLEET_DISPATCH:-}"
@@ -704,6 +719,7 @@ if [ "$BG" = 1 ]; then
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
   [ "$PLACEHOLDER" = 1 ] && owarg="$owarg --placeholder"
   [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
+  [ -n "$MODEL_ARG" ] && owarg="$owarg --model=$MODEL_ARG"   # deepseek[-pro], checked above
   [ -n "$RESUME_SID" ] && owarg="$owarg --resume=$RESUME_SID"   # hex + dashes, checked above
   case "$WT_ARG" in '') ;; *"'"*) refuse "raw: --worktree path has a quote"; exit 1 ;;
     *) owarg="$owarg --worktree='$WT_ARG'" ;; esac
@@ -745,11 +761,14 @@ PLACE_AS=''
 if [ "$PLACING" = 1 ] && [ -n "$AS_ARG" ]; then
   if fleet_agent_file_travels "$AS_ARG"; then PLACE_AS=$AS_ARG; else _as_here=1; fi
 fi
+# A model chosen here (--model, task J7BN P1) does not ride a placement: it opens here.
+[ "$PLACING" = 1 ] && [ -n "$MODEL_ARG" ] && _model_here=1
 if [ "$PLACING" = 1 ]; then
-  if { [ "$NOREPO" = 1 ] && [ -z "$TASK_REF" ]; } || [ -n "$DRAFT" ] || [ -n "${_as_here:-}" ]; then
+  if { [ "$NOREPO" = 1 ] && [ -z "$TASK_REF" ]; } || [ -n "$DRAFT" ] || [ -n "${_as_here:-}" ] || [ -n "${_model_here:-}" ]; then
     _why='a no-repo scratch with no task record'
     [ -n "$DRAFT" ] && _why='a draft scratch (--draft)'
     [ -n "${_as_here:-}" ] && _why="a session as $AS_ARG (the agent file is here)"
+    [ -n "${_model_here:-}" ] && _why="a session on --model $MODEL_ARG"
     if [ "$NODE" != auto ]; then refuse "raw: $_why opens on this machine only — not opening it on $NODE"; exit 1; fi
     PLACING=0
   elif [ "${CCQUOTA_FLEET:-0}" != 1 ]; then
@@ -1154,7 +1173,10 @@ fi
   # worker seed (tiny, and the path is the debug trail for "what did I seed?").
   # `--agent <a>` (issue #547) rides in the command when a caller chose one; the
   # launcher consumes it. Validated to claude|codex above, so bare is safe.
-  launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}"
+  # --model (task J7BN P1, deepseek[-pro] checked above) rides the launcher's
+  # argv — fleet-claude.sh reads it as the DeepSeek profile, the wrapper keeps it
+  # for every resume of this window.
+  launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}${MODEL_ARG:+ --model $MODEL_ARG}"
   [ -n "$FILL_MARK" ] && launch="FLEET_WT_PENDING=$(printf '%q' "$FILL_MARK") $launch"
   # The window stamps its own repo identity BEFORE the launcher reads its conf
   # (issue #789 — see fleet_win_stamp_cmd).
@@ -1211,6 +1233,9 @@ fi
   # no claim, no launch binding — the window's ID is the session).
   [ -n "$TASK_REF" ] && stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF")"
   [ -n "$PLACED" ] && stamp="$stamp$(fleet_win_stamp_cmd @placed "$PLACED")"
+  # a model chosen at creation is the session's for life (J7BN P1): no switch,
+  # no transfer; restore carries it (fleet-restore.sh's MODEL row)
+  [ -n "$MODEL_ARG" ] && stamp="$stamp$(fleet_win_stamp_cmd @cc_model_fixed 1 @cc_model "$MODEL_ARG")"
   # a blank session's placeholder name, renamed by its first prompt (T652)
   [ "$PLACEHOLDER" = 1 ] && [ -n "$NAME" ] && stamp="$stamp$(fleet_win_stamp_cmd @title_pending "$NAME")"
   # C2: the task's ID, and — a redo here — its next attempt opened before the agent

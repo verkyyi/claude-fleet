@@ -555,6 +555,26 @@ grep -q 'authorization changed or cancelled' "$WORK/err" || fail "S did not reac
 [ ! -d "$WORK/main-scratch-1" ] || fail "S cancelled dispatch left its newly allocated worktree"
 git -C "$MAIN" show-ref --verify -q refs/heads/scratch-1 && fail "S cancelled dispatch left its newly allocated branch"
 ok "S cancelled dispatch opens nothing and releases its newly allocated scratch tree"
+rm -f "$WORK/bin/fleet-task-record.sh"
+
+# T: --model (task J7BN P1) — a DeepSeek profile chosen at creation reaches the
+# launcher's argv (fleet-session-wrap.sh … --model <m>, read by fleet-claude.sh),
+# is Claude even on a codex fleet, and stamps @cc_model_fixed 1 + @cc_model; any
+# other model is refused, exit 2, one line, no window.
+reset_scratch
+WINS=plan FLEET_MAX_SESSIONS=0 FLEET_AGENT=codex run_raw --model DeepSeek-Pro; rc=$?
+[ "$rc" = 0 ] || fail "T a --model deepseek-pro scratch was refused (rc $rc)" "$(cat "$WORK/err")"
+grep -q -- "fleet-session-wrap.sh' --agent claude --model deepseek-pro" "$NEWWIN_LOG" \
+  || fail "T --model did not reach the launcher as Claude" "$(cat "$NEWWIN_LOG")"
+cat "$NEWWIN_LOG" "$OPTS_LOG" | grep -q "@cc_model_fixed '1'\|@cc_model_fixed 1" \
+  || fail "T the window was not stamped @cc_model_fixed" "$(cat "$NEWWIN_LOG" "$OPTS_LOG")"
+cat "$NEWWIN_LOG" "$OPTS_LOG" | grep -q "@cc_model 'deepseek-pro'\|@cc_model deepseek-pro" \
+  || fail "T the window was not stamped @cc_model deepseek-pro" "$(cat "$NEWWIN_LOG" "$OPTS_LOG")"
+reset_scratch
+WINS=plan FLEET_MAX_SESSIONS=0 run_raw --model opus; rc=$?
+[ "$rc" = 2 ] && [ ! -s "$NEWWIN_LOG" ] && [ "$(grep -c 'must be deepseek or deepseek-pro' "$WORK/err")" = 1 ] \
+  || fail "T --model opus should be refused, exit 2, one line, no window (rc $rc)" "$(cat "$WORK/err")"
+ok "T --model deepseek-pro: Claude on a codex fleet, --model in the launch, @cc_model_fixed; --model opus refused"
 
 printf '\nselftest OK: %s assertions passed (raw scratch worktree session, #214/#290/#531)\n' "$pass"
 exit 0

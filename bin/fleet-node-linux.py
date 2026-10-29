@@ -353,6 +353,8 @@ CN_MIRRORS = (('npm_config_registry', 'https://registry.npmmirror.com'),
               ('COREPACK_ENABLE_DOWNLOAD_PROMPT', '0'),
               ('NVM_NODEJS_ORG_MIRROR', 'https://npmmirror.com/mirrors/node'),
               ('FNM_NODE_DIST_MIRROR', 'https://npmmirror.com/mirrors/node'),
+              ('PIP_INDEX_URL', 'https://pypi.tuna.tsinghua.edu.cn/simple'),
+              ('UV_DEFAULT_INDEX', 'https://pypi.tuna.tsinghua.edu.cn/simple'),
               ('GOPROXY', 'https://goproxy.cn,direct'),
               ('GOSUMDB', 'sum.golang.google.cn'))
 NS_RE = re.compile(r'[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?')

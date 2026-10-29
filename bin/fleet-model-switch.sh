@@ -331,7 +331,7 @@ main() {
   wopt() { TM display-message -p -t "$1" "$2" 2>/dev/null; }
   cap()  { TM capture-pane -p -t "$1" 2>/dev/null; }
 
-  local switched=0 skipped=0 failed=0 handed=0 REPORT=""
+  local switched=0 skipped=0 failed=0 handed=0 fixed=0 REPORT=""
   note() { REPORT="${REPORT}${REPORT:+; }$1"; }
 
   # ---- the breadcrumb (issue #706) -----------------------------------------
@@ -470,6 +470,13 @@ main() {
     # nothing a builtin cannot do (issue #706).
     [[ "$name" =~ $PANEL_RE ]] && continue
     [ -n "$M_HUB" ] && continue
+    # A model chosen at creation is the session's for life (task J7BN P1,
+    # @cc_model_fixed 1 — a DeepSeek profile): never switched, never handed to
+    # migrate. Named explicitly ⇒ said and the run exits 1; a sweep passes it by.
+    if [ "$(wopt "$wid" '#{@cc_model_fixed}')" = 1 ]; then
+      [ "$MODE" = explicit ] && { printf 'fleet-model-switch: %s runs on a model fixed at creation (%s) — no model switch\n' "$wid" "$(wopt "$wid" '#{@cc_model}')" >&2; fixed=$((fixed+1)); }
+      continue
+    fi
     cpid=$(cpid_of "$M_PPID") || { [ "$MODE" = explicit ] && { printf '  – %s: no Claude process — skipped\n' "$wid"; skipped=$((skipped+1)); }; continue; }
     [ -n "$cpid" ] || continue
     state="$M_STATE"
@@ -690,6 +697,7 @@ main() {
     if [ "$TOAST" = 2 ]; then bash "$BIN/fleet-alerts.sh" event ${SOCK:+-L "$SOCK"} model-switch "$sum" >/dev/null 2>&1
     elif [ "$TOAST" = 1 ]; then fleet_notice info "$sum" ${SOCK:+--sock "$SOCK"} --source model-switch; fi   # toast-ok: --toast = a keypress
   fi
+  [ "$fixed" -eq 0 ] || return 1
   return 0
 }
 

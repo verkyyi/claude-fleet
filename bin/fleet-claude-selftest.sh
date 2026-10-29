@@ -441,6 +441,24 @@ out=$(printf 'FLEET_MODEL="deepseek"\n' > "$WORK/conf/fleets/f1/conf"
 [ "$rc" = 1 ] && [ ! -e "$WORK/argv" ] && [ "$(printf '%s\n' "$out" | grep -c 'only through the credential proxy')" = 1 ] \
   || st_fail "J7BN deepseek without the proxy must refuse with one line (rc=$rc)" "$out"
 st_pass "J7BN deepseek without the credential proxy: refused, one line, claude never started"
+# P1's pod backstop: FLEET_EXEC_REGION=cn (render.py on a mainland pod) starts only
+# a DeepSeek profile — an Anthropic model is refused with one line and
+# @launch_refused region; bin/fleet-codex.sh refuses outright.
+printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
+rm -f "$WORK/argv"; : > "$WORK/tmuxlog"
+out=$( (export FLEET_CRED_SID=sid-ds FLEET_EXEC_REGION=cn; unset FLEET_MODEL
+        bash "$WORK/bin/fleet-claude.sh" /fleet-history) 2>&1 >/dev/null); rc=$?
+[ "$rc" = 1 ] && [ ! -e "$WORK/argv" ] && [ "$(printf '%s\n' "$out" | grep -c 'mainland region')" = 1 ] \
+  && grep -q '@launch_refused region' "$WORK/tmuxlog" \
+  || st_fail "J7BN P1 region=cn: an Anthropic model must be refused with one line (rc=$rc)" "$out $(cat "$WORK/tmuxlog")"
+rm -f "$WORK/env"
+argv="$( (export FLEET_CRED_SID=sid-ds FLEET_EXEC_REGION=cn; run --model deepseek-pro /fleet-history) )"
+grep -q '^ANTHROPIC_BASE_URL=http://127.0.0.1:4321/deepseek$' "$WORK/env" 2>/dev/null && has "$argv" /fleet-history \
+  || st_fail "J7BN P1 region=cn: a --model deepseek-pro session must start" "$argv $(cat "$WORK/env" 2>/dev/null)"
+out=$(FLEET_EXEC_REGION=cn bash "$BIN/fleet-codex.sh" 2>&1 </dev/null); rc=$?
+[ "$rc" = 1 ] && [ "$(printf '%s\n' "$out" | grep -c 'mainland region')" = 1 ] \
+  || st_fail "J7BN P1 region=cn: bin/fleet-codex.sh must refuse (rc=$rc)" "$out"
+st_pass "J7BN P1 FLEET_EXEC_REGION=cn: only a DeepSeek profile starts; fleet-codex.sh refuses"
 rm -f "$WORK/bin/fleet-session-cred.sh"
 printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
 mv "$WORK/claude.before" "$WORK/fakebin/claude"

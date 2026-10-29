@@ -44,7 +44,7 @@ set -uo pipefail
 # GATE (cap / dedup / lease) still runs + refuses in the foreground; only its slow
 # tail is backgrounded. Opt-in, interactive-only (a headless TARGET_SESS caller
 # that needs the window id back stays synchronous).
-num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WORDS_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
+num=""; TARGET_SESS=""; WIN_TITLE=""; ORIGIN=""; AGENT=""; REPO_ARG=""; NODE_ARG=""; ORIGIN_WID=""; ACCOUNT_ARG=""; REAP=""; TASK_REF=""; AS_ARG=""; MODEL_ARG=""; RESUME_SID=""; SEED_FILE=""; WORDS_FILE=""; FORCE_FLAG=0; ASYNC_FLAG=0; PRINT_FLAG=0; _pos=0; _want=""
 # Repeated explicit flags must agree; reject before any claim/window/worktree.
 set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside this script or its link's target, T620)
   local s=$0 d
@@ -60,7 +60,7 @@ for _a in "$@"; do
   if [ -n "$_want" ]; then
     case "$_want" in title) WIN_TITLE="$_a" ;; origin) ORIGIN="$_a" ;; agent) set_agent "$_a" ;; repo) REPO_ARG="$_a" ;;
       node) NODE_ARG="$_a" ;; origin-wid) ORIGIN_WID="$_a" ;; account) ACCOUNT_ARG="$_a" ;; reap) REAP="$_a" ;;
-      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; words-file) WORDS_FILE="$_a" ;; as) AS_ARG="$_a" ;; task) TASK_REF="$_a" ;; esac
+      resume) RESUME_SID="$_a" ;; seed-file) SEED_FILE="$_a" ;; words-file) WORDS_FILE="$_a" ;; as) AS_ARG="$_a" ;; task) TASK_REF="$_a" ;; model) MODEL_ARG="$_a" ;; esac
     _want=""; continue
   fi
   # A FUSED "--flag value" (issue #1543) is --flag=value: zsh — Claude's Bash tool —
@@ -128,6 +128,13 @@ for _a in "$@"; do
     # machine (the file is here): no hub placement.
     --as) _want=as ;;
     --as=*) AS_ARG="${_a#--as=}" ;;
+    # --model <m> (task J7BN P1): the model chosen at creation — a DeepSeek
+    # profile only (deepseek | deepseek-pro): Claude Code on DeepSeek through the
+    # credential proxy, so the session is Claude even on a codex fleet, fixed for
+    # its life (@cc_model_fixed 1), and opened on this machine. Anything else is
+    # refused (exit 2).
+    --model) _want=model ;;
+    --model=*) MODEL_ARG="${_a#--model=}" ;;
     # --resume <sid> + --seed-file <f> (issue #2671, EPIC #2668 C3): a PARKED
     # session coming back (a park's wake; the parker left with #4339). The window opens on the same
     # conversation (`--resume <sid>`, Claude only, and only while its transcript is
@@ -165,6 +172,16 @@ case "$AS_ARG" in
        && NODE_ARG=local ;;
 esac
 [ "$_want" != agent ] || { printf 'dash-issue-session: --agent needs a value\n' >&2; exit 2; }
+[ "$_want" != model ] || { printf 'dash-issue-session: --model needs a value\n' >&2; exit 2; }
+if [ -n "$MODEL_ARG" ]; then
+  case "$(printf '%s' "$MODEL_ARG" | tr '[:upper:]' '[:lower:]')" in
+    deepseek)     MODEL_ARG=deepseek ;;
+    deepseek-pro) MODEL_ARG=deepseek-pro ;;
+    *) printf 'dash-issue-session: --model must be deepseek or deepseek-pro (got %s)\n' "$MODEL_ARG" >&2; exit 2 ;;
+  esac
+  AGENT=claude                              # a DeepSeek profile is Claude Code, whatever the fleet's agent
+  [ -z "$NODE_ARG" ] && NODE_ARG=local      # the model does not ride a placement
+fi
 EXPLICIT_AGENT=$AGENT
 case "$ACCOUNT_ARG" in
   ''|local|pool|any) : ;;
@@ -374,6 +391,10 @@ PLACE_AS=''
 if [ -n "$AS_ARG" ]; then
   if fleet_agent_file_travels "$AS_ARG"; then PLACE_AS=$AS_ARG
   elif [ "$NODE" = auto ]; then PLACING=0; fi
+fi
+if [ -n "$MODEL_ARG" ] && [ "$PLACING" = 1 ]; then
+  [ "$NODE" = auto ] || { refuse "#$num: --model $MODEL_ARG opens on this machine only — not opening it on $NODE"; exit "$RC_INFRA"; }
+  PLACING=0
 fi
 # @placed (issue T672): `hub` when the hub chose this machine, `fallback-local`
 # when the hub could not be asked and it opened here anyway; the tail carries it.
@@ -680,7 +701,7 @@ if [ "$ASYNC_FLAG" = 1 ] && [ "$TAIL_ONLY" != 1 ] && [ -z "$TARGET_SESS" ]; then
   # this redirect drops, and the tail has no caller left to read it — the
   # interactive --async path is toast-only by construction).
   _bg="$_bg FLEET_SPAWN_WNAME=$(shq "$wname")"
-  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG}${TASK_REF:+ --task $(shq "$TASK_REF")}${WORDS_FILE:+ --words-file $(shq "$WORDS_FILE")} >/dev/null 2>&1"
+  _bg="$_bg exec $(shq "$SELF") $(shq "$num") --title $(shq "$title")${AGENT:+ --agent $AGENT}${REPO_ARG:+ --repo $(shq "$REPO_ARG")}${ACCOUNT_ARG:+ --account $ACCOUNT_ARG}${REAP:+ --reap $REAP}${AS_ARG:+ --as $AS_ARG}${MODEL_ARG:+ --model $MODEL_ARG}${TASK_REF:+ --task $(shq "$TASK_REF")}${WORDS_FILE:+ --words-file $(shq "$WORDS_FILE")} >/dev/null 2>&1"
   TM run-shell -b "$_bg" 2>/dev/null \
     || { refuse "spawn failed for #$num: dispatch"; exit "$RC_INFRA"; }
   exit 0
@@ -790,6 +811,9 @@ stamp=''; [ -n "$REPO" ] && stamp=$(fleet_win_stamp_cmd @repo "$REPO" @worktree 
 # SessionStart hook carries the flow — on the window before its agent starts.
 [ -n "$SEED_WORDS" ] && stamp="$stamp$(fleet_win_stamp_cmd @seed_words "$SEED_WORDS")"
 [ -n "$PLACED" ] && stamp="$stamp$(fleet_win_stamp_cmd @placed "$PLACED")"
+# a model chosen at creation is the session's for life (J7BN P1): no switch, no
+# transfer; restore carries it (fleet-restore.sh's MODEL row)
+[ -n "$MODEL_ARG" ] && stamp="$stamp$(fleet_win_stamp_cmd @cc_model_fixed 1 @cc_model "$MODEL_ARG")"
 # A task's record rides on the window before its agent starts (EPIC T497 C8: no
 # claim, no launch binding — the window's ID is the session).
 if [ -n "$TASK_REF" ]; then
@@ -821,7 +845,7 @@ fi
 if [ -n "$EXECUTION" ]; then
   python3 "$BIN/fleet_task_execution.py" reserve-window --snapshot "$EXECUTION" || exit 2
 fi
-win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
+win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$wname" -c "$wt" "$stamp$pend'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}${MODEL_ARG:+ --model $MODEL_ARG}$RESUME_ARG \"\$(cat '$tf')\"; exec \$SHELL") \
   || { [ -n "$FILL_PID" ] && { wait "$FILL_PID" 2>/dev/null; rm -f "$FILL_MARK"; }
        _why=''; _down=$(fleet_server_down "$SESS") && _why=" — $_down"  # issue #2477
        fleet_socket_wedged "$SOCK" && _why=" — this fleet's tmux server is gone: its socket $(fleet_socket_path "$SOCK") is held by a dying server that drops every client (tmux says \"server exited unexpectedly\"); fleet-up.sh clears it and brings the fleet back"  # issue #1729
