@@ -11,12 +11,12 @@ import (
 // adapter, inventory inference, or new transport participates in these calls.
 // Parent columns and children reads are historical compatibility only.
 // New acceptance creates no relationship and takes no Parent report.
-func (s *Server) nodeTaskCollaboration(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, owner, ref string) bool {
+func (s *Server) nodeTaskCollaboration(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, owners []string, ref string) bool {
 	task, action, found := strings.Cut(ref, "/")
 	if !found {
 		return false
 	}
-	t, err := s.nodeOwnTask(owner, task)
+	t, owner, err := s.nodeOwnTask(owners, task)
 	if err != nil {
 		taskRefError(w, task, err)
 		return true

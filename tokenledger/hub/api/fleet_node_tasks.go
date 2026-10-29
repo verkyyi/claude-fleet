@@ -101,6 +101,35 @@ func (s *Server) nodeTaskOwner(ep *store.Endpoint) string {
 	return o
 }
 
+// nodeTaskOwners is every owner whose records a node may read and act on
+// (J7BN), as relayOwners is for relays (claude-fleet#3520): nodeTaskOwner's
+// first, then the same person under their other name. A login of a person who
+// is a hub admin also answers "operator" — the admin's task started from their
+// admin login and placed by the hub on another of their logins, which
+// /v1/node/place already allows (nodePrincipal) — and an admin login that is
+// also a person's managed account answers that person. Never another person,
+// never a non-admin person's login for the operator. Creating a record keeps
+// the one owner (nodeTaskOwner).
+func (s *Server) nodeTaskOwners(ep *store.Endpoint) []string {
+	owner := s.nodeTaskOwner(ep)
+	out := []string{owner}
+	if owner == "operator" {
+		host, user := s.peerSelf(ep)
+		for _, o := range s.relayOwners(ep.ID, host, user, s.activeAccounts())[1:] {
+			if p, ok := strings.CutPrefix(o, "person:"); ok {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	if isPerson(owner) {
+		if role, err := s.personRole(owner); err == nil && role == roleAdmin {
+			out = append(out, "operator")
+		}
+	}
+	return out
+}
+
 // nodeTaskMutation is the one change a node still posts on a record (EPIC T497
 // C13, kept by C8): fleet_task_control.py cancel's transition to cancelled of a
 // record no window ever opened. Any other kind an older node sends (a claim, a
@@ -269,23 +298,24 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	owner := s.nodeTaskOwner(ep)
+	owners := s.nodeTaskOwners(ep)
+	owner := owners[0] // a record the node creates is this one's
 	ref := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, NodeTasksPath), "/")
 	if task, route, found := strings.Cut(ref, "/"); found && route == "stop" {
 		if r.Method != http.MethodPost {
 			httpError(w, http.StatusMethodNotAllowed, "POST")
 			return
 		}
-		t, err := s.nodeOwnTask(owner, task)
+		t, own, err := s.nodeOwnTask(owners, task)
 		// Do not extend the operator's legacy read exception to stop authority.
-		if err != nil || t.Owner != owner {
+		if err != nil || t.Owner != own {
 			httpError(w, http.StatusNotFound, "no such task of this node's owner")
 			return
 		}
 		s.requestFleetTaskStop(w, r, t)
 		return
 	}
-	if s.nodeTaskExecution(w, r, ep, owner, ref) {
+	if s.nodeTaskExecution(w, r, ep, owners, ref) {
 		return
 	}
 	if ref == nodeTaskSettleRef {
@@ -300,7 +330,7 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		s.nodeTaskIDsBackfill(w, r, owner)
 		return
 	}
-	if s.nodeTaskCollaboration(w, r, ep, owner, ref) {
+	if s.nodeTaskCollaboration(w, r, ep, owners, ref) {
 		return
 	}
 	var in nodeTaskWrite
@@ -371,7 +401,7 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, rec)
 		return
 	}
-	t, err := s.nodeOwnTask(owner, ref)
+	t, owner, err := s.nodeOwnTask(owners, ref)
 	if err != nil {
 		taskRefError(w, ref, err)
 		return
@@ -466,17 +496,28 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 // nodeOwnTask is the record ref names (a code, the task's ID or T<n> —
-// store.ResolveFleetTask) when owner holds it — any legacy record for the
-// operator's machines, like the operator's door on /v1/fleet/tasks.
-func (s *Server) nodeOwnTask(owner, ref string) (store.FleetTask, error) {
-	t, err := s.Store.ResolveFleetTask(owner, ref)
-	if err != nil {
-		return store.FleetTask{}, err
+// store.ResolveFleetTask) when one of owners (nodeTaskOwners, in order) holds
+// it — any legacy record for the operator's own machines, like the operator's
+// door on /v1/fleet/tasks — and the owner it was found under, which every later
+// store call on it uses. A miss answers the first owner's error, unless a
+// later one's says more than "none" (AMBIGUOUS).
+func (s *Server) nodeOwnTask(owners []string, ref string) (store.FleetTask, string, error) {
+	var first error = sql.ErrNoRows
+	for i, owner := range owners {
+		t, err := s.Store.ResolveFleetTask(owner, ref)
+		// The legacy exception is the operator's machines' own (i == 0): a
+		// person's login answering "operator" reads only the operator's records.
+		if err == nil && t.Owner != owner && (t.AuthorityVersion != 0 || owner != "operator" || i > 0) {
+			err = sql.ErrNoRows
+		}
+		if err == nil {
+			return t, owner, nil
+		}
+		if i == 0 || (errors.Is(first, sql.ErrNoRows) && !errors.Is(err, sql.ErrNoRows)) {
+			first = err
+		}
 	}
-	if t.Owner != owner && (t.AuthorityVersion != 0 || owner != "operator") {
-		return store.FleetTask{}, sql.ErrNoRows
-	}
-	return t, nil
+	return store.FleetTask{}, "", first
 }
 
 // taskRefError answers a reference that names no task of the caller's (404) or

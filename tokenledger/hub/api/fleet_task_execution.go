@@ -65,13 +65,13 @@ func taskExecutionBodyLimit(w http.ResponseWriter, r *http.Request, dst any, lim
 
 // Token ownership is necessary but not sufficient: the reserved endpoint alone
 // may inspect or claim this execution. A sibling node cannot claim it.
-func (s *Server) nodeTaskExecution(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, owner, ref string) bool {
+func (s *Server) nodeTaskExecution(w http.ResponseWriter, r *http.Request, ep *store.Endpoint, owners []string, ref string) bool {
 	if ref == "executions" {
 		if r.Method != http.MethodGet {
 			httpError(w, http.StatusMethodNotAllowed, "GET")
 			return true
 		}
-		snapshots, err := s.Store.TaskExecutionSnapshots(owner, ep.ID)
+		snapshots, err := s.nodeTaskExecutionSnapshots(owners, ep.ID)
 		if err != nil {
 			taskWriteError(w, err)
 			return true
@@ -86,7 +86,7 @@ func (s *Server) nodeTaskExecution(w http.ResponseWriter, r *http.Request, ep *s
 	if !found || (route != "execution" && route != "execution/claim" && route != "execution/exit" && route != "execution/start") {
 		return false
 	}
-	t, err := s.nodeOwnTask(owner, task)
+	t, owner, err := s.nodeOwnTask(owners, task)
 	if err != nil {
 		httpError(w, http.StatusNotFound, "no task execution on this node")
 		return true
@@ -344,8 +344,22 @@ func (s *Server) deliverTaskStop(ctx context.Context, op store.FleetOperation, s
 	return s.Store.UpdateFleetOperation(op.ID, status, result, time.Now())
 }
 
+// nodeTaskExecutionSnapshots is every execution reserved on endpoint under any
+// of the node's owners (nodeTaskOwners).
+func (s *Server) nodeTaskExecutionSnapshots(owners []string, endpoint string) ([]store.TaskExecutionSnapshot, error) {
+	var out []store.TaskExecutionSnapshot
+	for _, o := range owners {
+		rows, err := s.Store.TaskExecutionSnapshots(o, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+	}
+	return out, nil
+}
+
 func (s *Server) redeliverTaskStops(ep *store.Endpoint) {
-	snapshots, err := s.Store.TaskExecutionSnapshots(s.nodeTaskOwner(ep), ep.ID)
+	snapshots, err := s.nodeTaskExecutionSnapshots(s.nodeTaskOwners(ep), ep.ID)
 	if err != nil {
 		log.Printf("node %s task stop snapshot: %v", ep.ID, err)
 		return
