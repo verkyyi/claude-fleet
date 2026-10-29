@@ -407,18 +407,23 @@ for prof in deepseek DeepSeek-Pro; do
   # the first carries a caller's --model (a migrate's @cc_model) — ours, never claude's
   ma=(); [ "$prof" = deepseek ] && ma=(--model deepseek)
   argv="$( (export FLEET_CRED_SID=sid-ds; run ${ma[@]+"${ma[@]}"} /fleet-history) )"
-  case "$prof" in DeepSeek-Pro) m='deepseek-v4-pro[1m]' p=deepseek-pro ;; *) m='deepseek-flash[1m]' p=deepseek ;; esac
+  case "$prof" in DeepSeek-Pro) w=deepseek-v4-pro p=deepseek-pro ;; *) w=deepseek-flash p=deepseek ;; esac
+  # Claude Code's own ids (no unrecognized_model); DeepSeek's on the wire via modelOverrides
   want="ANTHROPIC_BASE_URL=http://127.0.0.1:4321/deepseek
-ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-flash
-ANTHROPIC_DEFAULT_OPUS_MODEL=$m
-ANTHROPIC_DEFAULT_SONNET_MODEL=$m
-ANTHROPIC_MODEL=$m
+ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-5-5
+ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-5-5[1m]
+ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5[1m]
+ANTHROPIC_MODEL=claude-opus-5-5[1m]
 CLAUDE_CODE_AUTO_COMPACT_WINDOW=786432
 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 CLAUDE_CODE_OAUTH_TOKEN=fcp-h2.fake.pass
-CLAUDE_CODE_SUBAGENT_MODEL=deepseek-flash"
+CLAUDE_CODE_SUBAGENT_MODEL=claude-haiku-5-5"
   [ "$(cat "$WORK/env" 2>/dev/null)" = "$want" ] || st_fail "J7BN $prof: the launch env" "$(cat "$WORK/env" 2>/dev/null)"
   case "$argv" in *--model*) st_fail "J7BN $prof: a --model reached claude" "$argv" ;; esac
+  [ "$(printf '%s\n' "$argv" | tr ' ' '\n' | grep -c '^--settings=')" = 1 ] || st_fail "J7BN $prof: exactly one --settings" "$argv"
+  sf=$(printf '%s\n' "$argv" | tr ' ' '\n' | sed -n 's/^--settings=//p')
+  python3 -c 'import json,sys; mo=json.load(open(sys.argv[1]))["modelOverrides"]; sys.exit(0 if mo=={"claude-opus-5-5":sys.argv[2],"claude-sonnet-5-5":sys.argv[2],"claude-haiku-5-5":"deepseek-flash"} else 1)' "$sf" "$w" \
+    || st_fail "J7BN $prof: modelOverrides in the one --settings" "$(cat "$sf" 2>/dev/null)"
   has "$argv" "/fleet-history" || st_fail "J7BN $prof: the seed was lost" "$argv"
   grep -q -- '--provider deepseek' "$WORK/mintargs" && ! grep -q -- '--account' "$WORK/mintargs" \
     || st_fail "J7BN $prof: the mint did not ask for a deepseek pass" "$(cat "$WORK/mintargs" 2>/dev/null)"
