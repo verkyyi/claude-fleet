@@ -305,7 +305,7 @@ func TestClusterPodProviders(t *testing.T) {
 	if p := s.podProvidersFor(settings, pod); !only(p, credvault.DeepSeek) {
 		t.Fatalf("per-cluster: %v", p)
 	}
-	if p := s.podProvidersFor(settings, "plain-worker-0"); !only(p, credvault.Codex, credvault.Claude) {
+	if p := s.podProvidersFor(settings, clusterPodPrefixes[0]+"0"); !only(p, credvault.Codex, credvault.Claude) {
 		t.Fatalf("a pod of no known cluster keeps the fleet-wide value: %v", p)
 	}
 	if p := podProvidersIn(settings, pod, "ack-sg"); !only(p, credvault.Codex, credvault.Claude) {
