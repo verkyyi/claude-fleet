@@ -101,8 +101,9 @@ fleet_launch_browser() {
 # A TRUSTED NODE (`fleet-trust.sh node`, the credential proxy's word from the hub)
 # goes wider: every hosted repo's checkout, and — for a window the fleet opened with
 # no repo (@norepo 1) whose cwd is the login's $HOME — that one directory (#2282).
-# That $HOME is pre-trusted on ANY node (task J7BN): it is the folder the session
-# opens in, so without it the first turn parks on the dialog (a person's pod).
+# That $HOME is also pre-trusted in a person's OWN pod (FLEET_USER_POD=1, set by
+# extras/managed-node/render.py — task J7BN): the pod is that one login's machine,
+# and without it the first turn parks on the dialog. Any other untrusted node: no.
 # Where the answer is written is the table's `trust`:
 #   claude-json  ~/.claude.json, the base checkout on every spawn, wider on a trusted node
 #   codex-toml   $CODEX_HOME/config.toml, on a trusted node only (fill only, so a login's
@@ -134,10 +135,10 @@ EOF_FL_REPOS
       [ "${#ta[@]}" -gt 0 ] || return 0
       granted=$(sh "$BIN/fleet-trust.sh" grant ${ta[@]+"${ta[@]}"} "$PWD" 2>"$err"); rc=$?
       [ -n "$granted" ] && fleet_launch_say "pre-trusted $(printf '%s' "$granted" | tr '\n' ' ') in $(sh "$BIN/fleet-trust.sh" file) (trusted node, issue #2282)"
-    elif [ "$home" = 1 ]; then
-      # a window the fleet opened with no repo (@norepo 1) in the login's $HOME, off
-      # a trusted node (task J7BN — a person's pod): its cwd is $HOME, so $HOME is
-      # the folder Claude Code asks about. The fleet's first repo FLEET_MAIN (the
+    elif [ "$home" = 1 ] && [ "${FLEET_USER_POD:-}" = 1 ]; then
+      # a window the fleet opened with no repo (@norepo 1) in the login's $HOME, in
+      # a person's own pod off a trusted node (task J7BN): its cwd is $HOME, so $HOME
+      # is the folder Claude Code asks about. The fleet's first repo FLEET_MAIN (the
       # overlay reads it for a window with no @repo) is granted as before, and $HOME
       # — that one directory, never an ancestor — beside it.
       [ -n "${FLEET_MAIN:-}" ] && ta+=(--main "$FLEET_MAIN")

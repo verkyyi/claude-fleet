@@ -227,8 +227,8 @@ st_pass "I wide grant: every --main + their worktrees, \$HOME only with --home; 
 # --- J. the launcher end to end, on an isolated tmux socket -----------------------
 # A two-repo fleet: a worktree of the SECOND repo (no @repo stamped, so the overlay
 # reads the first) · an @norepo window in $HOME · a plain window in $HOME. Untrusted
-# node ⇒ ~/.claude.json byte for byte what the #563 narrow grant makes, plus the
-# @norepo window's own $HOME (J7BN: the folder it opens in); trusted ⇒
+# node ⇒ ~/.claude.json byte for byte what the #563 narrow grant makes (no $HOME);
+# in a person's own pod (FLEET_USER_POD=1, J7BN) the @norepo $HOME too; trusted ⇒
 # the second repo + its worktree and the @norepo $HOME are trusted, the plain $HOME
 # window is not.
 REAL_TMUX=$(command -v tmux 2>/dev/null)
@@ -246,7 +246,7 @@ else
   launch() { # <cwd> <@norepo or -> — one launch in its own window, wait for the fake claude
     local go="$WORK/go.$RANDOM" w
     w=$("$REAL_TMUX" -S "$SOCK" new-window -d -P -F '#{window_id}' -t tst -c "$1" \
-        "while [ ! -f '$go' ]; do sleep 0.05; done; exec env -i HOME='$HOME' PATH='$WORK/fb:/usr/bin:/bin:$(dirname "$REAL_TMUX")' TMUX=\"\$TMUX\" TMUX_PANE=\"\$TMUX_PANE\" FLEET_CONF_DIR='$JC' FLEET_MOD=0 FLEET_AGENT_CFG=0 FLEET_CLAUDE_BIN='$WORK/fb/claude' bash '$BIN/fleet-claude.sh' >'$go.out' 2>&1")
+        "while [ ! -f '$go' ]; do sleep 0.05; done; exec env -i HOME='$HOME' ${JPOD:+FLEET_USER_POD=1} PATH='$WORK/fb:/usr/bin:/bin:$(dirname "$REAL_TMUX")' TMUX=\"\$TMUX\" TMUX_PANE=\"\$TMUX_PANE\" FLEET_CONF_DIR='$JC' FLEET_MOD=0 FLEET_AGENT_CFG=0 FLEET_CLAUDE_BIN='$WORK/fb/claude' bash '$BIN/fleet-claude.sh' >'$go.out' 2>&1")
     [ "$2" = - ] || "$REAL_TMUX" -S "$SOCK" set-option -w -t "$w" @norepo "$2"
     : > "$go"
     for _ in $(seq 1 100); do [ -f "$go.out" ] && ! "$REAL_TMUX" -S "$SOCK" list-windows -t tst -F '#{window_id}' | grep -qx "$w" && return 0; sleep 0.1; done
@@ -256,11 +256,7 @@ else
   "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s tst -n home || st_fail "J cannot start the isolated tmux server"
   # the reference: what the #563 launcher does for those three cwds
   write_cfg
-  # (J7BN: the @norepo window in $HOME trusts $HOME on any node, beside the first repo)
-  sh "$SUT" grant --main "$MAIN" "$WORK/proj/two-issue-9" >/dev/null 2>&1
-  sh "$SUT" grant --main "$MAIN" --home "$HOME" >/dev/null 2>&1
-  [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || st_fail "J reference: --home did not trust \$HOME" "$(cat "$CFG")"
-  sh "$SUT" grant --main "$MAIN" "$HOME" >/dev/null 2>&1
+  for d in "$WORK/proj/two-issue-9" "$HOME" "$HOME"; do sh "$SUT" grant --main "$MAIN" "$d" >/dev/null 2>&1; done
   cp "$CFG" "$WORK/ref"
   write_cfg
   printf '{"trust": "untrusted", "why": "hub: untrusted", "ts": %s}\n' "$(date +%s)" > "$JC/cred-proxy/trust.json"
@@ -268,6 +264,17 @@ else
   cmp -s "$CFG" "$WORK/ref" || st_fail "J untrusted node: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
   write_cfg; rm -f "$JC/cred-proxy/trust.json"; three
   cmp -s "$CFG" "$WORK/ref" || st_fail "J no trust word: ~/.claude.json differs from the #563 launcher's" "$(diff "$WORK/ref" "$CFG")"
+  [ "$(jget projects "$HOME_P")" = null ] || st_fail "J untrusted non-pod node: \$HOME must not be pre-trusted" "$(cat "$CFG")"
+  # J7BN: a person's own pod (FLEET_USER_POD=1), no trust word: the @norepo window's
+  # $HOME is pre-trusted beside the first repo; a plain window in $HOME is not
+  write_cfg; JPOD=1
+  launch "$HOME" -
+  [ "$(jget projects "$HOME_P")" = null ] || st_fail "J person pod: a plain window in \$HOME trusted \$HOME" "$(cat "$CFG")"
+  launch "$HOME" 1
+  [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || st_fail "J person pod: the @norepo window's \$HOME was not pre-trusted" "$(cat "$CFG")"
+  [ "$(jget projects "$MAIN_P" hasTrustDialogAccepted)" = true ] || st_fail "J person pod: the first repo's grant was lost" "$(cat "$CFG")"
+  [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] || st_fail "J person pod: \$HOME's parent was written" "$(cat "$CFG")"
+  JPOD=
   write_cfg
   printf '{"trust": "trusted", "why": "hub: trusted", "ts": %s}\n' "$(date +%s)" > "$JC/cred-proxy/trust.json"
   launch "$HOME" -
@@ -278,7 +285,7 @@ else
   launch "$HOME" 1
   [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || st_fail "J trusted node: the @norepo window's \$HOME was not pre-trusted" "$(cat "$CFG")"
   [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] || st_fail "J trusted node: \$HOME's parent was written" "$(cat "$CFG")"
-  st_pass "J launcher: untrusted / no word ⇒ the #563 grant + the @norepo \$HOME (J7BN); trusted ⇒ every hosted repo + the @norepo \$HOME, nothing else"
+  st_pass "J launcher: untrusted / no word ⇒ byte for byte the #563 grant (no \$HOME); a person pod ⇒ + the @norepo \$HOME (J7BN); trusted ⇒ every hosted repo + the @norepo \$HOME, nothing else"
 fi
 
 printf 'selftest PASS: %d checks — fleet-trust.sh is scoped, lossless under a concurrent writer, atomic, idempotent\n' "$pass"
