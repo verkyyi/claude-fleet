@@ -380,7 +380,7 @@ main() {
   # documents; it escapes via `awk -F'\t'`, this escapes without the fork.
   # `@model` rides the same read (issue #1454): the statusline's stamp of the
   # model the session is on, read for free with the rest.
-  local W_ID=() W_PPID=() W_HUB=() W_STATE=() W_STS=() W_ACCT=() W_MODEL=() W_NAME=()
+  local W_ID=() W_PPID=() W_HUB=() W_STATE=() W_STS=() W_ACCT=() W_MODEL=() W_FIXED=() W_CCM=() W_NAME=()
   local _row _r TB=$'\t'
   while IFS= read -r _row; do
     [ -n "$_row" ] || continue
@@ -392,26 +392,29 @@ main() {
     W_STS+=("${_r%%$'\t'*}");   _r="${_r#*$'\t'}"
     W_ACCT+=("${_r%%$'\t'*}");  _r="${_r#*$'\t'}"
     W_MODEL+=("${_r%%$'\t'*}"); _r="${_r#*$'\t'}"
+    W_FIXED+=("${_r%%$'\t'*}"); _r="${_r#*$'\t'}"
+    W_CCM+=("${_r%%$'\t'*}"); _r="${_r#*$'\t'}"
     W_NAME+=("$_r")
-  done < <(TM list-windows -t "$SESS" -F "#{window_id}$TB#{pane_pid}$TB#{@hub}$TB#{@claude_state}$TB#{@claude_state_ts}$TB#{@cc_account}$TB#{@model}$TB#{window_name}" 2>/dev/null)
+  done < <(TM list-windows -t "$SESS" -F "#{window_id}$TB#{pane_pid}$TB#{@hub}$TB#{@claude_state}$TB#{@claude_state_ts}$TB#{@cc_account}$TB#{@model}$TB#{@cc_model_fixed}$TB#{@cc_model}$TB#{window_name}" 2>/dev/null)
 
   # load_meta <wid> → M_* . From the batch; an EXPLICIT window the batch does not
   # cover (another session on this socket — the fleet's own callers never do this,
   # but the old per-window path accepted it) still resolves the slow way, so this
   # is a speedup on the hot path and not a narrowing of what the script accepts.
-  local M_PPID M_HUB M_STATE M_STS M_ACCT M_MODEL M_NAME
+  local M_PPID M_HUB M_STATE M_STS M_ACCT M_MODEL M_FIXED M_CCM M_NAME
   load_meta() {
     local w="$1" i
     for ((i = 0; i < ${#W_ID[@]}; i++)); do
       [ "${W_ID[$i]}" = "$w" ] || continue
       M_PPID="${W_PPID[$i]}"; M_HUB="${W_HUB[$i]}";   M_STATE="${W_STATE[$i]}"
       M_STS="${W_STS[$i]}";   M_ACCT="${W_ACCT[$i]}"; M_MODEL="${W_MODEL[$i]}"
-      M_NAME="${W_NAME[$i]}"
+      M_FIXED="${W_FIXED[$i]}"; M_CCM="${W_CCM[$i]}"; M_NAME="${W_NAME[$i]}"
       return 0
     done
     M_PPID=$(wopt "$w" '#{pane_pid}');        M_HUB=$(wopt "$w" '#{@hub}')
     M_STATE=$(wopt "$w" '#{@claude_state}');  M_STS=$(wopt "$w" '#{@claude_state_ts}')
     M_ACCT=$(wopt "$w" '#{@cc_account}');     M_MODEL=$(wopt "$w" '#{@model}')
+    M_FIXED=$(wopt "$w" '#{@cc_model_fixed}'); M_CCM=$(wopt "$w" '#{@cc_model}')
     M_NAME=$(wopt "$w" '#{window_name}')
   }
 
@@ -473,8 +476,8 @@ main() {
     # A model chosen at creation is the session's for life (task J7BN P1,
     # @cc_model_fixed 1 — a DeepSeek profile): never switched, never handed to
     # migrate. Named explicitly ⇒ said and the run exits 1; a sweep passes it by.
-    if [ "$(wopt "$wid" '#{@cc_model_fixed}')" = 1 ]; then
-      [ "$MODE" = explicit ] && { printf 'fleet-model-switch: %s runs on a model fixed at creation (%s) — no model switch\n' "$wid" "$(wopt "$wid" '#{@cc_model}')" >&2; fixed=$((fixed+1)); }
+    if [ "$M_FIXED" = 1 ]; then
+      [ "$MODE" = explicit ] && { printf 'fleet-model-switch: %s runs on a model fixed at creation (%s) — no model switch\n' "$wid" "$M_CCM" >&2; fixed=$((fixed+1)); }
       continue
     fi
     cpid=$(cpid_of "$M_PPID") || { [ "$MODE" = explicit ] && { printf '  – %s: no Claude process — skipped\n' "$wid"; skipped=$((skipped+1)); }; continue; }
