@@ -370,6 +370,15 @@ CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" 
 place_has '--origin'                             && fail "PARENT legacy metadata must not ride placement"
 ok "PARENT legacy --origin is inert; placement retains node, agent, repo and worker identity"
 
+# --model (task J7BN): a DeepSeek session rides the placement — the hub picks its
+# region's machine — even where this login's spawns stay here (FLEET_SPAWN_NODE=local)
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_spawn 258 --model DeepSeek
+[ "$(rc)" = 0 ] && place_has '--node auto ' && place_has '--model deepseek acme/widgets 258' && ! tmux_has 'new-window' \
+                                                 || fail "MODEL --model deepseek asks the hub with it, node auto (rc=$(rc))" "$(cat "$PLACE_LOG")"
+CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_spawn 258
+[ "$(rc)" = 0 ] && [ ! -s "$PLACE_LOG" ] || fail "MODEL no --model: FLEET_SPAWN_NODE=local never asks, as before" "$(cat "$PLACE_LOG")"
+ok "MODEL --model rides the issue placement (auto); no model is unchanged"
+
 # ===== LOCAL: the hub chose this machine ⇒ today's path ===========================
 CLAIM_STATE=$'0\tOPEN' LEASE_ANSWER="GRANTED mac-b" PLACE_ANSWER=$'LOCAL mac-b\tchose mac-b (score 0.9)' run_spawn 258
 [ "$(rc)" = 0 ]                                  || fail "LOCAL spawns (rc=$(rc))"
@@ -884,6 +893,15 @@ PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --as fleet-worker
 PLACE_ANSWER="$REMOTE_LINE" run_raw --as fleet-worker
 [ "$(rc)" = 0 ] && place_has '--node auto ' && place_has '--as fleet-worker' \
                                                  || fail "SCRATCH-AS --as fleet-worker with no --node asks the hub (rc=$(rc))" "$(cat "$PLACE_LOG")"
+# --model (task J7BN): a seat's DeepSeek session is the hub's to place, and
+# never this machine's fallback when the hub cannot be asked
+PLACE_ANSWER="$REMOTE_LINE" FLEET_SPAWN_NODE=local run_raw --model deepseek-pro
+[ "$(rc)" = 0 ] && place_has '--node auto ' && place_has '--model deepseek-pro acme/widgets scratch' && ! tmux_has 'new-window' \
+                                                 || fail "SCRATCH-MODEL --model asks the hub with it, node auto (rc=$(rc))" "$(cat "$PLACE_LOG")"
+PLACE_RC=1 PLACE_STDERR='ccquota: Post "https://hub.test/v1/node/place": dial tcp: connection refused' run_raw --model deepseek
+[ "$(rc)" = 1 ] && ! tmux_has 'new-window' && err_has '只由入口安排到它的区域' \
+                                                 || fail "SCRATCH-MODEL hub unreachable never opens it here (rc=$(rc))" "$(cat "$WORK/spawn.err")"
+ok "SCRATCH MODEL --model rides the placement; never a local fallback"
 PLACE_ANSWER="$REMOTE_LINE" run_raw --node mac-a --no-repo
 [ "$(rc)" = 1 ] && err_has 'a no-repo scratch with no task record opens on this machine only' || fail "SCRATCH-NOREPO --no-repo + --node mac-a is refused (rc=$(rc))" "$(cat "$WORK/spawn.err")"
 [ -s "$PLACE_LOG" ]                              && fail "SCRATCH-NOREPO must not ask the hub"

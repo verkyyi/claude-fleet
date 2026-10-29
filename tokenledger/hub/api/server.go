@@ -669,6 +669,8 @@ func (s *Server) routes() *routeMux {
 		mux.HandleFunc("/v1/node/join", s.handleNodeJoin)
 		mux.HandleFunc("/v1/node/dist/", s.handleNodeDist)
 		mux.HandleFunc("/v1/node/self", s.handleNodeSelf)
+		// the start models this login's person may choose (task J7BN)
+		mux.HandleFunc(NodeModelsPath, s.handleNodeModels)
 		mux.HandleFunc(nodeCapacityPath, s.handleNodeCapacity)
 		// The public gate (claude-fleet#3574): the hub's own items for a
 		// machine's doctor; the operator reads every item and machine.

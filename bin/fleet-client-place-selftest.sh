@@ -120,6 +120,12 @@ class H(BaseHTTPRequestHandler):
                 return self.answer(200, {"line": "REMOTE mac-b op7 done %s/issue-7\tmac-a excluded: full" % UUID, "exit": 0, "state": "done"})
             return self.answer(200, {"line": "UNKNOWN mac-b %s\tstill starting" % op, "exit": 6, "state": "pending", "operation_id": op})
         kind, issue = p.get("kind"), p.get("issue")
+        if p.get("action") == "models":   # leg M (task J7BN): no file = a hub older than it
+            try:
+                with open(os.path.join(os.path.dirname(LOG), "models")) as f:
+                    return self.answer(200, {"models": f.read().split()})
+            except OSError:
+                return self.answer(400, {"error": "action must be place, draft or status"})
         if p.get("action") == "draft" and p.get("name") == "old-hub":
             return self.answer(400, {"error": "action must be place or status"})
         if p.get("task"):   # leg T: the hub wrote the record first (issue #3325)
@@ -499,6 +505,28 @@ run "$P" acme/web issue-3 --task;          st_eq "T: --task is for new / a no-re
 run "$P" acme/web scratch --task;          st_eq "T: …not a repo scratch" 2 "$RC"
 run "$P" - home --task;                    st_eq "T: …not a home" 2 "$RC"
 run "$P" - scratch --via ⌘P;               st_eq "T: --via goes with --task" 2 "$RC"
+
+# --- M. a DeepSeek session (task J7BN): offered by the hub, placed by the hub, never here --
+rm -f "$WORK/models"
+run "$P" --models
+st_eq "M: a hub older than J7BN: nothing to offer" "1 " "$RC $OUT"
+: > "$WORK/models"
+run "$P" --models
+st_eq "M: the hub offers none" "0 " "$RC $OUT"
+printf 'deepseek deepseek-pro gpt-5\n' > "$WORK/models"
+run "$P" --models
+st_eq "M: the hub offers both (only known names)" "0 deepseek deepseek-pro" "$RC $(printf '%s' "$OUT" | tr '\n' ' ' | sed 's/ $//')"
+st_has "M: …asked as action=models" "$(lastreq)" '"action": "models"'
+run "$P" - scratch --name 看看 --task --via ⌘P --model DeepSeek-Pro
+st_eq "M: a DeepSeek task opens through the hub" 0 "$RC"
+st_has "M: …with its model" "$(lastreq)" '"model": "deepseek-pro"'
+st_has "M: …as Claude" "$(lastreq)" '"resolved_agent": "claude"'
+run "$P" verkyyi/claude-fleet scratch
+CHECKS=$((CHECKS + 1)); case "$(lastreq)" in *'"model"'*) st_miss "M: a plain start names no model" "$(lastreq)" ;; esac
+run "$P" - scratch --model gpt-5;               st_eq "M: an unknown model is usage" 2 "$RC"
+run "$P" - scratch --model deepseek --agent codex; st_eq "M: …so is codex with it" 2 "$RC"
+(unset FLEET_HUB_URL FLEET_HUB_TOKEN; run "$P" --models; printf '%s' "$RC" > "$WORK/m.rc")
+st_eq "M: no hub: --models offers nothing" 1 "$(cat "$WORK/m.rc")"
 
 # --- E. usage -----------------------------------------------------------------------------
 run "$P" verkyyi/claude-fleet bogus;  st_eq "E: bad kind" 2 "$RC"

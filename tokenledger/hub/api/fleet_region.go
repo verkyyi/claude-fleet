@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"log"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -262,6 +263,50 @@ func regionStartWhy(settings map[string]string, principal, provider string) stri
 		}
 	}
 	return "the mainland region (deepseek) is a trial: " + principal + " is not on " + RegionCNPeopleKey
+}
+
+// regionModels is the start models principal may choose (task J7BN) — what
+// a client's 「新会话」 box offers: the DeepSeek ones while a cn cluster is
+// listed and the trial gate lets principal through, else none (never nil, so
+// the answer is always a list).
+func regionModels(settings map[string]string, principal string) []string {
+	if !cnListed(settings) || regionStartWhy(settings, principal, credvault.DeepSeek) != "" {
+		return []string{}
+	}
+	return []string{"deepseek", "deepseek-pro"}
+}
+
+// NodeModelsPath answers a node the start models its login's person may
+// choose (task J7BN): GET with the node token → {"models": [...]}. The 看台's
+// 「新会话」 box (on the home machine, which holds no client lease) reads it; a
+// client computer asks the same through client place's action=models.
+const NodeModelsPath = "/v1/node/models"
+
+func (s *Server) handleNodeModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		httpError(w, http.StatusMethodNotAllowed, "GET")
+		return
+	}
+	ep, ok := s.nodeEndpoint(w, r)
+	if !ok {
+		return
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// as a placement from this login judges it (nodePrincipal + its owner)
+	p := fleetPrincipal{Actor: "node:" + ep.OSUser + "@" + ep.Hostname, TaskOwner: s.nodeTaskOwner(ep)}
+	if person, err := s.Store.PrincipalForLogin(ep.Hostname, ep.OSUser); err == nil {
+		p.Person = person
+	} else if !errors.Is(err, store.ErrNoPrincipal) {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"models": regionModels(settings, startPrincipal(p))})
 }
 
 // regionStartGate is regionStartWhy as a fault (403), reading the settings.

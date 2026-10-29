@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -329,5 +331,59 @@ func TestClusterPodProviders(t *testing.T) {
 	settings, _ = s.Store.FleetSettings()
 	if settings[ClusterRegionPrefix+testCluster] != regionCN || settings[CredPodProvidersPrefix+testCluster] != "codex,deepseek" {
 		t.Fatalf("stored: %q %q", settings[ClusterRegionPrefix+testCluster], settings[CredPodProvidersPrefix+testCluster])
+	}
+}
+
+// What a 「新会话」 box may offer (task J7BN): the DeepSeek models only while a
+// cn cluster is listed and the trial list lets the person in — read by a node
+// (GET /v1/node/models, its login's person) and by a client (client place's
+// action=models, the operator's door here). Nothing listed ⇒ an empty list.
+func TestRegionModelsRead(t *testing.T) {
+	cn := map[string]string{ClustersKey: testCluster, ClusterRegionPrefix + testCluster: regionCN}
+	if m := regionModels(map[string]string{}, "gh:1"); m == nil || len(m) != 0 {
+		t.Fatalf("no cn cluster: %v; want []", m)
+	}
+	if m := regionModels(cn, "gh:1"); len(m) != 0 {
+		t.Fatalf("not on the trial list: %v", m)
+	}
+	cn[RegionCNPeopleKey] = "gh:1"
+	if m := regionModels(cn, "gh:1"); strings.Join(m, ",") != "deepseek,deepseek-pro" {
+		t.Fatalf("listed: %v", m)
+	}
+	if m := regionModels(cn, "gh:2"); len(m) != 0 {
+		t.Fatalf("another person: %v", m)
+	}
+
+	h, _, bob := policyRig(t)
+	read := func() string {
+		t.Helper()
+		resp, body := getWithToken(t, h, NodeModelsPath, bob)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s = %d %s", NodeModelsPath, resp.StatusCode, body)
+		}
+		return strings.TrimSpace(string(body))
+	}
+	if got := read(); got != `{"models":[]}` {
+		t.Fatalf("no cn cluster: %s", got)
+	}
+	setRegion(t, h, ClustersKey, testCluster, ClusterRegionPrefix+testCluster, regionCN)
+	if got := read(); got != `{"models":[]}` {
+		t.Fatalf("cn listed, nobody on the list: %s", got)
+	}
+	setRegion(t, h, RegionCNPeopleKey, pBob)
+	if got := read(); got != `{"models":["deepseek","deepseek-pro"]}` {
+		t.Fatalf("bob listed: %s", got)
+	}
+	if resp, _ := getWithToken(t, h, NodeModelsPath, ""); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no token = %d; want 401", resp.StatusCode)
+	}
+
+	// the client road: a signed action=models
+	lease, key := clientLeaseFor(t, h)
+	p, _ := json.Marshal(map[string]any{"action": "models", "ts": time.Now().Unix()})
+	var out map[string]any
+	if st := clientPost(t, h, control.ClientPath+"/place", ClientPlaceEnvelope{Lease: lease, Payload: string(p),
+		MAC: signClientAction(key, p)}, &out); st != 200 || fmt.Sprint(out["models"]) != "[deepseek deepseek-pro]" {
+		t.Fatalf("client models = %d %v", st, out)
 	}
 }

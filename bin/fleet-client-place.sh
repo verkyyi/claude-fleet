@@ -5,7 +5,16 @@
 #   fleet-client-place.sh <repo> <issue|scratch|home|restore:<key>|new> [--node <m>|auto]
 #                         [--title <t>] [--name <n>] [--agent claude|codex]
 #                         [--reap <policy>] [--body-file <f>] [--attach <file>]…
-#                         [--new] [--task [--via <words>]]
+#                         [--new] [--task [--via <words>]] [--model deepseek|deepseek-pro]
+#   fleet-client-place.sh --models
+#
+# --model (task J7BN): the session opens as a DeepSeek one (Claude Code on
+# DeepSeek) — only through the hub, which places it in its region (its cn
+# machines); never through this computer's own adapter: with no hub it is
+# REFUSED NO_HUB (exit 4). --agent codex with it, or a restore, is usage (2).
+# --models: the models the hub lets THIS person start a session on, one a line
+# (deepseek, deepseek-pro) — nothing when none, exit 1 with no hub or a hub
+# older than J7BN. ⌘P's 「新会话」 box offers its 模型 cell only when this names some.
 #
 # --task (issue #3325, new or a no-repo scratch): the start is a person's task —
 # the hub writes its record T<n> first, then places it as before; the record's
@@ -107,13 +116,18 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 
-usage() { sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '5,9p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
+MODELS_ASK=''
+if [ "${1:-}" = --models ]; then
+  [ $# -eq 1 ] || usage
+  MODELS_ASK=1; set -- - scratch
+fi
 [ $# -ge 2 ] || usage
 REPO=$1; WHAT=$2; shift 2
 REQUEST_ID=$(python3 -c 'import uuid; print(uuid.uuid4())') || exit 2
 export FLEET_PLACE_REQUEST_ID="$REQUEST_ID"
-NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; DRAFTF=''; ATTACH=(); NEW=''; TASK=''; VIA=''
+NODE=auto; TITLE=''; NAME=''; AGENT=''; REAP=''; BODYF=''; DRAFTF=''; ATTACH=(); NEW=''; TASK=''; VIA=''; MODEL=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --node)  [ $# -ge 2 ] || usage; NODE=$2; shift 2 ;;
@@ -129,12 +143,20 @@ while [ $# -gt 0 ]; do
     --new)   NEW=1; shift ;;
     --task)  TASK=1; shift ;;
     --via)   [ $# -ge 2 ] || usage; VIA=$2; shift 2 ;;
+    --model) [ $# -ge 2 ] || usage; MODEL=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]'); shift 2 ;;
     *) usage ;;
   esac
 done
 case "$REPO" in */*|-) ;; *) printf 'fleet-client-place: repo must be owner/name (or - for none)\n' >&2; exit 2 ;; esac
 [ -n "$NODE" ] || NODE=auto
 case "$AGENT" in ''|claude|codex) ;; *) printf 'fleet-client-place: --agent is claude or codex\n' >&2; exit 2 ;; esac
+case "$MODEL" in ''|deepseek|deepseek-pro) ;; *) printf 'fleet-client-place: --model is deepseek or deepseek-pro\n' >&2; exit 2 ;; esac
+if [ -n "$MODEL" ]; then
+  # a DeepSeek model is a Claude Code session (the hub refuses it with codex)
+  [ "${AGENT:-claude}" = claude ] || { printf 'fleet-client-place: --model %s is a Claude Code session, not --agent %s\n' "$MODEL" "$AGENT" >&2; exit 2; }
+  case "$WHAT" in restore:*) printf 'fleet-client-place: --model is for a new start, not a restore\n' >&2; exit 2 ;; esac
+  AGENT=claude
+fi
 if [ -n "$REAP" ]; then
   REAP=$(python3 "$BIN/fleet_reap_policy.py" norm "$REAP") || exit 2
 fi
@@ -172,11 +194,11 @@ fi
 # ask_hub <retry 0|1> — rc 10 = not applicable here (no hub URL, or no lease / key
 # to sign with); rc 11 (only with retry 1) = 401 not your client.
 ask_hub() {
-python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$DRAFTF" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
+FLEET_PLACE_MODELS_ASK="$MODELS_ASK" python3 - "$BIN" "$REPO" "$KIND" "$ISSUE" "$KEY" "$NODE" "$TITLE" "$NAME" "$AGENT" "$REAP" "$BODYF" "$1" "$HOME_ASK" "$NEW" "$TASK" "$VIA" "$DRAFTF" "$MODEL" ${ATTACH[@]+"${ATTACH[@]}"} <<'PY'
 import os, sys
 
-here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, draftf = sys.argv[1:18]
-files = sys.argv[18:]
+here, repo, kind, issue, key, node, title, name, agent, reap, bodyf, retry, home, new, task, via, draftf, model = sys.argv[1:19]
+files = sys.argv[19:]
 if files:
     import base64, hashlib
 body = ""
@@ -302,6 +324,20 @@ def rnd():
     return max(0, min(20, int(deadline - time.time())))
 
 
+if os.environ.get("FLEET_PLACE_MODELS_ASK") == "1":
+    # --models (task J7BN): what this person may start a session on, one a line
+    try:
+        got = ask({"action": "models"}).get("models")
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and retry == "1":
+            sys.exit(11)
+        sys.exit(1)     # a hub older than J7BN says 400: none to offer
+    except (OSError, ValueError, fc.Refused):
+        sys.exit(1)
+    for m in got if isinstance(got, list) else []:
+        if m in ("deepseek", "deepseek-pro"):
+            print(m)
+    sys.exit(0)
 req = {"action": "place", "kind": kind, "node": node, "idempotency_key": idem, "wait": rnd()}
 if repo == "-":
     req["no_repo"] = True   # issue #1956: a scratch of no repo
@@ -343,6 +379,8 @@ if kind != "restore":
     req["agent"] = req["dispatch"]["resolved_agent"]
     if agent:
         req["coding_agent"] = agent
+if model:
+    req["model"] = model    # task J7BN: the hub places it in its region
 if draft:
     req["action"] = "draft"
 if attach:
@@ -570,6 +608,7 @@ else
 fi
 [ "$ef" = /dev/null ] || rm -f "$ef"
 [ "$rc" = 10 ] || exit "$rc"
+[ -z "$MODELS_ASK" ] || exit 1   # --models: no hub, nothing to offer
 
 # --- no hub: this computer's own fleet, if it has one -------------------------------
 # the client's library (issue #4825): fleet_login_fleet / fleet_node_is_self — a
@@ -594,6 +633,12 @@ if [ -z "$SESS" ] || [ ! -f "$BIN/fleet-control-read.sh" ]; then
   exit 1
 fi
 HOST=$(hostname -s 2>/dev/null); HOST=${HOST%%.*}
+if [ -n "$MODEL" ]; then
+  # a DeepSeek session is the hub's to place in its region (task J7BN) — never here
+  printf 'REFUSED NO_HUB\t连不上入口：%s 会话只由入口安排到它的区域\n' "$MODEL"
+  plog "REFUSED NO_HUB"$'\t'"连不上入口：${MODEL} 会话只由入口安排到它的区域" 4
+  exit 4
+fi
 if [ "$NODE" != auto ] && ! fleet_node_is_self "$NODE"; then
   printf 'REFUSED NO_HUB\t连不上入口，开不到 %s；这台 (%s) 可以开\n' "$NODE" "$HOST"
   plog "REFUSED NO_HUB"$'\t'"连不上入口，开不到 ${NODE}；这台 (${HOST}) 可以开" 4

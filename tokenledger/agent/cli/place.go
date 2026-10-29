@@ -116,10 +116,11 @@ func place(args []string, stdout, stderr io.Writer) (int, error) {
 	notHere := fs.String("not-here", "", "this machine cannot open it itself — its admission's reason (claude-fleet T672): the hub places it elsewhere, or refuses naming each machine")
 	as := fs.String("as", "", "the agent file the session starts as (claude-fleet#3122)")
 	bodyFile := fs.String("body-file", "", "a scratch's seed, read from this file (the first turn's words)")
+	model := fs.String("model", "", "the model chosen at creation: deepseek or deepseek-pro (task J7BN; a Claude Code session the hub places in its region)")
 	reap := fs.String("reap", "", "when the session may be closed on its own: merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep (claude-fleet#1902; default: its kind's)")
 	fs.Usage = func() {
-		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--not-here <why>] [--as <file>] <owner/repo> <issue> <worker_id>
-       ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--not-here <why>] [--as <file>] [--name <n>] [--body-file <f>] <owner/repo> scratch <fleet UUID>
+		fmt.Fprint(stderr, `Usage: ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--not-here <why>] [--as <file>] [--model m] <owner/repo> <issue> <worker_id>
+       ccquota place [--node auto|<machine>] [--origin-wid <wid>] [--agent a] [--account local|pool|any] [--not-here <why>] [--as <file>] [--model m] [--name <n>] [--body-file <f>] <owner/repo> scratch <fleet UUID>
 
 Ask the hub which machine should open a session on an issue (claude-fleet#1425),
 or a raw scratch session with no issue (claude-fleet#1541: no lease; the
@@ -192,6 +193,13 @@ declined the start, 6 its outcome is unknown, 1 hub unreachable, 2 usage.
 	}
 	if *as != "" {
 		ask["as"] = *as
+	}
+	if *model != "" {
+		m := strings.ToLower(strings.TrimSpace(*model))
+		if m != "deepseek" && m != "deepseek-pro" {
+			return 2, errors.New("--model must be deepseek or deepseek-pro")
+		}
+		ask["model"] = m
 	}
 	// The spawner opens an accepted dispatch here itself when the hub picks
 	// this machine (claude-fleet T716) — said through the environment, so a

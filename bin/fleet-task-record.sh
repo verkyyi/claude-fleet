@@ -59,7 +59,7 @@
 #                     → the record names the window's session (its key + worker_id)
 #                       set / attach print the task's code (else T<n>) on stdout
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
-#                     [--spawn] [--reap P] [--agent A] [--session S] [--origin O] [--via V] [--print]
+#                     [--spawn] [--reap P] [--agent A] [--model M] [--session S] [--origin O] [--via V] [--print]
 #                     → the `task` tool: the record FIRST (a local text file the
 #                       body names — ~/fleet-drafts/… — rides in it, T793:
 #                       fleet_local_refs.py; what cannot is said on stderr) (its code, then
@@ -78,6 +78,9 @@
 #                       T651 C1): a blank new session — the title is only its
 #                       placeholder (「新会话」), no first turn is given, and each
 #                       one is its own record (the token carries a nonce).
+#                       --model deepseek|deepseek-pro (task J7BN): a DeepSeek
+#                       session (Claude Code), placed by the hub in its region —
+#                       the spawner asks the hub with the model, never opens it here.
 #   fleet-task-record.sh retitle T<n> --from F --title T
 #                     → a blank session's record renamed ONCE (T652): from its
 #                       placeholder F to its first prompt's first line T — the
@@ -333,7 +336,7 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' tsess='' pwin='' origin='' via=编排 blank=0
+  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' tsess='' pwin='' origin='' via=编排 blank=0 model=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
@@ -351,6 +354,13 @@ if [ "$cmd" = dispatch ]; then
       --via) via="${2:-编排}"; shift ;;
       --print) pwin=--print ;;
       --blank) blank=1 ;;
+      # --model (task J7BN): a DeepSeek session — Claude Code, placed by the hub
+      # in its region (dash-raw-session.sh --model); none = the agent's own
+      --model)
+        model=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')
+        case "$model" in deepseek|deepseek-pro) ;; *) die 2 "--model must be deepseek or deepseek-pro" ;; esac
+        [ "${agent:-claude}" = claude ] || die 2 "--model $model is a Claude Code session, not --agent $agent"
+        agent=claude; shift ;;
       *) usage ;;
     esac
     shift
@@ -404,7 +414,7 @@ if [ "$cmd" = dispatch ]; then
   PRESTART=''
   if [ -n "${FLEET_PRESTART:-}" ] && [ -d "$FLEET_PRESTART" ]; then
     :   # made ahead already (⌘P's box, T992): the spawner takes it, or starts afresh
-  elif [ -n "$repo" ] && [ "$spawn" = 1 ] && [ "${FLEET_PRESTART_ON:-1}" != 0 ]; then
+  elif [ -n "$repo" ] && [ "$spawn" = 1 ] && [ -z "$model" ] && [ "${FLEET_PRESTART_ON:-1}" != 0 ]; then
     if PRESTART=$(mktemp -d "${TMPDIR:-/tmp}/fleet-prestart.XXXXXX"); then
       ( bash "$BIN/dash-raw-session.sh" --prestart "$PRESTART" --repo "$repo" ${agent:+--agent "$agent"} ${tsess:+"$tsess"} ) \
         </dev/null >/dev/null 2>"$PRESTART/err" &
@@ -434,11 +444,11 @@ if [ "$cmd" = dispatch ]; then
     # the dispatch and the record's payload in ONE interpreter (T992: they were
     # fleet_dispatch.py + a payload `python3 -` — two starts, ~0.2 s): line 1 the
     # dispatch (fleet_dispatch.resolve, its CLI's own call), line 2 the payload
-    both=$(python3 - "$BIN" "$agent" "$template" "${FLEET_AGENT:-}" "$tok" "$title" "$body" "$repo" "$reap" "$as_agent" "$via" <<'JSON'
+    both=$(python3 - "$BIN" "$agent" "$template" "${FLEET_AGENT:-}" "$tok" "$title" "$body" "$repo" "$reap" "$as_agent" "$via" "$model" <<'JSON'
 import json,sys
 sys.path.insert(0, sys.argv[1])
 import fleet_dispatch
-agent,template,default,tok,title,body,repo,reap,as_agent,via=sys.argv[2:]
+agent,template,default,tok,title,body,repo,reap,as_agent,via,model=sys.argv[2:]
 try:
     d=fleet_dispatch.resolve([agent] if agent else [], template, "", default, None, tok)
 except (ValueError, TypeError) as e:
@@ -447,7 +457,8 @@ repo=repo.lower()
 print(json.dumps(d, separators=(",", ":")))
 print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via=via, repo=repo,
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
-    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=as_agent,rule="",draft="",pr_note="")),
+    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=as_agent,rule="",draft="",pr_note="",
+                         **({"model": model} if model else {}))),
     ensure_ascii=False))   # the hub reads 16 KB: UTF-8 words, not \uXXXX (half the bytes — T661)
 JSON
     ) || exit 2
@@ -519,7 +530,7 @@ EOF
     fi
     trap - EXIT   # its prestart is the spawner's now (FLEET_PRESTART)
     exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
-      ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
+      ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${model:+--model "$model"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
   fi
   [ "$spawn" = 1 ] || exit 0
   pfa=--placeholder
@@ -529,7 +540,7 @@ EOF
     pfa="--prompt-file=$pf"
   fi
   exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} \
-    ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
+    ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${model:+--model "$model"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
 fi
 
 # respawn T<n> [--prev <ID>] [--redo] [--origin O] [--print] [<fleet session>] (T642): a

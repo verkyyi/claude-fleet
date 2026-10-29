@@ -269,10 +269,19 @@ func (s *Server) handleFleetClientPlace(w http.ResponseWriter, r *http.Request) 
 		s.clientPlace(w, r, p, key, env.Lease, req, wait, now)
 	case "status":
 		s.clientPlaceStatus(w, r, p, req.OperationID, wait)
+	case "models":
+		// the start models this person may choose (task J7BN): ⌘P's 模型 cell
+		// is offered only when this answer names some
+		settings, err := s.Store.FleetSettings()
+		if err != nil {
+			httpError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": regionModels(settings, startPrincipal(p))})
 	case "", "place":
 		s.clientPlace(w, r, p, key, env.Lease, req, wait, now)
 	default:
-		httpError(w, http.StatusBadRequest, "action must be place, draft or status")
+		httpError(w, http.StatusBadRequest, "action must be place, draft, status or models")
 	}
 }
 

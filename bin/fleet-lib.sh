@@ -6683,6 +6683,9 @@ fleet_hub_lease() {
 fleet_hub_place() {
   local sess="${1:-}" repo="${2:-}" num="${3:-}" node="${4:-auto}" owid="${5:-}" agent="${6:-}" wait="${7:-}" acct="${8:-}" name="${9:-}" reap="${10:-}" cmd u pre='' out rc why ef what wid
   local nh="${FLEET_PLACE_NOT_HERE:-}" pas="${FLEET_PLACE_AS:-}" pbody="${FLEET_PLACE_BODY_FILE:-}" t0 pms
+  # the model chosen at creation (task J7BN): deepseek | deepseek-pro, else none
+  local pmodel="${FLEET_PLACE_MODEL:-}"
+  case "$pmodel" in deepseek|deepseek-pro) ;; *) pmodel='' ;; esac
   fleet_hub_on "$sess" || return 10
   case "$num" in scratch) what='a scratch session' ;; ''|*[!0-9]*) return 1 ;; *) what="#$num" ;; esac
   cmd="${FLEET_HUB_PLACE_CMD:-}"
@@ -6708,7 +6711,7 @@ fleet_hub_place() {
   t0=$(fleet_now_ms)
   out=$(_fleet_hub_env; bash -c "$cmd \"\$@\"" place --node "$node" ${owid:+--origin-wid "$owid"} ${agent:+--agent "$agent"} \
         ${wait:+--wait "$wait"} ${acct:+--account "$acct"} ${name:+--name "$name"} ${reap:+--reap "$reap"} \
-        ${nh:+--not-here "$nh"} ${pas:+--as "$pas"} ${pbody:+--body-file "$pbody"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
+        ${nh:+--not-here "$nh"} ${pas:+--as "$pas"} ${pbody:+--body-file "$pbody"} ${pmodel:+--model "$pmodel"} "$repo" "$num" "$wid" </dev/null 2>"$ef"); rc=$?
   pms=$(( $(fleet_now_ms) - t0 ))
   # The hub's time after its decision (a remote start's opening) is not the
   # placement's: place_ms is the wait for the hub's word (T672).

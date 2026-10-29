@@ -454,6 +454,12 @@ if [ -z "$NODE" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
   [ -z "${FLEET_SPAWN_NODE:-}" ] && [ -n "${FLEET_START_NODE:-}" ] && NODE=$FLEET_START_NODE
   case "$NODE" in ''|*[!A-Za-z0-9._-]*) NODE=auto ;; esac
 fi
+# A model chosen at creation (--model, task J7BN) is the hub's to place: it
+# sends a DeepSeek session to its region's machine — no --node ⇒ auto, never
+# the personal-machine / here-first «this machine».
+if [ -n "$MODEL_ARG" ] && [ -z "$NODE_ARG" ] && [ -z "$PRESTART_DIR" ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
+  NODE=auto
+fi
 # here-first (T992 — ⌘P's 「新会话」, the person's choice): this machine when its
 # admission takes the session — no hub placement, no other machine's road
 # (~2–4 s) — and the hub's placement only when it does not (the verdict held as
@@ -761,14 +767,13 @@ PLACE_AS=''
 if [ "$PLACING" = 1 ] && [ -n "$AS_ARG" ]; then
   if fleet_agent_file_travels "$AS_ARG"; then PLACE_AS=$AS_ARG; else _as_here=1; fi
 fi
-# A model chosen here (--model, task J7BN P1) does not ride a placement: it opens here.
-[ "$PLACING" = 1 ] && [ -n "$MODEL_ARG" ] && _model_here=1
+# A model chosen at creation (--model, task J7BN) rides the placement
+# (FLEET_PLACE_MODEL → ccquota place --model) — except where nothing travels.
 if [ "$PLACING" = 1 ]; then
-  if { [ "$NOREPO" = 1 ] && [ -z "$TASK_REF" ]; } || [ -n "$DRAFT" ] || [ -n "${_as_here:-}" ] || [ -n "${_model_here:-}" ]; then
+  if { [ "$NOREPO" = 1 ] && [ -z "$TASK_REF" ]; } || [ -n "$DRAFT" ] || [ -n "${_as_here:-}" ]; then
     _why='a no-repo scratch with no task record'
     [ -n "$DRAFT" ] && _why='a draft scratch (--draft)'
     [ -n "${_as_here:-}" ] && _why="a session as $AS_ARG (the agent file is here)"
-    [ -n "${_model_here:-}" ] && _why="a session on --model $MODEL_ARG"
     if [ "$NODE" != auto ]; then refuse "raw: $_why opens on this machine only — not opening it on $NODE"; exit 1; fi
     PLACING=0
   elif [ "${CCQUOTA_FLEET:-0}" != 1 ]; then
@@ -801,7 +806,7 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
   # machine's node (a second run of this script, a 1 s poll)
   place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
     FLEET_PLACE_LOCAL_DISPATCH="${FLEET_PLACE_LOCAL_DISPATCH:-1}" \
-    FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" \
+    FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" FLEET_PLACE_MODEL="$MODEL_ARG" \
     fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
   fleet_timing_at placed   # the hub's placement answered (T716; nothing without a ↵)
   [ -n "$_body" ] && rm -f "$_body"
@@ -854,6 +859,12 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
     *)
       if [ "$NODE" != auto ]; then
         refuse "raw: scratch 不能开在 $NODE: ${_why:-${_pv:-${_place_note:-入口没有给出回答（exit ${place_rc}）}}}"
+        [ "$place_rc" = 4 ] && exit 2; exit 1
+      fi
+      # A model chosen at creation (task J7BN) is the hub's to place: never this
+      # machine's fallback (it would run outside its region).
+      if [ -n "$MODEL_ARG" ]; then
+        refuse "raw: --model $MODEL_ARG 只由入口安排到它的区域，入口没有安排: ${_why:-${_pv:-${_place_note:-入口没有给出回答（exit ${place_rc}）}}}"
         [ "$place_rc" = 4 ] && exit 2; exit 1
       fi
       # The hub placed it nowhere and this machine already said no (T672): refused,
