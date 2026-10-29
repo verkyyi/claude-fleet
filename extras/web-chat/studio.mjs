@@ -2,7 +2,9 @@
 import { execFile } from "node:child_process";
 import { join } from "node:path";
 
-export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pending, previewFetch = fetch }) {
+const PREVIEW_ORIGIN = "https://space.24haowan.com"; // oss-ok: public LivePage integration; fixed destination prevents SSRF and credential exfiltration
+
+export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pending, previewFetch = fetch, previewOrigin = PREVIEW_ORIGIN }) {
   const book = (op, body = {}) => new Promise((resolve, reject) => {
     const child = execFile("python3", [join(helpers, "fleet_studio.py"), op],
       { env, timeout: 10000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
@@ -21,16 +23,16 @@ export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pend
       const { version: v, embed_origin: origin } = await book("renewal", a);
       const lease = v._renewal;
       if (!lease || !(Date.parse(lease.expires) > Date.now())) return { state: "authorization_required" };
-      if (v.retry_at * 1000 > Date.now()) return { state: "retry_later", error: v.preview_error };
+      if (v.retry_at * 1000 > Date.now()) return { state: v.preview_error === "preview_authorization_expired" ? "authorization_required" : "retry_later", error: v.preview_error };
       // Only this exact endpoint is callable, never an Agent-supplied arbitrary URL.
       const source = new URL(v.embed);
-      if (source.origin !== "https://space.24haowan.com" || !/^[A-Za-z0-9_-]{1,64}$/.test(a.version_id)) {
+      if (source.origin !== previewOrigin || !/^[A-Za-z0-9_-]{1,64}$/.test(a.version_id)) {
         throw new Error("unsupported_preview_origin");
       }
       try {
         const response = await previewFetch(`${source.origin}/preview/${a.version_id}/renew`, {
           method: "POST", redirect: "error", signal: AbortSignal.timeout(12000),
-          headers: { "Content-Type": "application/json", "User-Agent": "24haowan-probe/fleet-studio-renewal" },
+          headers: { "Content-Type": "application/json", "User-Agent": "24haowan-probe/fleet-studio-renewal" }, // oss-ok: public LivePage integration identifies its server-side renewal requests
           body: JSON.stringify({ key: lease.key, embed_origin: origin }),
         });
         if (!response.ok) {

@@ -41,7 +41,7 @@
 工作台预览由 Agent 首次调用 `preview_version(embed_origin, embed_renewable:true)` 授权，
 将 `embed.renewal.key` / `expires_at` 经 `show_page(embed_renewal_key, embed_renewal_expires)` 交给家登录。
 `POST /v1/chat/studio/preview` 经过原有 founder gate 与本人 relay，家登录只向固定的
-`https://space.24haowan.com/preview/<版本>/renew` POST，禁止跳转，不接受任意目标地址。
+LivePage 服务的 `/preview/<版本>/renew` POST，禁止跳转，不接受任意目标地址。
 续期不启动模型回合，不依赖 Agent 当前是否运行；它只能换该版本、该来源的只读短票，不能写入。
 LivePage 每次现查原始 token、成员关系、版本和来源。续期授权最长七天且不超过原 token 寿命；
 短票仍最多六十分钟。到期或撤销后，经原会话重新授权，旧 space 服务 / 旧工具清单保留普通预览回退。

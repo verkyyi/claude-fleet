@@ -28,7 +28,7 @@ try {
   const session = {key:'catalog',fid,agent:'claude',proposal_id:'',versions:[]};
   await page.route('**/*', async route => {
     const req=route.request(), u=new URL(req.url());
-    if(u.hostname==='space.24haowan.com') return route.fulfill({contentType:'text/html; charset=utf-8',body:'<h1>预览正文</h1>'});
+    if(u.hostname==='space.example.com') return route.fulfill({contentType:'text/html; charset=utf-8',body:'<h1>预览正文</h1>'});
     if (!u.pathname.startsWith('/v1/')) {
       const rel=u.pathname.replace(/^\/app\/?/,'');
       const file=new URL(`../dist/app/${rel.startsWith('assets/')?rel:'index.html'}`,import.meta.url);
@@ -42,7 +42,7 @@ try {
     if(u.pathname==='/v1/chat/studio/preview') {
       renewals++;
       const v=session.versions.find(v=>v.version_id===req.postDataJSON().version_id);
-      v.embed=`https://space.24haowan.com/embed/${v.version_id}/ticket-${renewals}`;
+      v.embed=`https://space.example.com/embed/${v.version_id}/ticket-${renewals}`;
       v.embed_exp=new Date(clock+3600000).toISOString();
       body={state:'ready'};
     }
@@ -73,7 +73,7 @@ try {
   }
   session.key='page-test'; session.proposal_id='page1';
   session.versions=[1,2].map(n=>({version_id:`v${n}`,version:String(n),status:'hold',at:n,renewable:true,
-    embed:`https://space.24haowan.com/embed/v${n}/initial`,embed_exp:new Date(clock+240000).toISOString()}));
+    embed:`https://space.example.com/embed/v${n}/initial`,embed_exp:new Date(clock+240000).toISOString()}));
   session.operations=[{id:'op1',action:'publish',state:'unknown',at:1,message:'结果待核实'}];
   await page.goto('http://127.0.0.1:18963/app/studio?project=page-test&version=v1');
   await page.getByRole('combobox',{name:'版本',exact:true}).waitFor();
