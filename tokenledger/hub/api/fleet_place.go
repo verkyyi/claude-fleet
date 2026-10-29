@@ -56,10 +56,12 @@ type placeRequest struct {
 	// Node is "auto" (default) or one roster machine.
 	Node string `json:"node"`
 	// OriginWID is accepted and ignored for one version of old clients.
-	OriginWID   string          `json:"origin_wid"`
-	Agent       string          `json:"agent"`
-	CodingAgent string          `json:"coding_agent"`
-	Dispatch    *dispatchChoice `json:"dispatch"`
+	OriginWID   string `json:"origin_wid"`
+	Agent       string `json:"agent"`
+	CodingAgent string `json:"coding_agent"`
+	// Model is a DeepSeek model (task J7BN): "", deepseek or deepseek-pro.
+	Model    string          `json:"model,omitempty"`
+	Dispatch *dispatchChoice `json:"dispatch"`
 	// Reap is when the session may be closed on its own (claude-fleet#1902).
 	Reap string `json:"reap"`
 	// AccountClass is the kind of subscription the session must run on
@@ -317,6 +319,14 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "as must be an agent file's name")
 		return
 	}
+	// model (task J7BN): a DeepSeek model; its provider is deepseek.
+	if m, why := checkStartModel(req.Model, req.Agent); why != "" {
+		httpError(w, http.StatusBadRequest, why)
+		return
+	} else {
+		req.Model = m
+	}
+	provider := providerFor(req.Agent, req.Model)
 	if req.Body != "" {
 		if !scratch {
 			httpError(w, http.StatusBadRequest, "body belongs to a scratch start (kind=scratch)")
@@ -344,6 +354,11 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 	p.TaskOwner = s.nodeTaskOwner(ep)
 	now := time.Now()
 	w.Header().Set("Cache-Control", "no-store")
+	if err := s.regionStartGate(startPrincipal(p), provider); err != nil {
+		s.placeAudit(p, fleetID, "refused:"+errorObject(err)["code"], now)
+		writeJSON(w, faultStatus(errorObject(err)["code"]), map[string]any{"error": errorObject(err)})
+		return
+	}
 
 	// A session's own call (claude-fleet#1810): the node vouches for which of
 	// its sessions asked. A statement that does not verify is refused (401),
@@ -433,7 +448,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		declined[fleetID] = excludedAskerFull + req.NotHere
 	}
 	s.placeHolds.set(fleetID, req.NotHere, now)
-	pl, err := s.pickNodeAfter(p, req.Repo, req.Node, req.Agent, now, declined, "")
+	pl, err := s.pickNodeAfter(p, req.Repo, req.Node, provider, now, declined, "")
 	pt.picked = time.Now()
 	if err != nil {
 		s.placeAudit(p, fleetID, errorObject(err)["code"], now)
@@ -507,7 +522,7 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		attempts = append(attempts, a)
 		declined[pl.FleetID] = a.Why
-		npl, err := s.pickNodeAfter(p, req.Repo, "auto", req.Agent, time.Now(), declined, fleetID)
+		npl, err := s.pickNodeAfter(p, req.Repo, "auto", provider, time.Now(), declined, fleetID)
 		if err != nil {
 			if len(attempts) == 1 && req.NotHere == "" {
 				// The only machine that could take it said no: its answer,
@@ -589,6 +604,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Agent != "" {
 			args["agent"] = req.Agent
+		}
+		if req.Model != "" {
+			args["model"] = req.Model
 		}
 		if req.Dispatch != nil {
 			args["dispatch"] = req.Dispatch

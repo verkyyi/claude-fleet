@@ -507,6 +507,8 @@ type Server struct {
 	// (claude-fleet#1421), so two heartbeat triggers never push one relay
 	// twice in the same instant.
 	relayLocks sync.Map // endpoint ID → *sync.Mutex
+	// podClusters is podCluster's cache: pod → podClusterEntry (task J7BN).
+	podClusters sync.Map
 	// entryReachAt is machine → the time of its last entry reach check
 	// (claude-fleet#3072).
 	entryReachAt sync.Map

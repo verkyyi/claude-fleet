@@ -111,15 +111,29 @@ func decideCompute(claimOn, force bool, p *control.NodeProbe, auto bool, now tim
 //     (podProvidersOf) — the lease would refuse them on arrival.
 func (s *Server) computeFor(endpointID, machine string, hb control.Heartbeat, settings map[string]string, provider string, now time.Time) computeVerdict {
 	v := s.computeOf(endpointID, hb, settings, now)
-	if provider == "" || v.Off && !v.Closed {
+	if v.Off && !v.Closed {
 		return v
 	}
-	if pod := podProvidersOf(settings, machine); pod != nil && !pod[provider] {
+	// The mainland region (task J7BN): a cn machine runs deepseek only, a
+	// global one no deepseek while a cn cluster is listed. Nothing while none
+	// is — and then provider "" is computeOf exactly, as before.
+	if why := s.regionWhy(settings, machine, provider); why != "" {
+		label := provider
+		if label == "" {
+			label = "this start"
+		}
+		return computeVerdict{Off: true, Why: "compute off for " + label + " (" + why + ")", Probe: v.Probe}
+	}
+	if provider == "" {
+		return v
+	}
+	if pod := s.podProvidersFor(settings, machine); pod != nil && !pod[provider] {
 		why := credPolicy{Machine: machine, PodProviders: pod}.podProviderWhy(provider)
 		return computeVerdict{Off: true, Why: "compute off for " + provider + " (" + why + ")", Probe: v.Probe}
 	}
-	if v.Closed && provider == credvault.Codex {
-		// Closed: the login asked to run and only its region closed it.
+	if v.Closed && (provider == credvault.Codex || provider == credvault.DeepSeek && s.regionOf(settings, machine) == regionCN) {
+		// Closed: the login asked to run and only its region closed it — a
+		// mainland machine's egress serves DeepSeek (task J7BN).
 		return computeVerdict{Probe: v.Probe}
 	}
 	return v

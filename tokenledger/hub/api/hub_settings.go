@@ -96,6 +96,8 @@ var hubSettings = map[string]hubSetting{
 			}
 			return strconv.Itoa(n), ""
 		}},
+	RegionCNPeopleKey: {def: "", help: "who may start a deepseek session while a mainland (cn) cluster is listed (task J7BN): principals comma-separated, * for everyone; empty = nobody",
+		check: checkRegionCNPeople},
 	AutoAssignKey: {def: "", help: "machines a new person gets a login opened on: least-busy, names comma-separated, or none",
 		check: func(_ *Server, v string) (string, string) {
 			if strings.EqualFold(strings.TrimSpace(v), noneValue) {
@@ -209,7 +211,7 @@ var hubSettings = map[string]hubSetting{
 		check: checkIntSetting(TrialIdleWarnKey, 30, 3600, defaultTrialIdleWarnSecs)},
 	TrialIdleKey: {def: "240", help: "a trial with no input for this many seconds gives its machine back; the conversation is kept 24 h (claude-fleet#4060)",
 		check: checkIntSetting(TrialIdleKey, 60, 7200, defaultTrialIdleSecs)},
-	CredPodProvidersKey: {def: credPodProvidersDef, help: "the subscription providers every cluster pod (u-<nonce>, fleet-linux-*) may use, whatever its owner's allowance: comma-separated (codex, claude), or * for no limit (claude-fleet#4601)",
+	CredPodProvidersKey: {def: credPodProvidersDef, help: "the subscription providers every cluster pod (u-<nonce>, fleet-linux-*) may use, whatever its owner's allowance: comma-separated (codex, claude, deepseek), or * for no limit (claude-fleet#4601); fleet.cred_pod_providers.<cluster> overrides it for one cluster (J7BN)",
 		check: checkCredPodProviders},
 	SparesKey: {def: "off", help: "keep spare logins opened on each host machine, so a newcomer's first sign-in is ready at once (each is a macOS user)",
 		check: onOff(SparesKey, "off")},
@@ -393,7 +395,15 @@ func (s *Server) autoAssign() []string {
 		}
 		return nil
 	}
-	return splitHosts(v)
+	hosts := splitHosts(v)
+	if s.Store != nil {
+		// A mainland (cn) cluster is never a newcomer's automatic pick
+		// (task J7BN): the operator's assign names it for one person.
+		if settings, err := s.Store.FleetSettings(); err == nil {
+			hosts = s.dropCNHosts(settings, hosts)
+		}
+	}
+	return hosts
 }
 
 // autoAssignOn says fleet.auto_assign would open a login for a new person at

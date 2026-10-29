@@ -303,6 +303,9 @@ func (s *Server) credPolicyFor(endpointID, principal string) (credPolicy, error)
 		machine = s.policyMachine(endpointID)
 	}
 	pol := credPolicyOf(settings, machine, principal)
+	if pol.Machine != "" {
+		pol.PodProviders = s.podProvidersFor(settings, pol.Machine) // its cluster's (task J7BN)
+	}
 	if err := s.userPodNodeAllow(settings, &pol); err != nil {
 		return credPolicy{}, err
 	}
@@ -534,6 +537,9 @@ func (s *Server) credPolicyGet(w http.ResponseWriter, r *http.Request) {
 	byEndpoint := q.Get("endpoint_id") != ""
 	if machine != "" || principal != "" || byEndpoint {
 		pol := credPolicyOf(settings, strings.ToLower(firstLabel(machine)), principal)
+		if pol.Machine != "" {
+			pol.PodProviders = s.podProvidersFor(settings, pol.Machine)
+		}
 		if byEndpoint && principal == "" {
 			pol.User = credAllow{Set: true, Bad: "no active owner"}
 		}
