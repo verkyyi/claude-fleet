@@ -8,6 +8,8 @@ import { PageQR } from "../chat/page-qr";
 import { PageFrame } from "../chat/page-frame";
 import { ChatThread, useVisualViewport } from "./chat";
 import { usePage, useShell } from "../Shell";
+import { useWorkRows } from "../work-rows";
+import { rowForOpen } from "../new-session";
 import { cn } from "@/lib/utils";
 
 type Project = { proposal_id: string; title: string; url?: string; visibility?: string };
@@ -60,6 +62,7 @@ function CanvasPreview({ version, device }: { version: Version; device: string }
 }
 
 function Studio() {
+  const { rows, reload } = useWorkRows();
   const [search, setSearch] = useSearchParams();
   const key = search.get("project") || "";
   const [state, setState] = useState<State>({ projects: [], sessions: {} });
@@ -77,6 +80,16 @@ function Studio() {
   const [retry, setRetry] = useState<Command | null>(null);
   const openKey = useRef("");
   const session = Object.hasOwn(state.sessions, key) ? state.sessions[key] : undefined;
+  const row = session ? rowForOpen(rows, session.fid, "") : null;
+  const worker = row?.board?.worker_id || row?.live?.id || "";
+  // FIDs persist in the studio book; the shared owner-scoped list resolves
+  // their current live worker address, including after a page reload.
+  useEffect(() => {
+    if (!session || worker) return;
+    reload();
+    const timer = setInterval(reload, 3000);
+    return () => clearInterval(timer);
+  }, [session?.fid, worker, reload]);
   const versions = session?.versions || [];
   const latest = versions.at(-1);
   const version = versions.find(v => v.version_id === versionID) || latest;
@@ -104,7 +117,10 @@ function Studio() {
       setState(old => ({ ...old, sessions: { ...old.sessions, [s.key]: s } }));
       setSearch({ project: s.key }); setTab("chat"); setDraft(""); openKey.current = "";
       if (catalog && (s as Session & { reused?: boolean }).reused) {
-        const r = await fetch(`/v1/chat/say?worker=${encodeURIComponent(`fid:${s.fid}`)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Fleet-Webchat": "1" },
+        const target = rowForOpen(rows, s.fid, "");
+        const address = target?.board?.worker_id || target?.live?.id;
+        if (!address) throw new Error("会话尚未就绪，请稍后重试刷新项目");
+        const r = await fetch(`/v1/chat/say?worker=${encodeURIComponent(address)}`, { method: "POST", headers: { "Content-Type": "application/json", "X-Fleet-Webchat": "1" },
           body: JSON.stringify({ id: crypto.randomUUID(), text: "请重新读取 list_proposals 全部分页，用 fleet.studio_projects 更新完整项目列表。只读。" }) });
         const j = await r.json().catch(() => ({}));
         if (!r.ok || j.state === "refused") throw new Error(j.error || j.reason || "刷新请求未送达");
@@ -148,7 +164,7 @@ function Studio() {
         <div className="flex h-12 shrink-0 items-center justify-between border-b px-4 text-sm"><span className="font-medium">与 Agent 一起创作</span>
           {session ? <span className="text-xs text-muted-foreground">{session.agent === "codex" ? "Codex" : "Claude Code"}</span> : <select aria-label="Agent" value={agent} onChange={e => setAgent(e.target.value)} className="rounded border bg-background p-1 text-xs"><option value="claude">Claude Code</option><option value="codex">Codex</option></select>}
         </div>
-        <div className="min-h-0 flex-1">{session ? <ChatThread source={{ kind: "session", worker: `fid:${session.fid}`, machine: "", key: session.key, agent: session.agent }} /> : <div className="flex h-full flex-col gap-5 overflow-auto p-5">
+        <div className="min-h-0 flex-1">{session ? (worker ? <ChatThread source={{ kind: "session", worker, machine: row?.live?.machine || row?.board?.machine || "", key: session.key, agent: session.agent }} /> : <div className="p-5 text-sm text-muted-foreground" role="status">正在连接会话…</div>) : <div className="flex h-full flex-col gap-5 overflow-auto p-5">
           <div className="pt-6"><p className="text-xl font-semibold">今天想做什么？</p><p className="mt-2 text-sm leading-6 text-muted-foreground">说一句需求，Agent 帮你把内容做成活页。每次改动先预览，由你决定何时发布。</p></div>
           <div className="grid grid-cols-1 gap-2">{QUICK.map(q => <button key={q.title} disabled={busy} onClick={() => void open(undefined, q.text)} className="flex items-center gap-3 rounded-xl border p-3 text-left text-sm hover:bg-muted"><q.icon className="size-4 text-muted-foreground" />{q.title}</button>)}</div>
           <div className="mt-auto rounded-xl border p-2"><Textarea aria-label="需求" placeholder="例如：给一家咖啡店做一份秋季活动样板…" value={draft} onChange={e => setDraft(e.target.value)} className="min-h-28 resize-none border-0 shadow-none" /><div className="flex justify-end"><Button aria-label="开始创作" disabled={busy || !draft.trim()} onClick={() => void open()}><ArrowUp className="size-4" />{busy ? "正在开始…" : "开始创作"}</Button></div></div>

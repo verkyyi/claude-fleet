@@ -43,6 +43,8 @@ jobs:
         run: node extras/web-console/test/task-cancel-browser.mjs
       - name: Explicit Task continue in the real app
         run: node extras/web-console/test/task-continue-browser.mjs
+      - name: Studio restores live worker addresses and refreshes the same catalog
+        run: node extras/web-console/test/studio-session-browser.mjs
       - name: A late transcript cannot erase a new chat turn
         run: node chat-history.mjs
         working-directory: extras/browser-transport

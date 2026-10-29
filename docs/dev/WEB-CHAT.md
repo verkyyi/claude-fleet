@@ -16,6 +16,7 @@
 家登录必须安装本版本，具备完整的个人 `space` MCP；`fleet-agent-def.py ship` 会将
 `conf/agent-defaults/claude/agents/livepage-studio.md` 发到 `~/.claude/agents/`，无仓库会话也能解析。
 初次开始默认 Claude Code，可选择 Codex；已有页面复用原会话及其 Agent。
+工作台保留会话 FID，通过本人会话列表解析当前 worker 地址再接入对话；列表尚未同步时显示「正在连接会话…」。重新打开项目和刷新项目列表也沿用这一地址。
 `CCQUOTA_FLEET_CHAT_FRAME_ORIGINS` 必须允许活页实际返回的嵌入来源。
 
 1. 点击「刷新项目」，Agent 用 `list_proposals` 读取全部页面并回传列表。点项目复用它的会话。
