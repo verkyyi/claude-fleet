@@ -40,6 +40,25 @@ export default function StudioPage() {
   return me?.studio ? <Studio /> : <div className="p-8" role="status">{me ? "404 · 页面不存在" : "正在读取…"}</div>;
 }
 
+function CanvasPreview({ version, device }: { version: Version; device: string }) {
+  const host = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => setSize({ width: entry.contentRect.width, height: entry.contentRect.height }));
+    if (host.current) observer.observe(host.current);
+    return () => observer.disconnect();
+  }, []);
+  const width = device === "phone" ? 390 : 1280;
+  const scale = Math.min(1, size.width / width);
+  return <div ref={host} className="flex h-full min-h-80 w-full justify-center overflow-hidden">
+    {scale > 0 ? <div className="relative h-full overflow-hidden rounded-lg border bg-white shadow-sm" style={{ width: width * scale }}>
+      <div className="absolute left-0 top-0 origin-top-left" style={{ width, height: size.height / scale, transform: `scale(${scale})` }}>
+        <PageFrame src={version.embed!} title={version.title || "活页预览"} className="h-full w-full border-0" />
+      </div>
+    </div> : null}
+  </div>;
+}
+
 function Studio() {
   const [search, setSearch] = useSearchParams();
   const key = search.get("project") || "";
@@ -143,7 +162,7 @@ function Studio() {
           <Button size="icon" variant={device === "phone" ? "secondary" : "ghost"} aria-label="手机预览" aria-pressed={device === "phone"} onClick={() => setDevice("phone")}><Smartphone className="size-4" /></Button>
         </div>
         <div className="flex min-h-0 flex-1 justify-center overflow-auto p-3 sm:p-5">
-          {version?.embed && !expired ? <PageFrame key={version.embed} src={version.embed} title={version.title || "活页预览"} className={cn("h-full min-h-80 rounded-lg border bg-white shadow-sm", device === "phone" ? "w-[390px] max-w-full" : "w-full")} /> : <div className="flex max-w-sm flex-col items-center justify-center gap-3 text-center text-muted-foreground"><LayoutTemplate className="size-10 opacity-30" /><p className="font-medium text-foreground">{version?.embed ? "预览已过期" : "你的下一张活页，从这里开始"}</p><p className="text-sm leading-6">{version?.embed ? "刷新预览后继续查看，已保存的版本不受影响。" : "Agent 存好待发版本后，预览会自动出现在画布中。"}</p>{canAct ? <Button variant="outline" onClick={() => action("preview")}>获取预览</Button> : null}</div>}
+          {version?.embed && !expired ? <CanvasPreview key={version.embed} version={version} device={device} /> : <div className="flex max-w-sm flex-col items-center justify-center gap-3 text-center text-muted-foreground"><LayoutTemplate className="size-10 opacity-30" /><p className="font-medium text-foreground">{version?.embed ? "预览已过期" : "你的下一张活页，从这里开始"}</p><p className="text-sm leading-6">{version?.embed ? "刷新预览后继续查看，已保存的版本不受影响。" : "Agent 存好待发版本后，预览会自动出现在画布中。"}</p>{canAct ? <Button variant="outline" onClick={() => action("preview")}>获取预览</Button> : null}</div>}
         </div>
         {version ? <p className="shrink-0 border-t px-4 py-2 text-xs text-muted-foreground">{STATUS[version.status]}{version.note ? ` · ${version.note}` : ""}{version.status === "hold" ? " · 尚未上线" : ""}</p> : null}
       </section>
