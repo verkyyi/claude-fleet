@@ -45,6 +45,9 @@ default_hooks = {
     "fleet-stream-resume.sh",
     # SessionStart: a window's ID ledger records each native segment (EPIC T497 C1)
     "fleet-id.sh",
+    # Only remote space calls with a studio binding: exact publication receipts;
+    # ordinary sessions get no behavior, prompt, or conversation decoration.
+    "studio-guard.py",
 }
 
 def hooks(data):
