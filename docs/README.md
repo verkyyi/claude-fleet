@@ -56,6 +56,7 @@
 **入口与机器**
 
 - [FLEET-HUB.md](dev/FLEET-HUB.md) — 入口（hub）
+- [DOMESTIC-MODELS.md](dev/DOMESTIC-MODELS.md) — 国内模型直连：评估与实现路线（DeepSeek 已上线，P1–P3 待定）
 - [MANAGED-NODE.md](dev/MANAGED-NODE.md) · [MANAGED-LINUX.md](dev/MANAGED-LINUX.md) — 托管机器（macOS / Linux）
 - [DOOR-SIMPLIFY.md](dev/DOOR-SIMPLIFY.md) — 门简化方案（设计，待确认）
 - [HOST.md](dev/HOST.md) — 只跑会话的 Mac 怎么设
