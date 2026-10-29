@@ -9,7 +9,7 @@ const dir = mkdtempSync(join(tmpdir(), "fleet-studio-test-"));
 const fid = "12345678-1234-4234-8234-123456789abc";
 let starts = 0;
 try {
-  const dependencies = { helpers: resolve("bin"), env: { ...process.env, FLEET_WEBCHAT_STATE: dir },
+  const dependencies = { previewOrigin: "https://space.example.com", helpers: resolve("bin"), env: { ...process.env, FLEET_WEBCHAT_STATE: dir },
     readJson: async req => req.body, send: (res, status, body) => Object.assign(res, { status, body }),
     spawn: async (text, agent, profile) => {
       assert.equal(profile, "livepage-studio"); assert.equal(agent, "codex"); assert.match(text, /hold/);
@@ -35,5 +35,35 @@ try {
   const returned = await handler({ method: "POST", headers: { "x-fleet-webchat": "1" }, body: {
     fid, id: "87654321-1234-4234-8234-123456789abc", action: "analytics" } }, {}, "/api/studio/action");
   assert.equal(returned.status, 409); assert.equal(returned.body.error, "session gone");
+  const leaseKey = "a".repeat(43);
+  const args = { fid, proposal_id: "sample", version_id: "v1" };
+  execFileSync("python3", [resolve("bin/fleet_studio.py"), "show"], { env: dependencies.env,
+    input: JSON.stringify({ ...args, status: "hold", embed_url: "https://space.example.com/embed/v1/old",
+      embed_expires: new Date(Date.now() - 1000).toISOString(), embed_renewal_key: leaseKey,
+      embed_renewal_expires: new Date(Date.now() + 86400000).toISOString() }) });
+  let renewals = 0;
+  handler = studioHandlers({ ...dependencies, previewFetch: async (url, init) => {
+    renewals++;
+    assert.equal(url, "https://space.example.com/preview/v1/renew");
+    assert.equal(JSON.parse(init.body).key, leaseKey);
+    await new Promise(r => setTimeout(r, 20));
+    return Response.json({ url: "https://space.example.com/embed/v1/new", version_id: "v1", proposal_id: "sample",
+      origin: "https://hub.example.com", expires_at: new Date(Date.now() + 3600000).toISOString() });
+  }});
+  const req = { method: "POST", headers: { "x-fleet-webchat": "1" }, body: args };
+  const replies = await Promise.all([handler(req, {}, "/api/studio/preview"), handler(req, {}, "/api/studio/preview")]);
+  assert.equal(renewals, 1, "two tabs renew once, with no Agent turn");
+  assert.ok(replies.every(r => r.body.state === "ready"));
+  const projection = await handler({ method: "GET" }, {}, "/api/studio");
+  assert.ok(!JSON.stringify(projection).includes(leaseKey), "renewal key stays on the node");
+  assert.match(projection.body.sessions["new-test"].versions[0].embed, /new$/);
+  // A lost send response must become unknown, and retrying the same action cannot resend it.
+  let sends = 0;
+  handler = studioHandlers({ ...dependencies, gate: async () => { sends++; throw Error("lost response"); } });
+  const command = { ...args, id: "99999999-1234-4234-8234-123456789abc", action: "publish", confirmed: true };
+  const call = () => handler({ ...req, body: command }, {}, "/api/studio/action");
+  assert.equal((await call()).body.state, "unknown");
+  assert.equal((await call()).body.state, "unknown");
+  assert.equal(sends, 1);
   console.log("PASS studio: concurrent open, restart, scope, CSRF, unconfirmed action");
 } finally { rmSync(dir, { recursive: true, force: true }); }

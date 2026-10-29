@@ -47,6 +47,16 @@ class StudioTest(unittest.TestCase):
             studio.call('show', dict(fid=FID, proposal_id='page2', title='wrong'))
         self.assertEqual(studio.call('target', {'fid': FID})['versions'][0]['status'], 'hold')
 
+    def test_refresh_preserves_version_order_and_hides_renewal(self):
+        self.show()
+        studio.call('show', dict(fid=FID, proposal_id='page1', version_id='v2', status='hold'))
+        studio.call('show', dict(fid=FID, proposal_id='page1', version_id='v1', status='hold',
+                                embed_renewal_key='a' * 43, embed_renewal_expires='2099-01-01T00:00:00Z'))
+        s = studio.call('read', {})['sessions']['new-one']
+        self.assertEqual([v['version_id'] for v in s['versions']], ['v1', 'v2'])
+        self.assertNotIn('a' * 43, json.dumps(s))
+        self.assertNotIn('a' * 43, json.dumps(studio.call('target', {'fid': FID})))
+
     def test_preview_and_confirmation_required(self):
         with self.assertRaises(ValueError):
             self.approve()

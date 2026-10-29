@@ -88,12 +88,14 @@ try {
           assert.equal(await page.getByRole('button', { name: '发送', exact: true }).isDisabled(), true)
           capability = true
           await page.evaluate(() => { window.__sessionView.capability = true })
-          await page.clock.fastForward(1001)
+          // Run timers in order: fastForward may move the clock before the
+          // aborted reader's microtask has scheduled its reconnect timeout.
+          await page.clock.runFor(1100)
           await page.locator('[data-testid=session-view][data-talk]').waitFor()
           assert.match(await input.inputValue(), /draft survives discovery/)
           await page.evaluate(() => window.__sessionView.controller.error(new Error('controlled stream disconnect')))
           await page.locator('[data-testid=session-view][data-access="offline"]').waitFor({ timeout: 2500 })
-          await page.clock.fastForward(1001)
+          await page.clock.runFor(1100)
           await page.locator('[data-testid=session-view][data-talk]').waitFor()
           await page.getByRole('button', { name: '发送', exact: true }).click()
           await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.value === '')

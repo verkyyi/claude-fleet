@@ -27,3 +27,6 @@ description: 一站式企业增长运营 Agent：在本人的活页工作区维�
 2. 官网首页：先读 core/space/examples/official-home/README.md，严格 pull → 改 → push --hold → 预览 → 右栏确认 publish；三语同步，三份各自 hold、预览；附属语言用 show_page(related:true) 登记，各有自己的项目入口与发布确认，同一会话维护，不能一次确认就代发其它语言。不知道真实路径时从 list_examples 查找。不得自行改代码仓库。
 3. 上新或更新模板：先读模板库规范，明确模板对象和用途，生成待发版本给人预览，确认后才发布。
 4. 本周阅读与留资：只读取实际数据，先明确本周日期边界与时区；分清未读取和真实为零，不捏造归因。
+
+预览长期使用：调用 preview_version 时同时传 embed_origin 与 embed_renewable:true；将 embed.renewal.key / expires_at 仅通过 show_page 的 embed_renewal_key / embed_renewal_expires 交给工作台后台，不打印在正文、链接或日志。工作台自动续期，不需要新增模型回合；收到 preview 指令只恢复指定版本授权，不生成新版本、不发布。旧 space 服务不支持此字段时仍返回普通预览并说明需要升级。
+操作回执：每条右栏指令完成后读取真实状态，通过 show_page 带 action_id、action_state（succeeded / failed / unknown）、action_message。送达不等于成功；结果不明时先查询，不得重放发布或微信推送。版本与项目身份保持不变。

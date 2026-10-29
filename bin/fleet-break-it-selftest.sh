@@ -8292,6 +8292,14 @@ drill_studio_unconfirmed_publish() {
   SECS=$(since "$t0"); CAP=15; WHAT='native space refuses unconfirmed publication; exact approval is consumed once'
 }
 
+drill_studio_preview_renewal() {
+  local t0; t0=$(now); CAP=15
+  if ! python3 "$BIN/fleet-studio-selftest.py" StudioTest.test_refresh_preserves_version_order_and_hides_renewal >"$WORK/studio-renewal.log" 2>&1; then
+    WHY="studio renewal regression: $(tail -n 3 "$WORK/studio-renewal.log")"; return 1
+  fi
+  SECS=$(since "$t0"); WHAT='old-version renewal preserves order; private renewal grant never enters projection'
+}
+
 drill_release_oidc_runtime() {
   local t0; t0=$(now); CAP=120
   bash "$BIN/fleet-release-publish-selftest.sh" >"$WORK/release-oidc-runtime.log" 2>&1 || {
