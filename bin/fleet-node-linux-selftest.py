@@ -646,6 +646,12 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual(pod['securityContext']['fsGroup'], 10002)
         self.assertNotIn('shareProcessNamespace', pod)
         self.assertEqual([i['name'] for i in pod['initContainers']], ['egress-guard', 'pod-etc'])
+        # J7BN: the kubelet's /tmp emptyDir is 2777 with no sticky bit (Claude Code
+        # then turns cross-session messaging off); the root init makes it 1777
+        g = pod['initContainers'][0]
+        self.assertTrue(g['command'][-1].endswith('chmod 1777 /tmp\n'), g['command'][-1][-80:])
+        self.assertIn({'name': 'tmp', 'mountPath': '/tmp'}, g['volumeMounts'])
+        self.assertEqual(g['securityContext']['capabilities']['add'], ['NET_ADMIN', 'NET_RAW'])
         etc = pod['initContainers'][1]
         self.assertEqual((etc['securityContext']['runAsUser'], etc['securityContext']['runAsNonRoot']), (65534, True))
         # passwd / group read-only in both containers: nobody in the pod writes them
@@ -1189,6 +1195,9 @@ class LinuxNode(unittest.TestCase):
         self.assertEqual([c['name'] for c in pod['initContainers']], ['egress-guard'])
         g = pod['initContainers'][0]
         self.assertEqual(g['image'], 'example/image@sha256:' + 'a' * 64)
+        # the shared machine's guard touches no /tmp (the sticky fix is a person pod's, J7BN)
+        self.assertNotIn('chmod 1777', g['command'][-1])
+        self.assertEqual(g['volumeMounts'], [{'name': 'egress-run', 'mountPath': '/run'}])
         sc = g['securityContext']
         self.assertEqual(sc['capabilities'], {'drop': ['ALL'], 'add': ['NET_ADMIN', 'NET_RAW']})
         self.assertFalse(sc['allowPrivilegeEscalation'])

@@ -16,6 +16,7 @@
 #   S9    a live ID's segment resumed in another window: the new ID's prev points
 #         back, both are in conflict (等你) while both live, closing one restores
 #         the other
+#   J7BN  an ID opened on --model deepseek[-pro] reopens with that --model
 #   AGENT a Claude session reopened on a FLEET_AGENT=codex fleet: --exec hands the
 #         spawner --agent claude; --check / --check --rebuild read the transcript
 #         where the spawner will (the session's own agent, its cwd) and refuse with
@@ -200,6 +201,21 @@ st_count; [ "$rc" = 0 ] && [ "$out" = ok ] || st_miss "AGENT: --check passes a C
 FLEET_AGENT=codex FLEET_TEST_SPAWNED="$WORK/spawned-a" FLEET_ID_SPAWN="$WORK/spawn.sh" fid reopen "$FA" --exec
 st_count; tr '\n' ' ' < "$WORK/spawned-a" | grep -q -- "--resume aaaa0001-1111-4111-8111-111111111111 --strict-resume .*--agent claude .*--fid $FA" \
   || st_miss "AGENT: --exec hands the spawner --agent claude on a codex fleet" "$(tr '\n' ' ' < "$WORK/spawned-a" 2>/dev/null)"
+# J7BN: a session opened on a fixed model (--model deepseek-pro, @cc_model_fixed)
+# comes back on it — the ID's opened carries it; an ID opened without one hands none
+FM=$(mkfid)
+read -r WM PM <<EOF
+$(newwin "$FM")
+EOF
+fid open "$FM" --window "$WM" --socket "$L" --agent claude --title 'MODEL work' --model deepseek-pro >/dev/null
+hook "$PM" startup aaaa0002-1111-4111-8111-111111111111
+lib fleet_win_retire "$WM" "$L" exited; tf kill-window -t "$WM"
+printf '{"sessionId":"aaaa0002-1111-4111-8111-111111111111"}\n' > "$HPROJ/aaaa0002-1111-4111-8111-111111111111.jsonl"
+st_count; fid continue "$FM" | grep -q '"model": "deepseek-pro"' || st_miss "J7BN: the plan carries the fixed model" "$(fid continue "$FM")"
+FLEET_TEST_SPAWNED="$WORK/spawned-m" FLEET_ID_SPAWN="$WORK/spawn.sh" fid reopen "$FM" --exec
+st_count; tr '\n' ' ' < "$WORK/spawned-m" | grep -q -- "--model deepseek-pro .*--fid $FM" \
+  || st_miss "J7BN: reopen hands the spawner --model deepseek-pro" "$(tr '\n' ' ' < "$WORK/spawned-m" 2>/dev/null)"
+st_count; ! grep -q -- '--model' "$WORK/spawned-a" || st_miss "J7BN: an ID opened with no model hands none" "$(tr '\n' ' ' < "$WORK/spawned-a")"
 # Readable history, but not where the spawner will look (another project dir): the
 # check refuses it with the reason, as the exec's strict resume would.
 mkdir -p "$CLAUDE_PROJECTS_DIR/elsewhere"

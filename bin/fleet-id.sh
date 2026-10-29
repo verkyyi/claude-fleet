@@ -248,8 +248,8 @@ if [ "$cmd" = continue ] || [ "$cmd" = reopen ]; then
   else plan=$(python3 "$BIN/fleet_id.py" "$cmd" ${pargs[@]+"${pargs[@]}"}) || exit 1; fi
   [ "$ex" = 0 ] && { printf '%s\n' "$plan"; exit 0; }
   fields=$(printf '%s' "$plan" | python3 -c 'import json,sys; d=json.load(sys.stdin)
-print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","title","codex_home","seg")))')
-  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_title p_home p_seg <<< "$fields"
+print("\t".join(str(d.get(k) or "-") for k in ("id","native","agent","worktree","repo","task","title","codex_home","seg","model")))')
+  IFS=$'\t' read -r p_id p_native p_agent p_wt p_repo p_task p_title p_home p_seg p_model <<< "$fields"
   proof=$(python3 "$BIN/fleet_history_read.py" "$p_id" "$p_seg") || exit 1
   # resumable · gone (readable, its worktree reaped: <the branch it was on>) · else the reason
   pst=$(printf '%s' "$proof" | python3 -c 'import json,sys; p=json.load(sys.stdin)
@@ -320,6 +320,9 @@ print("refused\t-\t" + p.get("reason", "Native history is not verified; nothing 
   # lookup searches that agent's store, not the fleet default's).
   if fleet_agent_known "$p_agent"; then rargs+=(--agent "$p_agent"); fi
   [ "$p_title" = - ] || rargs+=(--name "$p_title")
+  # the model it was opened on for life (task J7BN: deepseek[-pro]) — else the
+  # fleet's default would answer the reopen
+  case "${p_model:--}" in deepseek|deepseek-pro) rargs+=(--model "$p_model") ;; esac
   if [ "$p_repo" != - ] && [ "$p_wt" != - ] && [ -d "$p_wt" ]; then rargs+=(--repo "$p_repo" --worktree "$p_wt")
   elif [ "$p_repo" = - ]; then rargs+=(--no-repo)
   else

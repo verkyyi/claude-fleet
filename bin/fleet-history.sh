@@ -385,6 +385,18 @@ history_source() {
     case "$raw" in *'|'*) ;; *) HIST_TASK_LINE='' ;; esac
   fi
   case "${HIST_TASK:-}" in T[1-9]*) case "${HIST_TASK#T}" in *[!0-9]*) HIST_TASK='' ;; esac ;; *) HIST_TASK='' ;; esac
+  # The model fixed for the session's life (task J7BN: @cc_model_fixed 1 + @cc_model,
+  # a DeepSeek profile): read off the window while it stands unless the caller
+  # captured it. Anything else is no fixed model ⇒ the row as before.
+  if [ -z "${HIST_MODEL:-}" ] && [ -n "$win" ]; then
+    if [ -n "$sess" ]; then
+      raw=$(tmux -L "$(fleet_socket "$sess")" display-message -p -t "$win" '#{@cc_model_fixed}|#{@cc_model}' 2>/dev/null)
+    elif [ -n "${TMUX:-}" ]; then
+      raw=$(tmux display-message -p -t "$win" '#{@cc_model_fixed}|#{@cc_model}' 2>/dev/null)
+    else raw=''; fi
+    case "$raw" in '1|'*) HIST_MODEL=${raw#1|} ;; esac
+  fi
+  case "${HIST_MODEL:-}" in deepseek|deepseek-pro) ;; *) HIST_MODEL='' ;; esac
   [ -n "$HIST_TASK" ] || HIST_TASK_LINE=''
   [ -n "$HIST_AGENT" ] || HIST_AGENT="${FLEET_AGENT:-claude}"
   # where its transcript lives is the adapter table's (T629, C5): its own home
@@ -407,12 +419,17 @@ history_source_suffix() {
   # Col 15 (issue #3387) is the hub task record `T<n>` the session belonged to —
   # written only when it had one, so a Claude row with one fills 12–14 with '-';
   # without a task record (no hub) the row is byte for byte what it was.
+  # Col 16 (task J7BN) is the model the session was fixed to (deepseek[-pro]) —
+  # written only then (12–15 filled with '-' as needed), so a reopen comes back on
+  # it; every reader tolerates its absence.
   if [ "$(fleet_agent_get "$HIST_AGENT" transcript 2>/dev/null)" = home ]; then
     printf '\t%s\t%s\t%s' "$HIST_AGENT" "$(oneline "${HIST_HOME:--}")" "$(oneline "${HIST_TRANSCRIPT:--}")"
-  elif [ -n "${HIST_TASK:-}" ]; then
+  elif [ -n "${HIST_TASK:-}" ] || [ -n "${HIST_MODEL:-}" ]; then
     printf '\t-\t-\t-'
   fi
-  [ -n "${HIST_TASK:-}" ] && printf '\t%s' "$HIST_TASK"
+  if [ -n "${HIST_TASK:-}" ]; then printf '\t%s' "$HIST_TASK"
+  elif [ -n "${HIST_MODEL:-}" ]; then printf '\t-'; fi
+  [ -n "${HIST_MODEL:-}" ] && printf '\t%s' "$HIST_MODEL"
   printf '\n'
 }
 
@@ -432,7 +449,7 @@ task_mark() { case "${1:-}" in T[1-9]*) printf '%s ' "$1" ;; esac; }
 
 cmd_record() {
   local repo="" main="" pr="" key="" wt="" summary="" mergedat="" sess="" title_fb="" origin="" win="" agent="" identity="" owner="" branch=""
-  HIST_TASK=''; HIST_TASK_LINE=''
+  HIST_TASK=''; HIST_TASK_LINE=''; HIST_MODEL=''
   while [ $# -gt 0 ]; do
     case "$1" in
       # the reaped branch (issue #3601): with no PR answer, git names the landing
@@ -440,6 +457,8 @@ cmd_record() {
       # the hub task record (issue #3387): the caller's capture, else the window's
       --task) HIST_TASK="${2:-}"; shift 2;;
       --task-line) HIST_TASK_LINE="${2:-}"; shift 2;;
+      # the model the session was fixed to (task J7BN: deepseek[-pro]), else the window's
+      --model) HIST_MODEL="${2:-}"; shift 2;;
       --repo) repo="${2:-}"; shift 2;;
       --main) main="${2:-}"; shift 2;;
       --pr) pr="${2:-}"; shift 2;;
@@ -559,11 +578,12 @@ cmd_record() {
 # transcript (nothing to index).
 cmd_record_closed() {
   local repo="" key="" wt="" sess="" title="" summary="" closedat="" sha="" origin="" win="" agent="" identity="" owner=""
-  HIST_TASK=''; HIST_TASK_LINE=''
+  HIST_TASK=''; HIST_TASK_LINE=''; HIST_MODEL=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --task) HIST_TASK="${2:-}"; shift 2;;            # issue #3387 — see cmd_record
       --task-line) HIST_TASK_LINE="${2:-}"; shift 2;;
+      --model) HIST_MODEL="${2:-}"; shift 2;;          # task J7BN — see cmd_record
       --repo) repo="${2:-}"; shift 2;;
       --key|--issue) key="${2:-}"; shift 2;;   # issue number | scratch-<N> (#466) | T<n> (#4899)
       --sha) sha="${2:-}"; shift 2;;
@@ -1487,7 +1507,8 @@ cmd_meta() {
   done
   local row; row=$(find_row "$repo" "$key")
   [ -z "$row" ] && return 0
-  awk -F'\t' '{print $2 "\t" $3 "\t" $11}' <<<"$row"
+  # col 4 (task J7BN): the model the session was fixed to, '-' for none
+  awk -F'\t' '{print $2 "\t" $3 "\t" $11 "\t" ($16 == "" ? "-" : $16)}' <<<"$row"
 }
 
 # row — the raw ledger row for a key (newest wins), for the hub upload that hands

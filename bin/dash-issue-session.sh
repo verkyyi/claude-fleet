@@ -921,7 +921,7 @@ _idf=$(TM show-options -wqv -t "$win" @fleet_id 2>/dev/null)
 fleet_is_fid "$_idf" && ( bash "$BIN/fleet-id.sh" open "$_idf" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" --key "issue-$num" ${REPO:+--repo "$REPO"} ${title:+--title "$title"} \
   ${TASK_REF:+--task "$TASK_REF"} ${_tprev:+--prev "$_tprev"} ${RESUME_SID:+--from-native "$RESUME_SID"} \
-  ${wt:+--worktree "$wt"} >/dev/null 2>&1 & )
+  ${wt:+--worktree "$wt"} ${MODEL_ARG:+--model "$MODEL_ARG"} >/dev/null 2>&1 & )
 # The worktree remembers its ID beside its record (C4).
 fleet_is_fid "$_idf" && [ -n "${wt:-}" ] && fleet_worktree_id_mark "$wt" "$_idf"
 fleet_win_role_stamp "$win" worker "$SOCK"   # what it IS, whatever it is renamed to (#1844) — every opener's one stamper

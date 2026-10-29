@@ -194,7 +194,18 @@ case "$cmd" in
     fleet_server_tmpdir "$SOCK"
     LAUNCH="${FLEET_MOVE_LAUNCH:-$BIN/fleet-session-wrap.sh}"
     boot="${FLEET_MOVE_BOOT_WAIT:-15}"
+    # The model the session was fixed to (task J7BN, `<sid>.model` beside the
+    # transcript — fleet-move.sh fid_bundle): the resume runs on it, the window
+    # carries it on. Either project-dir spelling, as for the identity below.
+    fixmodel=''
+    for _d in "$(fleet_mangle_path "$wt")" "$(printf '%s' "$wt" | tr '/.' '--')"; do
+      _ff="$HOME/.claude/projects/$_d/$sid.model"
+      [ -f "$_ff" ] || continue
+      _m=$(head -c 32 "$_ff" 2>/dev/null | tr -d '[:space:]'); rm -f "$_ff"
+      case "$_m" in deepseek|deepseek-pro) fixmodel=$_m ;; esac
+    done
     cmdline="'$LAUNCH' --resume '$sid'; exec \$SHELL"
+    [ "$agent" = claude ] && [ -n "$fixmodel" ] && cmdline="'$LAUNCH' --agent claude --model $fixmodel --resume '$sid'; exec \$SHELL"
     if [ "$agent" = codex ]; then
       [ -f "$cxhome/move.json" ] || die 'missing Codex import receipt'
       fleet_load_conf "$sess"
@@ -219,6 +230,7 @@ PY_LAUNCH
       TM set-window-option -t "$nw" @agent_transfer_until "$(( $(date +%s) + 900 ))"
     fi
     TM set-window-option -t "$nw" @worktree "$wt" 2>/dev/null
+    [ "$agent" = claude ] && [ -n "$fixmodel" ] && TM set-window-option -t "$nw" @cc_model_fixed 1 \; set-window-option -t "$nw" @cc_model "$fixmodel" 2>/dev/null
     # The session's lifelong identity (issue #1646) rode the bundle as
     # `<sid>.fleet-id` (fleet-move.sh fid_bundle) — stamped verbatim, never
     # re-minted. Either project-dir spelling: the hub road and the ssh road differ.

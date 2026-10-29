@@ -244,7 +244,7 @@ PYTEST
 # A hub task record (issue #3387): @task + @task_line ride the snapshot, so the row
 # a vanished window gets still carries T<n> and the session's words; none ⇒ no flag.
 reset_all
-windows '@1|10|0||/wk/issue-10|fix-ten|||||T41||把周报 | 做成一页' '@5|||||dash'
+windows '@1|10|0||/wk/issue-10|fix-ten|||||T41||||把周报 | 做成一页' '@5|||||dash'
 run s1
 windows '@5|||||dash'
 run s1
@@ -262,11 +262,32 @@ windows '@5|||||dash'
 run s1
 grep -qx -- '--task' "$WORK/record-args" && fail 'a window with no task record grew a --task'
 
+# J7BN: a session fixed to a model for life (@cc_model_fixed 1 + @cc_model, a
+# DeepSeek profile) rides the snapshot as col 13, so its vanished row gets --model;
+# an unfixed @cc_model (a plain launch's stamp) is not a fixed model.
+reset_all
+windows '@1|10|0||/wk/issue-10|fix-ten|||||||1|deepseek-pro|' '@5|||||dash'
+run s1
+windows '@5|||||dash'
+run s1
+python3 - "$WORK/record-args" <<'PYTEST' || fail 'the fixed model was lost when its pane vanished'
+import pathlib, sys
+args=pathlib.Path(sys.argv[1]).read_text().splitlines()
+assert args[args.index('--model')+1]=='deepseek-pro', args
+PYTEST
+reset_all
+windows '@1|10|0||/wk/issue-10|fix-ten||||||||opus|' '@5|||||dash'
+run s1
+[ "$(awk -F'\t' '{print NF}' "$SNAP")" = 12 ] || fail "an unfixed model must leave the snapshot row at 12 columns"
+windows '@5|||||dash'
+run s1
+grep -qx -- '--model' "$WORK/record-args" && fail 'a window with no fixed model grew a --model'
+
 # A task session with no issue and no scratch worktree (a native worktree, issue
 # #4899): keyed by its record T<n>, recorded when it vanishes.
 reset_all
 F1=11111111-2222-4333-8444-555555555555
-windows "@7||1||/main|task-x|||||T52|$F1|写周报" '@5|||||dash'
+windows "@7||1||/main|task-x|||||T52|$F1|||写周报" '@5|||||dash'
 run s1
 grep -q '^fake/repo#T52	' "$SNAP" || fail "a task session must be snapshotted under its record T52"
 windows '@5|||||dash'
@@ -276,7 +297,7 @@ run s1
 reset_all
 windows "@8|30|0||/wk/issue-30|thirty||||||$F1" '@5|||||dash'
 run s1
-windows "@8||1||/main|thirty|||||T60|$F1|" '@5|||||dash'
+windows "@8||1||/main|thirty|||||T60|$F1|||" '@5|||||dash'
 run s1
 [ -z "$(recorded_list)" ] || fail "a window whose key moved but whose identity lives was recorded: [$(recorded_list)]"
 windows '@5|||||dash'

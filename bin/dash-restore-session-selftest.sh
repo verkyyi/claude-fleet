@@ -144,6 +144,24 @@ grep -q 'SETOPT .*@issue 5' "$OPTS_LOG"      || fail "C a #PR resume should bind
 grep -q 'SETOPT .*@restored 1' "$OPTS_LOG"   || fail "C a #PR restore should still be marked @restored 1" "$(cat "$OPTS_LOG")"
 ok "C RESUME(#PR) → title-named window, @issue 5 (from ledger), @restored set"
 
+# ============== J7BN: RESUME of a session fixed to a DeepSeek model ==============
+# The ledger's col 16 (meta col 4) names the model it was fixed to for life: the
+# resume runs on it (--agent claude --model …) and the window carries it on
+# (@cc_model_fixed 1 + @cc_model, stamped before the launcher); no model ⇒ none.
+grep -q -- '--model' "$NEWWIN_LOG" && fail "J7BN a row with no fixed model must resume without --model" "$(cat "$NEWWIN_LOG")"
+VERDICT="RESUME\t$WORK/wt\tsid-ds\tclaude --resume sid-ds --fork-session" \
+  META="5\tTune the reaper\t-\tdeepseek-pro" \
+  FLEET_MAX_SESSIONS=0 run_restore 'landed:70'
+grep -q -- '--agent claude --model deepseek-pro --resume sid-ds' "$NEWWIN_LOG" \
+  || fail "J7BN the resume must run on the ledger's fixed model" "$(cat "$NEWWIN_LOG")$(cat "$WORK/err")"
+grep -q -- '@cc_model_fixed' "$NEWWIN_LOG" && grep -q -- 'deepseek-pro' "$NEWWIN_LOG" \
+  || fail "J7BN the restored window must carry @cc_model_fixed / @cc_model" "$(cat "$NEWWIN_LOG")"
+VERDICT="RESUME\t$WORK/wt\tsid-ds\tclaude --resume sid-ds --fork-session" \
+  META="5\tTune the reaper\t-\tfable" \
+  FLEET_MAX_SESSIONS=0 run_restore 'landed:70'
+grep -q -- '--model' "$NEWWIN_LOG" && fail "J7BN a model that is not a DeepSeek profile is never handed on" "$(cat "$NEWWIN_LOG")"
+ok "J7BN RESUME of a DeepSeek-fixed row → --agent claude --model <it>, @cc_model_fixed carried; anything else none"
+
 # ============================ D: FROM-PR ===================================
 # The PR-degrade path gets the same faithful name + @issue treatment (#319).
 VERDICT="FROM-PR\t70\tclaude --from-pr 70 --fork-session" \

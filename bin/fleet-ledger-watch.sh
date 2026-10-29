@@ -180,7 +180,7 @@ watch_fleet() { (
   # printable '|' survives — same reasoning as fleet-restore.sh's snapshot).
   #   window-id | @issue | @raw | @worktree | pane_current_path | window_name | @origin
   raw=$(ftmux list-windows -t "$sess" \
-        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@task}|#{@fleet_id}|#{@task_line}' 2>/dev/null)
+        -F '#{window_id}|#{@issue}|#{@raw}|#{@worktree}|#{pane_current_path}|#{window_name}|#{@origin}|#{@cc_agent}|#{@cc_launcher_pid}|#{?@codex_identity,#{@codex_identity},#{@codex_pending}}|#{@task}|#{@fleet_id}|#{@cc_model_fixed}|#{@cc_model}|#{@task_line}' 2>/dev/null)
   # A LIVE fleet always has ≥1 hub window (dash/plan/backlog). An empty read here
   # means the session is gone or tmux glitched — either way do NOT diff (that would
   # false-record still-live workers as closed) and do NOT overwrite the snapshot.
@@ -224,7 +224,7 @@ watch_fleet() { (
   # window whose repo is unknown is skipped — never recorded under a guessed repo
   # (a one-repo fleet's unstamped window answers its only repo, fleet_window_repo).
   : > "$cur"
-  while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity wtask wfid wtline; do
+  while IFS='|' read -r wid iss rawf wt cwd wname worigin wagent wowner widentity wtask wfid wmfix wmodel wtline; do
     local_wt="$wt"; [ -z "$local_wt" ] && local_wt="$cwd"   # @worktree, else the pane cwd
     case "$wtask" in T[1-9]*) ;; *) wtask='' ;; esac
     if [ "$rawf" = 1 ]; then
@@ -254,8 +254,11 @@ watch_fleet() { (
     # (a plain Claude row carried no agent columns before #4899 — kept so)
     [ "$wagent" = codex ] || [ -n "$wtask" ] || { wagent='' wowner='' widentity=''; }
     [ -n "$wtask" ] && wtline=$(printf '%s' "$wtline" | tr '\t\r\n\037' '    ') || wtline=''
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" \
-      "$wagent" "$wowner" "$widentity" "$wtask" "$wtline" "$wfid" >> "$cur"
+    # col 13 (task J7BN): the model the session was fixed to (@cc_model_fixed 1 —
+    # deepseek[-pro]), only when it has one: every other row byte for byte as before
+    wds=''; [ "$wmfix" = 1 ] && case "$wmodel" in deepseek|deepseek-pro) wds=$'\t'$wmodel ;; esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n' "$key" "$wid" "$local_wt" "$wname" "$smry" "$worigin" \
+      "$wagent" "$wowner" "$widentity" "$wtask" "$wtline" "$wfid" "$wds" >> "$cur"
     cur_keys="${cur_keys}${key}"$'\n'"${wfid:+fid:$wfid}"$'\n'
   done <<EOF
 $raw
@@ -270,7 +273,7 @@ EOF
   if [ -f "$snap" ]; then
     # A non-whitespace separator preserves the intentionally empty summary and
     # origin columns. JSON's own control characters are escaped already.
-    while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity p_task p_tline p_fid; do
+    while IFS=$'\037' read -r p_key p_wid p_wt p_title p_smry p_origin p_agent p_owner p_identity p_task p_tline p_fid p_model; do
       [ -z "$p_key" ] && continue
       case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
       # …or the same window under another key (its identity, #4899)
@@ -296,7 +299,7 @@ EOF
               --worktree "$p_wt" --win "$p_wid" \
               --title "$p_title" --summary "$p_smry" \
               --agent "${p_agent:-claude}" --launcher-pid "${p_owner:-}" --agent-identity "${p_identity:-}" \
-              --origin "${p_origin:-}" ${p_task:+--task "$p_task" --task-line "${p_tline:-}"})
+              --origin "${p_origin:-}" ${p_task:+--task "$p_task" --task-line "${p_tline:-}"} ${p_model:+--model "$p_model"})
       rcrc=$?
       # nothing on stdout: say what it said on stderr and how it ended (T695 —
       # «record-closed: no output» alone told nobody why scratch-34 was not recorded)

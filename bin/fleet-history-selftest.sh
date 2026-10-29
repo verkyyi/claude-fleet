@@ -708,6 +708,23 @@ run record-closed --key scratch-12 --worktree "$TWT" --title scratch-12 --task X
 st_eq "task: a bad ref ⇒ the 11-column row, title untouched" "10|scratch-12" \
   "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')|$(cut -f3 "$FLEET_HISTORY_LEDGER")"
 
+# J7BN: the model a session was fixed to for life (deepseek[-pro]) is col 16 — 12–15
+# filled with '-' (or the task in 15) — and meta's col 4, so a reopen runs on it.
+# None / not a DeepSeek profile ⇒ the row byte for byte as before.
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --key scratch-12 --worktree "$TWT" --title 'ds work' --sha cafe1234 --model deepseek-pro >/dev/null
+st_eq "model: the row has 16 columns" "15" "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')"
+st_eq "model: 12–15 are '-', col 16 the model" "-|-|-|-|deepseek-pro" "$(cut -f12-16 "$FLEET_HISTORY_LEDGER" | tr '\t' '|')"
+st_eq "model: meta col 4" "deepseek-pro" "$(run meta scratch-12 | cut -f4)"
+contains "model: resume still by the session key" "$(run resume --main /w/main scratch-12)" "sess-task"
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --key scratch-12 --worktree "$TWT" --title 'ds task' --task T41 --task-line w --model deepseek >/dev/null
+st_eq "model: beside a task — col 15 the record, 16 the model" "T41|deepseek" "$(cut -f15-16 "$FLEET_HISTORY_LEDGER" | tr '\t' '|')"
+: > "$FLEET_HISTORY_LEDGER"
+run record-closed --key scratch-12 --worktree "$TWT" --title 'plain' --model fable >/dev/null
+st_eq "model: not a DeepSeek profile ⇒ the 11-column row" "10" "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')"
+st_eq "model: meta col 4 is '-' with none" "-" "$(run meta scratch-12 | cut -f4)"
+
 # ============================================================================
 # R. rows renders in ONE perl pass, byte for byte the bash loop's output
 # ============================================================================

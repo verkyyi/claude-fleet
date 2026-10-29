@@ -428,7 +428,34 @@ CLAUDE_CODE_SUBAGENT_MODEL=claude-haiku-5-5"
   grep -q -- '--provider deepseek' "$WORK/mintargs" && ! grep -q -- '--account' "$WORK/mintargs" \
     || st_fail "J7BN $prof: the mint did not ask for a deepseek pass" "$(cat "$WORK/mintargs" 2>/dev/null)"
   grep -q "@cc_model $p" "$WORK/tmuxlog" || st_fail "J7BN $prof: @cc_model not stamped $p" "$(cat "$WORK/tmuxlog")"
+  # the model is told it is DeepSeek (its settings name Claude ids, only aliases)
+  case "$argv" in *"--append-system-prompt This session's model is DeepSeek ($w;"*"only aliases."*) : ;;
+    *) st_fail "J7BN $prof: no DeepSeek identity line appended to the system prompt" "$argv" ;; esac
 done
+# an agent file's own body stays: on the --agent road the line rides beside it, on
+# the no-agent-flag road its --append-system-prompt-file is ONE copy ending in the line
+printf 'FLEET_MODEL="deepseek"\n' > "$WORK/conf/fleets/f1/conf"
+mkdir -p "$WORK/ccfg/agents"
+printf -- '---\nname: ds-agent\ndescription: d\n---\nmy own body\n' > "$WORK/ccfg/agents/ds-agent.md"
+argv="$( (export FLEET_CRED_SID=sid-ds CLAUDE_CONFIG_DIR="$WORK/ccfg"; run --as ds-agent /fleet-history) )"
+apf=$(printf '%s\n' "$argv" | tr ' ' '\n' | sed -n '/^--append-system-prompt-file$/{n;p;}')
+if [ -n "$apf" ]; then
+  grep -q '^my own body$' "$apf" && tail -1 "$apf" | grep -q 'only aliases\.$' \
+    && [ "$(printf '%s\n' "$argv" | tr ' ' '\n' | grep -c '^--append-system-prompt')" = 1 ] \
+    || st_fail "J7BN an agent file's append file must carry its body + the DeepSeek line" "$argv $(cat "$apf" 2>/dev/null)"
+else
+  has "$argv" "--agent ds-agent" && case "$argv" in *"--append-system-prompt This session's model is DeepSeek"*) true ;; *) false ;; esac \
+    || st_fail "J7BN --agent ds-agent: the DeepSeek line must ride beside the agent" "$argv"
+fi
+# a caller's own --append-system-prompt wins: nothing added
+argv="$( (export FLEET_CRED_SID=sid-ds; run --append-system-prompt mine /fleet-history) )"
+[ "$(printf '%s\n' "$argv" | grep -o -- '--append-system-prompt' | wc -l | tr -d ' ')" = 1 ] && has "$argv" "--append-system-prompt mine" \
+  || st_fail "J7BN a caller's own --append-system-prompt must stand alone" "$argv"
+# an Anthropic model is told nothing
+printf 'FLEET_MODEL="fable"\n' > "$WORK/conf/fleets/f1/conf"
+argv="$( (export FLEET_CRED_SID=sid-ds; run /fleet-history) )"
+case "$argv" in *--append-system-prompt*) st_fail "J7BN an Anthropic model got the DeepSeek line" "$argv" ;; esac
+st_pass "J7BN a DeepSeek session is told its model (agent file's body kept; a caller's own append wins; Anthropic untouched)"
 st_pass "J7BN FLEET_MODEL deepseek / deepseek-pro: proxy /deepseek base URL, the hub pass, DeepSeek tiers, no --model"
 # …and on a FLEET_AGENT=codex fleet the profile still launches Claude Code, never
 # fleet-codex.sh (a DeepSeek profile is Claude Code on DeepSeek's Anthropic API)

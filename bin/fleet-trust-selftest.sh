@@ -227,7 +227,8 @@ st_pass "I wide grant: every --main + their worktrees, \$HOME only with --home; 
 # --- J. the launcher end to end, on an isolated tmux socket -----------------------
 # A two-repo fleet: a worktree of the SECOND repo (no @repo stamped, so the overlay
 # reads the first) · an @norepo window in $HOME · a plain window in $HOME. Untrusted
-# node ⇒ ~/.claude.json byte for byte what the #563 narrow grant makes; trusted ⇒
+# node ⇒ ~/.claude.json byte for byte what the #563 narrow grant makes, plus the
+# @norepo window's own $HOME (J7BN: the folder it opens in); trusted ⇒
 # the second repo + its worktree and the @norepo $HOME are trusted, the plain $HOME
 # window is not.
 REAL_TMUX=$(command -v tmux 2>/dev/null)
@@ -255,7 +256,11 @@ else
   "$REAL_TMUX" -S "$SOCK" -f /dev/null new-session -d -s tst -n home || st_fail "J cannot start the isolated tmux server"
   # the reference: what the #563 launcher does for those three cwds
   write_cfg
-  for d in "$WORK/proj/two-issue-9" "$HOME" "$HOME"; do sh "$SUT" grant --main "$MAIN" "$d" >/dev/null 2>&1; done
+  # (J7BN: the @norepo window in $HOME trusts $HOME on any node, beside the first repo)
+  sh "$SUT" grant --main "$MAIN" "$WORK/proj/two-issue-9" >/dev/null 2>&1
+  sh "$SUT" grant --main "$MAIN" --home "$HOME" >/dev/null 2>&1
+  [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || st_fail "J reference: --home did not trust \$HOME" "$(cat "$CFG")"
+  sh "$SUT" grant --main "$MAIN" "$HOME" >/dev/null 2>&1
   cp "$CFG" "$WORK/ref"
   write_cfg
   printf '{"trust": "untrusted", "why": "hub: untrusted", "ts": %s}\n' "$(date +%s)" > "$JC/cred-proxy/trust.json"
@@ -273,7 +278,7 @@ else
   launch "$HOME" 1
   [ "$(jget projects "$HOME_P" hasTrustDialogAccepted)" = true ] || st_fail "J trusted node: the @norepo window's \$HOME was not pre-trusted" "$(cat "$CFG")"
   [ "$(jget projects "$(cd "$WORK" && pwd -P)")" = null ] || st_fail "J trusted node: \$HOME's parent was written" "$(cat "$CFG")"
-  st_pass "J launcher: untrusted / no word ⇒ byte for byte the #563 grant; trusted ⇒ every hosted repo + the @norepo \$HOME, nothing else"
+  st_pass "J launcher: untrusted / no word ⇒ the #563 grant + the @norepo \$HOME (J7BN); trusted ⇒ every hosted repo + the @norepo \$HOME, nothing else"
 fi
 
 printf 'selftest PASS: %d checks — fleet-trust.sh is scoped, lossless under a concurrent writer, atomic, idempotent\n' "$pass"
