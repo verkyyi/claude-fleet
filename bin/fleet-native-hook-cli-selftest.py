@@ -502,10 +502,10 @@ def main():
                         managed_hook_count = 1
                         (system / "requirements.toml").write_text(base_requirements, encoding="utf-8")
                     elif phase == "fleet-deny":
-                        managed_hook_count = 3
+                        managed_hook_count = 4  # three Fleet guards + SessionStart fixture
                         (system / "requirements.toml").write_text(generated_with_fixture, encoding="utf-8")
                     elif phase == "patch-deny":
-                        managed_hook_count = 4
+                        managed_hook_count = 5  # Fleet guards + SessionStart + patch capture
                         (system / "requirements.toml").write_text(generated_with_fixture, encoding="utf-8")
                         with (system / "requirements.toml").open("a", encoding="utf-8") as config:
                             config.write('[[hooks.PreToolUse]]\nmatcher="^apply_patch$"\n[[hooks.PreToolUse.hooks]]\n'
