@@ -83,10 +83,13 @@ type clientPlaceRequest struct {
 	// Home / New: a HOME session (`fleet claude`, claude-fleet#2564) — a
 	// no-repo scratch that first goes back to the person's current one
 	// (fleet_home.go); New opens another anyway and makes it the current.
-	Home        bool            `json:"home"`
-	New         bool            `json:"new"`
-	Agent       string          `json:"agent"`
-	CodingAgent string          `json:"coding_agent"`
+	Home        bool   `json:"home"`
+	New         bool   `json:"new"`
+	Agent       string `json:"agent"`
+	CodingAgent string `json:"coding_agent"`
+	// Model is a DeepSeek model (task J7BN): "", deepseek or deepseek-pro;
+	// its provider is deepseek, its agent claude.
+	Model       string          `json:"model,omitempty"`
 	Dispatch    *dispatchChoice `json:"dispatch"`
 	Reap        string          `json:"reap"`
 	Idem        string          `json:"idempotency_key"`
@@ -371,6 +374,18 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 	if req.Agent != "" {
 		args["agent"] = req.Agent
 	}
+	// model (task J7BN): checked here for a 400, again by the write.
+	if m, why := checkStartModel(req.Model, req.Agent); why != "" {
+		httpError(w, http.StatusBadRequest, why)
+		return
+	} else if m != "" {
+		req.Model, args["model"] = m, m
+	}
+	provider := providerFor(req.Agent, req.Model)
+	if err := s.regionStartGate(startPrincipal(p), provider); err != nil {
+		httpError(w, faultStatus(errorObject(err)["code"]), errorObject(err)["message"])
+		return
+	}
 	if !reapPolicyOK(req.Reap) {
 		httpError(w, http.StatusBadRequest, "reap must be merged[:<dur>], done[:<dur>], loop-end, at:<time> or keep")
 		return
@@ -549,7 +564,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		task = &rec
 	}
 	var err error
-	if pl, err = s.pickNode(p, req.Repo, node, req.Agent, now); err != nil {
+	if pl, err = s.pickNode(p, req.Repo, node, provider, now); err != nil {
 		s.leaseAudit(p.Actor, "client_place", what, errorObject(err)["code"], now)
 		out := refusedAnswer(err, &pl)
 		s.taskAnswered(task, &out)
@@ -581,7 +596,7 @@ func (s *Server) clientPlace(w http.ResponseWriter, r *http.Request, p fleetPrin
 		}
 		attempts = append(attempts, a)
 		declined[pl.FleetID] = a.Why
-		npl, err := s.pickNodeAfter(p, req.Repo, "auto", req.Agent, time.Now(), declined, "")
+		npl, err := s.pickNodeAfter(p, req.Repo, "auto", provider, time.Now(), declined, "")
 		if err != nil {
 			if len(attempts) == 1 {
 				attempts = attempts[:0]

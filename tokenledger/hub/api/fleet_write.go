@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/credvault"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/fleetid"
@@ -408,7 +409,7 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 	var err error
 	switch tool {
 	case "worker_start":
-		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "task", "coding_agent", "dispatch", "ticket_ref", "as", "control_version"); err != nil {
+		if err = checkFields(args, []string{"idempotency_key"}, "issue", "kind", "name", "title", "body", "draft", "fleet_id", "agent", "repo", "no_repo", "node", "origin_wid", "account_class", "reap", "attachments", "test", "task", "coding_agent", "dispatch", "ticket_ref", "as", "control_version", "model"); err != nil {
 			break
 		}
 		if v, present := args["control_version"]; present {
@@ -565,6 +566,26 @@ func parseWrite(tool string, args map[string]any) (writeRequest, string, error) 
 		}
 		if agent != "" {
 			w.params["agent"] = agent
+		}
+		// model (task J7BN): a DeepSeek model the node launches Claude Code
+		// with (params.model); its provider is deepseek (providerFor).
+		if v, ok := args["model"]; ok {
+			ms, isStr := v.(string)
+			if !isStr {
+				err = fault("INVALID_ARGUMENT", "model must be a string")
+				break
+			}
+			m, why := checkStartModel(ms, agent)
+			if why != "" {
+				err = fault("INVALID_ARGUMENT", why)
+				break
+			}
+			if m != "" {
+				w.params["model"] = m
+				if agent == "" {
+					w.params["agent"] = credvault.Claude // a DeepSeek model is a Claude Code session
+				}
+			}
 		}
 
 		if w.repo, err = checkRepo(args); err != nil {
@@ -877,6 +898,13 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 		return nil, err
 	}
 
+	if tool == "worker_start" {
+		// The mainland region's trial gate (task J7BN): every road that opens
+		// a session comes through here.
+		if err := s.regionStartGate(startPrincipal(p), w.provider()); err != nil {
+			return nil, err
+		}
+	}
 	var target store.FleetRow
 	var placement *Placement
 	switch {
@@ -920,15 +948,13 @@ func (s *Server) submitWrite(ctx context.Context, p fleetPrincipal, tool string,
 				}
 				// Compute, as placement (claude-fleet#4707): the same rule
 				// for the same (machine, provider), never a second copy.
-				agent, _ := w.params["agent"].(string)
-				if cv := s.computeFor(target.EndpointID, target.Hostname, hb, settings, agent, now); cv.Off {
+				if cv := s.computeFor(target.EndpointID, target.Hostname, hb, settings, w.provider(), now); cv.Off {
 					return nil, fault("NO_ELIGIBLE_NODE", target.Hostname+": "+cv.Reason())
 				}
 			}
 		}
 	default:
-		agent, _ := w.params["agent"].(string)
-		pl, err := s.pickNode(p, w.repo, w.node, agent, time.Now())
+		pl, err := s.pickNode(p, w.repo, w.node, w.provider(), time.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -2260,6 +2286,24 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+		case strings.HasPrefix(body.Key, ClusterRegionPrefix) && clusterNameRE.MatchString(body.Key[len(ClusterRegionPrefix):]):
+			// A cluster's region (task J7BN): cn | global.
+			v, why := checkClusterRegion(body.Value)
+			if why != "" {
+				httpError(w, http.StatusBadRequest, why)
+				return
+			}
+			body.Value = v
+		case strings.HasPrefix(body.Key, CredPodProvidersPrefix) && clusterNameRE.MatchString(body.Key[len(CredPodProvidersPrefix):]):
+			// One cluster's pod providers (task J7BN), over fleet.cred_pod_providers.
+			if strings.TrimSpace(body.Value) != "" {
+				v, why := checkCredPodProviders(s, body.Value)
+				if why != "" {
+					httpError(w, http.StatusBadRequest, strings.Replace(why, CredPodProvidersKey, CredPodProvidersPrefix+"<cluster>", 1))
+					return
+				}
+				body.Value = v
+			}
 		case strings.HasPrefix(body.Key, NodeLoginPrefix) && nodeNameRE.MatchString(body.Key[len(NodeLoginPrefix):]):
 			// The one login that takes new sessions there (claude-fleet#2430).
 			if v := strings.TrimSpace(body.Value); v != "" && !control.ValidExistingLogin(v) {
@@ -2280,7 +2324,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+OrgBudgetPrefix+"<org>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>[.<tenant>], fleet.svc.<svc>.tenants, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+ClusterRegionPrefix+"<cluster>, "+CredPodProvidersPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+OrgBudgetPrefix+"<org>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>[.<tenant>], fleet.svc.<svc>.tenants, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()

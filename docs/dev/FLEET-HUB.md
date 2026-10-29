@@ -1833,6 +1833,42 @@ others: `POST /v1/fleet/credproxy/usage` with `provider: "deepseek"` (source
 `""`) is filed in `pool_usage` under the pass's person and counted in their
 budget.
 
+### Mainland region (task J7BN, P1)
+
+A cluster can be marked as running in mainland China (the Shenzhen cluster
+`ack-sz`), where neither Claude nor OpenAI serve: a session there runs DeepSeek
+only. Code: `tokenledger/hub/api/fleet_region.go`.
+
+| Setting | Values | What it does |
+|---|---|---|
+| `fleet.cluster_region.<cluster>` | `cn` \| `global` (default `global`) | The region of that cluster's own name and of every pod `fleet_cluster_pods` records for it. A machine that is no listed cluster's pod is `global` (a `fleet-linux-*` worker is not in that table, so it is global). |
+| `fleet.region_cn.people` | principals comma-separated, `*`, or empty | Who may start a deepseek session while a `cn` cluster is listed. Empty = nobody. The operator's door (no principal) passes; a node login no person owns is checked by its `node:<login>@<host>` actor. |
+| `fleet.cred_pod_providers.<cluster>` | as `fleet.cred_pod_providers` | That cluster's pods' providers, over the fleet-wide value. A `cn` cluster without its own key reads `deepseek`. |
+
+**Placement** (`computeFor`, the one rule every road asks): a `cn` machine takes
+ONLY provider `deepseek` (a start that names no agent is refused there too); a
+`global` machine refuses `deepseek` ONLY while some cluster `fleet.clusters`
+lists is `cn`. With no `cn` cluster listed nothing is looked up and every answer
+is P0's — deepseek runs anywhere through the central proxy. A `cn` machine whose
+egress probe says «unsupported region» still takes deepseek (like Codex).
+
+**A start's model.** `model` (`""`, `deepseek`, `deepseek-pro`,
+case-insensitive) rides the client's place (`clientPlaceRequest.model`),
+`/v1/node/place` and `worker_start`; anything else is 400, a deepseek model with
+`agent: codex` is 400. Its provider is `deepseek` (`providerFor`) and its agent
+`claude`; the node receives it as `params.model`.
+
+**Trial gate.** A deepseek start while a `cn` cluster is listed, by a principal
+not on `fleet.region_cn.people`, is refused 403 (`FORBIDDEN`) on every road
+(the client's place and `/v1/node/place` before picking, `worker_start` before
+placing).
+
+**Newcomers.** The automatic roads never place a new person on a `cn` cluster
+or its pods: `fleet.auto_assign`'s list drops them, and least-busy (so the
+invite, the failed-create retry and the trial's pick) skips them. The
+operator's assign naming the cluster (`placeOnCluster`) still places someone
+there.
+
 ## Organizations and subscription pools (task PNWW)
 
 One level above persons: every person belongs to exactly ONE organization

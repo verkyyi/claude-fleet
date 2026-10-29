@@ -331,6 +331,11 @@ func (s *Server) pickMachine(now time.Time, spareOnly bool, skip []string) (stri
 		if isUserPodName(m.Hostname) {
 			continue
 		}
+		// A mainland (cn) cluster or its pods (task J7BN): only the
+		// operator's assign naming it places someone there.
+		if s.cnHost(settings, m.Hostname) {
+			continue
+		}
 		if cv := newLoginCompute(snap, m.Hostname, settings, now); cv.Off {
 			log.Printf("fleet: least-busy: %s skipped: a login opened there could not run — %s", m.Hostname, cv.Why)
 			continue

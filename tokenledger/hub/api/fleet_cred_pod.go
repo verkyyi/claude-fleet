@@ -74,16 +74,34 @@ func checkCredPodProviders(_ *Server, v string) (string, string) {
 // provider gate (not a cluster pod, or the setting is *). A stored value that
 // does not parse reads as the default: a broken setting never widens it.
 func podProvidersOf(settings map[string]string, machine string) map[string]bool {
+	return podProvidersIn(settings, machine, "")
+}
+
+// podProvidersIn is podProvidersOf for a pod of cluster ("" = not known):
+// fleet.cred_pod_providers.<cluster> over fleet.cred_pod_providers (task
+// J7BN); a cn cluster without its own key reads deepseek, the only provider
+// its region runs. A broken value reads as that cluster's default, never
+// wider.
+func podProvidersIn(settings map[string]string, machine, cluster string) map[string]bool {
 	if machine == "" || !isClusterPodMachine(machine) {
 		return nil
 	}
+	def := credPodProvidersDef
 	v := strings.TrimSpace(settings[CredPodProvidersKey])
+	if cluster != "" {
+		if clusterRegion(settings, cluster) == regionCN {
+			def, v = credvault.DeepSeek, ""
+		}
+		if own := strings.TrimSpace(settings[CredPodProvidersPrefix+cluster]); own != "" {
+			v = own
+		}
+	}
 	if v == "" {
-		v = credPodProvidersDef
+		v = def
 	}
 	norm, bad := checkCredPodProviders(nil, v)
 	if bad != "" {
-		norm = credPodProvidersDef
+		norm = def
 	}
 	if norm == "*" {
 		return nil
@@ -117,4 +135,31 @@ func (p credPolicy) podProviderWhy(provider string) string {
 		label = "nothing"
 	}
 	return "cluster pods are " + label + "-only (" + CredPodProvidersKey + "=" + only + "): machine " + p.Machine + " may not use a " + provider + " subscription"
+}
+
+// podProvidersFor is podProvidersIn for machine's own cluster: the cluster is
+// looked up only when a per-cluster key or a cn cluster could change the
+// answer, so with neither it is podProvidersOf exactly.
+func (s *Server) podProvidersFor(settings map[string]string, machine string) map[string]bool {
+	if machine == "" || !isClusterPodMachine(machine) {
+		return nil
+	}
+	cluster := ""
+	if clusterProvidersMatter(settings) {
+		cluster = s.podCluster(settings, machine)
+	}
+	return podProvidersIn(settings, machine, cluster)
+}
+
+// clusterProvidersMatter says a pod's cluster may change its providers.
+func clusterProvidersMatter(settings map[string]string) bool {
+	if cnListed(settings) {
+		return true
+	}
+	for k, v := range settings {
+		if strings.HasPrefix(k, CredPodProvidersPrefix) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
 }
