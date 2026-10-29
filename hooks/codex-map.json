@@ -32,6 +32,7 @@
     "mcp__fleet__fleet_status|mcp__fleet__fleet_spawn|mcp__fleet__fleet_await": "Codex never had the mod's three tools (retired in mod 0.4.0, issue #1812); its fleet tools come from bin/fleet-mcp.py, whose scripts bash-guard.py's direct-script rail already covers on the Bash road."
   },
   "managed_commands": [
+    "python3 ~/.claude/fleet/hooks/studio-guard.py",
     "python3 ~/.claude/fleet/hooks/bash-guard.py",
     "python3 ~/.claude/fleet/hooks/base-readonly-guard.py"
   ],

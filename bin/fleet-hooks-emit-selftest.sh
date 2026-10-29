@@ -212,10 +212,11 @@ assert set(requirements) == {"features", "hooks"}
 assert set(requirements["hooks"]) == {"managed_dir", "PreToolUse"}
 assert requirements["hooks"]["managed_dir"] == destination
 groups = requirements["hooks"]["PreToolUse"]
-assert [group["matcher"] for group in groups] == ["Bash", "apply_patch"]
+assert [group["matcher"] for group in groups] == ["Bash", "apply_patch", "mcp__space__.*"]
 assert [shlex.split(group["hooks"][0]["command"]) for group in groups] == [
     [interpreter, "-I", destination + "/bash-guard.py"],
     [interpreter, "-I", destination + "/base-readonly-guard.py"],
+    [interpreter, "-I", destination + "/studio-guard.py"],
 ]
 assert all(group["hooks"][0]["type"] == "command" and len(group["hooks"]) == 1 for group in groups)
 assert not Path(destination).exists() and not Path(interpreter).exists()

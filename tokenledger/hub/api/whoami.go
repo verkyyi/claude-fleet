@@ -58,6 +58,7 @@ func sessionOf(ctx context.Context) *authz.Session {
 
 // Me is the body of /v1/me.
 type Me struct {
+	Studio bool `json:"studio,omitempty"`
 	// Via is the door: open | token | how a person signed in (github,
 	// email, wechat — store.IdentityKinds).
 	Via string `json:"via"`
@@ -113,7 +114,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusMethodNotAllowed, "GET only")
 		return
 	}
-	out := Me{Via: doorOf(r.Context()), Role: roleOf(r.Context())}
+	out := Me{Studio: s.studioAllowed(r), Via: doorOf(r.Context()), Role: roleOf(r.Context())}
 	out.Pages = pagesFor(out.Role)
 	if s.Fleet && !memberRole(out.Role) && out.Role != "" {
 		// 发布列车 (claude-fleet#3870): the release ledger is the fleet module's.

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1432" viewBox="0 0 640 1432" role="img" aria-labelledby="title desc" lang="en">
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1510" viewBox="0 0 640 1510" role="img" aria-labelledby="title desc" lang="en">
 <title id="title">The native agent runtime</title>
 <desc id="desc">Four conceptual layers. Clients connect to the hub, the runtime control plane. Application services and central data share the hub boundary. Nodes keep native agent sessions running and connect outward to the hub. Model requests go from a node through the credential proxy to a model provider. Model keys stay at the hub, never in sessions.</desc>
 <style>/*{{fleet_theme}}*/
@@ -99,4 +99,8 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <text x="32" y="1332" class="">Identity providers · Source &amp; CI</text>
 <text x="32" y="1372" class="small muted">Across all layers</text>
 <text x="32" y="1404" class="">Observability · Security · Delivery</text>
+<path class="rule" d="M32 1432h576"/>
+<text x="32" y="1464" class="small muted">Optional studio · native session → existing MCP</text>
+<text x="32" y="1494" class="small muted">Held version → explicit confirmation → publish</text>
+<desc>Optional studio: browser → native session → existing MCP; held version → confirmation → publish.</desc>
 </svg>

@@ -32,6 +32,7 @@ import { tr } from "@/shared/i18n";
 import type { Quota } from "@/shared/api";
 import { usePage, useShell } from "../Shell";
 import { continueLink } from "@/app/chat/continue";
+import { PageFrame } from "@/app/chat/page-frame";
 import { composerPlaceholder } from "@/app/chat/placeholder";
 import { BindWeChatBanner } from "../WeChatBind";
 import { viewAs } from "@/shared/viewAs";
@@ -121,6 +122,7 @@ const ViewToolStep: ToolCallMessagePartComponent = (p) => {
 // a web page the agent published to the person's 活页 (task T773 ④): one tap opens it,
 // in a new window (活页 is not framed here until it allows the entry to)
 const PAGE_STATE = (): Record<string, string> => ({
+  hold: tr("待发布 · 尚未上线", "Held · not live"),
   ready: tr("仅你可见", "Only you can see it"), review: tr("审核中，好了自动能点", "Under review; opens once it passes"),
   publishing: tr("正在发布…", "Publishing…"), failed: tr("没发出去", "Not published"),
   unavailable: tr("这台机器还没连活页", "This machine is not connected to LivePage"),
@@ -148,8 +150,7 @@ const PagePreview: FC<{ p: PageCard }> = ({ p }) => {
         {open ? tr("收起预览", "Hide the preview") : tr("在这里预览", "Preview here")}
       </button>
       {open ? (
-        <iframe src={p.embed} title={p.title} referrerPolicy="no-referrer" loading="lazy"
-          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+        <PageFrame src={p.embed} title={p.title}
           className="border-border mt-2 h-[70vh] w-full rounded-xl border bg-white" />
       ) : null}
     </div>

@@ -1230,6 +1230,17 @@ def tool_transfer(args):
     return script(argv + ["--after-turn"], VERDICT_TIMEOUT_S)
 
 
+def studio_call(op, args):
+    from fleet_studio import call
+    fid = pane_opt("#{@fleet_id}")
+    if not fid:
+        raise ToolFault("studio tools require this session's identity")
+    try:
+        return call(op, dict(args, fid=fid))
+    except (ValueError, KeyError) as exc:
+        raise ToolFault(str(exc))
+
+
 def tool_where(args):
     return script([str(BIN / "fleet-client-where.sh")] + (["--json"] if args.get("json") else []), STATUS_TIMEOUT_S)
 
@@ -1375,6 +1386,21 @@ TASK_REF = {"type": "string",
             "description": "A task by its code (K5H0 — the task tool's `id`), its full ID, or the old T<n>."}
 
 TOOLS = {
+    "page_target": (lambda a: studio_call("target", a), {
+        "description": "LivePage studio: read THIS native session's page binding, embed_origin and confirmed right-panel actions. All edits use hold; only a matching confirmed action authorizes publication or sharing. No space access is performed here.",
+        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}}),
+    "show_page": (lambda a: studio_call("show", a), {
+        "description": "LivePage studio: project real space results into the canvas. After push --hold / publish_file(hold:true), call preview_version(embed_origin from page_target), then show_page with status hold and the exact version_id. After a confirmed publish, read back and use ready. Analytics and leads must come from real reads, with period/source; unknown is unknown. This tool itself never publishes.",
+        "inputSchema": {"type": "object", "properties": {
+            **{k: {"type": "string"} for k in ("proposal_id", "title", "url", "version_id", "version", "visibility", "embed_url", "embed_expires", "note", "analytics", "leads", "qr_url")},
+            "related": {"type": "boolean", "description": "Only for explicitly requested companion pages, e.g. three language editions. Each gets its own preview and publication confirmation."},
+            "status": {"type": "string", "enum": ["hold", "review", "ready", "failed"]}},
+            "required": ["proposal_id", "title"], "additionalProperties": False}}),
+    "studio_projects": (lambda a: studio_call("projects", a), {
+        "description": "Show the actual list_proposals results in this person's studio project picker. Fetch every page first; report read errors instead of inventing projects. This only updates the display, never space.",
+        "inputSchema": {"type": "object", "properties": {"projects": {"type": "array", "items": {
+            "type": "object", "properties": {k: {"type": "string"} for k in ("proposal_id", "title", "url", "visibility")},
+            "required": ["proposal_id", "title"], "additionalProperties": False}}}, "required": ["projects"], "additionalProperties": False}}),
     "schedule": (tool_schedule, {
         "description": "Manage this user's recurring Tokenman tasks on THIS login: create/list/update/pause/resume/delete/run-now/runs. "
                        "Reuse the existing node task scheduler. Default timezone Asia/Shanghai; explain the timezone and next run. "
@@ -1870,6 +1896,13 @@ def handle(request, table, name):
         params = request.get("params") or {}
         gw = gateway(table)
         if gw and params.get("name") not in table and gw.owns(params.get("name") or ""):
+            tool = params.get("name") or ""
+            if tool.startswith("space__"):
+                from fleet_studio import guard_space
+                try:
+                    guard_space(pane_opt("#{@fleet_id}"), tool[len("space__"):], params.get("arguments") or {})
+                except ValueError as exc:
+                    return tool_result(tool, str(exc), error=True)
             return gw.call(params.get("name"), params.get("arguments"))
         return tool_call(table, params.get("name"), params.get("arguments"))
     if method == "ping":

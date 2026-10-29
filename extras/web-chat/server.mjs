@@ -63,6 +63,7 @@ import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCoo
   budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
   CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType, WEB_NOTE_V, webNoteBlock, NOTE_RE } from "./lib.mjs";
 import { codexSide } from "./codex.mjs";
+import { studioHandlers } from "./studio.mjs";
 import { sdkExecutionGuard } from "./execution.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -505,7 +506,7 @@ function linesItems(lines, cwd) {
       else if (m.type === "assistant" && b.type === "image") out.push(...imageItems([b]));
       else if (m.type === "assistant" && b.type === "tool_use") {
         out.push({ t: "tool", id: b.id, name: b.name, summary: toolSummary(b.name, b.input) });
-        if (b.name === SHOW_PAGE) out.push(pageItem(b.id, b.input, cwd));
+        if (b.name === SHOW_PAGE || b.name === "mcp__fleet__show_page") out.push(pageItem(b.id, b.input, cwd));
       }
       else if (m.type === "user" && b.type === "tool_result") {
         out.push({ t: "tool_result", id: b.tool_use_id, text: resultText(b.content), error: !!b.is_error });
@@ -1272,7 +1273,7 @@ function savePages() {
   try { writeFileSync(PAGES_FILE + ".tmp", JSON.stringify(pages), { mode: 0o600 }); renameSync(PAGES_FILE + ".tmp", PAGES_FILE); }
   catch (e) { log("pages_failed", { msg: String(e?.message || e).slice(0, 200) }); }
 }
-const PAGE_STATES = new Set(["publishing", "review", "ready", "failed", "unavailable", "account"]);
+const PAGE_STATES = new Set(["hold", "publishing", "review", "ready", "failed", "unavailable", "account"]);
 // the page's origin, as the last turn said it: an embed link is minted for it
 const ORIGIN_RE = /^https:\/\/[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d{1,5})?$/;
 let pageOrigin = "";
@@ -1810,24 +1811,32 @@ async function gateOpen(req, res, person, requiredPurpose = "") {
     if (!k || k.big) return send(res, 400, { error: "图太大或不是图", code: "bad_image" });
     text += `\n\n[附图] ${join(MEDIA, k.ref)}`;
   }
+  const result = await spawnNativeSession(text, agent, "", purpose, parent);
+  if (!result.fid) return send(res, 503, { state: "refused", reason: "open_failed", error: result.error });
+  log("open", { person, agent: agent || "default" });
+  return send(res, 200, { fid: result.fid, ...(agent ? { agent } : {}), delivery: randomUUIDish(), state: "sent",
+    ...(purpose === "probe" ? { reap_origin: "probe", origin_fid: parent } : {}) });
+}
+async function spawnNativeSession(text, agent, profile = "", purpose = "", parent = "") {
   const target = await firstFleet();
-  const pf = join(STATE, `open-${process.pid}-${Date.now()}.txt`);
+  const pf = join(STATE, `open-${randomUUIDish()}.txt`);
   writeFileSync(pf, text, { mode: 0o600 });
   const args = [...(target ? [target] : []), "--origin", purpose === "probe" ? parent : "hub", "--print", "--no-repo", "--node", "local",
-    "--reap-origin", purpose === "probe" ? "probe" : "web", ...(agent ? ["--agent", agent] : []), `--prompt-file=${pf}`];
+    "--reap-origin", purpose === "probe" ? "probe" : "web", ...(agent ? ["--agent", agent] : []),
+    ...(profile ? ["--as", profile] : []), `--prompt-file=${pf}`];
   const r = await run(RAW, args);
   try { unlinkSync(pf); } catch { /* read by the spawn */ }
   const line = (r.stdout || "").trim().split("\n").filter((l) => l.includes("\t")).pop() || "";
   const fid = line.split("\t")[3] || "";
   if (r.rc !== 0 || !FID_RE.test(fid)) {
     const said = (r.stderr || "").trim().split("\n").pop() || "";
-    log("open_failed", { person, rc: r.rc, said: said.slice(0, 200) });
-    return send(res, 503, { state: "refused", reason: "open_failed", error: said || "没能开一个新会话" });
+    return { error: said || "没能开一个新会话" };
   }
-  log("open", { person, agent: agent || "default" });
-  return send(res, 200, { fid, ...(agent ? { agent } : {}), delivery: randomUUIDish(), state: "sent",
-    ...(purpose === "probe" ? { reap_origin: "probe", origin_fid: parent } : {}) });
+  return { fid };
 }
+const studio = studioHandlers({ helpers: HELPERS, env: E, readJson, send, spawn: spawnNativeSession, gate,
+  pending: () => { gatePending = true; } });
+
 const randomUUIDish = () => { const h = randomHex(); return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`; };
 async function gatePost(req, res, u, what) {
   const body = await readJson(req);
@@ -2004,6 +2013,7 @@ async function handle(req, res) {
   }
   // 新会话 (task PNWW): the page opened — the relay that brought this is kept,
   // and what an open asks first is asked now, while the person types
+  if (p === "/api/studio" || p.startsWith("/api/studio/")) return studio(req, res, p);
   if (p === "/api/warm" && req.method === "GET") { firstFleet().catch(() => {}); return send(res, 200, { ok: true }); }
   // 只读 (task F481): a terminal session of this login, read along
   if (p === "/api/view" && req.method === "GET") return viewStream(req, res, u, person);

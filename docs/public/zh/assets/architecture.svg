@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1432" viewBox="0 0 640 1432" role="img" aria-labelledby="title desc" lang="zh">
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="1510" viewBox="0 0 640 1510" role="img" aria-labelledby="title desc" lang="zh">
 <title id="title">原生 agent 的运行时</title>
 <desc id="desc">四层概念架构。客户端连接运行时控制面中枢，应用服务与中央数据位于中枢边界内。节点常驻运行原生 agent 会话，主动向外连接中枢。模型请求从节点经过凭据代理到达模型提供方。模型密钥留在中枢，永不进入会话。</desc>
 <style>/*{{fleet_theme}}*/
@@ -99,4 +99,8 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <text x="32" y="1332" class="">身份提供方 · 源码与 CI</text>
 <text x="32" y="1372" class="small muted">横切关注点</text>
 <text x="32" y="1404" class="">可观测性 · 安全 · 交付</text>
+<path class="rule" d="M32 1432h576"/>
+<text x="32" y="1464" class="small muted">按需工作台 · 原生会话 → 已有 MCP</text>
+<text x="32" y="1494" class="small muted">待发版本 → 明确确认 → 发布</text>
+<desc>按需工作台：浏览器 → 原生会话 → 已有 MCP；待发版本 → 确认 → 发布。</desc>
 </svg>

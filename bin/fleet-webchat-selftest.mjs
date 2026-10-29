@@ -849,7 +849,7 @@ printf '@9\\tfixture\\t\\t${fid}\\n'
   // Retain the real server/auth/body parser, remove only the new API dispatch.
   // This models the resident's fixed route table, independent of helper version.
   const oldDir = join(HT, "old-probe-api"); mkdirSync(oldDir);
-  for (const f of ["lib.mjs", "codex.mjs", "execution.mjs"]) symlinkSync(join(dirname(APP), f), join(oldDir, f));
+  for (const f of ["lib.mjs", "codex.mjs", "execution.mjs", "studio.mjs"]) symlinkSync(join(dirname(APP), f), join(oldDir, f));
   const oldApp = join(oldDir, "server.mjs");
   writeFileSync(oldApp, readFileSync(APP, "utf8").split("\n")
     .filter((l) => !l.includes('if (p === "/api/open/probe"')).join("\n"));

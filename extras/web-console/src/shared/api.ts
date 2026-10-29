@@ -29,6 +29,7 @@ export async function getJSONIf<T>(url: string, etag: string): Promise<{ body: T
 // /v1/me: who the gate admitted — role (admin | user | operator), the pages
 // the menu shows them, how they signed in, whether a sign-out has a cookie to clear.
 export type Me = {
+  studio?: boolean;
   via?: string; role?: string; person?: string; name?: string; login?: string;
   pages?: string[]; entry?: boolean; can_logout?: boolean;
   logins?: { machine: string; login: string }[]; // the (machine, login) pairs that are theirs

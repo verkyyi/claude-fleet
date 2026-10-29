@@ -26,6 +26,8 @@ Clients connect to the hub through an encrypted entry.
 - **Provisioning** — Create and recycle managed nodes for people. [Learn more](admin/machines.md).
 - **Status and telemetry** — Collect health signals and explain service state. The [public status page](/status) is available without signing in. [Learn more](member/health.md).
 
+An optional LivePage studio uses the same native sessions and home relay: the agent reads and edits through its existing MCP connection, stores held versions, and publishes only after a version-specific confirmation. The hub has no additional publishing credential. Access defaults off and is restricted by principal.
+
 ### 3 · Data
 
 - **Database** — Central accounts, session records, usage and settings; a session record is not the running process. [Learn more](self-host/install.md).

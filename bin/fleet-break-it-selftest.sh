@@ -8283,6 +8283,15 @@ drill_task_parent_write_retired() {
 
 # ================================================================ run ====}
 
+drill_studio_unconfirmed_publish() {
+  local t0
+  t0=$(now)
+  if ! python3 "$BIN/fleet-studio-selftest.py" >"$WORK/studio.log" 2>&1; then
+    WHY="studio confirmation regression: $(tail -n 3 "$WORK/studio.log")"; return 1
+  fi
+  SECS=$(since "$t0"); CAP=15; WHAT='native space refuses unconfirmed publication; exact approval is consumed once'
+}
+
 drill_release_oidc_runtime() {
   local t0; t0=$(now); CAP=120
   bash "$BIN/fleet-release-publish-selftest.sh" >"$WORK/release-oidc-runtime.log" 2>&1 || {

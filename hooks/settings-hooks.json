@@ -29,6 +29,12 @@
         "hooks": [
           { "type": "command", "command": "python3 ~/.claude/fleet/hooks/bash-guard.py" }
         ]
+      },
+      {
+        "matcher": "mcp__space__.*",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/hooks/studio-guard.py" }
+        ]
       }
     ],
     "PostToolUse": [
