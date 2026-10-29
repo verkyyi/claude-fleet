@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -28,5 +29,11 @@ try {
   assert.equal(denied.status, 403);
   const action = await handler({ method: "POST", headers: { "x-fleet-webchat": "1" }, body: { fid, action: "publish" } }, {}, "/api/studio/action");
   assert.equal(action.status, 400);
+  execFileSync("python3", [resolve("bin/fleet_studio.py"), "show"], { env: dependencies.env,
+    input: JSON.stringify({ fid, proposal_id: "sample", title: "Sample" }) });
+  handler = studioHandlers({ ...dependencies, gate: async () => ({ j: { state: "returned", why: "session gone" } }) });
+  const returned = await handler({ method: "POST", headers: { "x-fleet-webchat": "1" }, body: {
+    fid, id: "87654321-1234-4234-8234-123456789abc", action: "analytics" } }, {}, "/api/studio/action");
+  assert.equal(returned.status, 409); assert.equal(returned.body.error, "session gone");
   console.log("PASS studio: concurrent open, restart, scope, CSRF, unconfirmed action");
 } finally { rmSync(dir, { recursive: true, force: true }); }

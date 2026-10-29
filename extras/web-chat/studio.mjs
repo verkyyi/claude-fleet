@@ -58,6 +58,7 @@ export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pend
         const text = `请执行这条右栏指令，先 page_target 核对确认记录；执行后读取真实结果并 show_page。\n${JSON.stringify({ livepage_studio_action: receipt })}`;
         const r = await gate(["say", "--fid", a.fid, "--delivery", receipt.id], text);
         if (!r.j) return send(res, 503, { error: "会话暂时不可用，请用同一操作重试" });
+        if (r.j.state === "returned") return send(res, 409, { error: r.j.why || "指令未送达，请检查会话状态" });
         pending();
         return send(res, 200, r.j);
       }
