@@ -91,9 +91,14 @@ NODE_IMAGE=$NODE_REPO@$(docker buildx imagetools inspect "$NODE_REPO:$STABLE" --
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
 ```
 
-With `FLEET_HUB_TARGET=aws-k3s`, the ccquota image goes only to ECR. Copy the AWS
-hub's live tag into ACR once, registry to registry, with no local pull. Repeat
-this to upgrade:
+With `FLEET_HUB_TARGET=aws-k3s`, the ccquota image goes to ECR. Set the repo
+variable `HUB_MIRROR_ACR=1` (`gh variable set HUB_MIRROR_ACR --body 1`): the
+train's `hub build` then copies each tag it pushes into ACR (`HUB_PUSH_REPO`),
+registry to registry, and goes red unless the digest matches ECR's
+([`deploy/aws/README.md`](../../../aws/README.md) «Repo variables»).
+
+Fallback, for a tag built before the variable was set or a red copy: copy the
+AWS hub's live tag into ACR by hand, with no local pull:
 
 ```sh
 TAG=$(curl -fsS $HUB/version | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')   # prod-<sha7>
