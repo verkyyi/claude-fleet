@@ -7,6 +7,8 @@
 //     /api/open — a no-repo window stamped origin web, the line its first turn)
 //     answers its fid and worker, opened at /s/<ref>; on the old road (the
 //     entry's fleet.chat.unified off) it is the one conversation's 新对话, at /chat.
+//     A model (J7BN: DeepSeek, offered when /v1/chat/home lists `models`) goes
+//     with agent claude; the hub places it on a mainland machine, never the home.
 //   终端: the page starts nothing — it gives the lines for the person's own
 //     terminal (fleet claude · fleet codex, the install line before them); the
 //     session they open shows in the list, and the web talks to it there too.
@@ -32,11 +34,14 @@ import { sessionPath, WEB_CHAT_PATH } from "./SessionList";
 import { shellPath } from "./legacy";
 import { CopyLine, useInstallLine } from "./cli";
 import {
-  CHOICE_KEY, chatBlocker, fixChoice, readChoice, rowForOpen, sendsOnEnter, TOUCH_PRIMARY,
+  CHOICE_KEY, chatBlocker, fixChoice, fixModel, modelsOf, openBody, readChoice, rowForOpen, sendsOnEnter, TOUCH_PRIMARY,
   type Agent, type Choice, type Home, type Mode,
 } from "./new-session";
 import { useWorkRows } from "./work-rows";
 import { clockOpened } from "./start-clock";
+
+// the model switch's "the agent's own" item (a ToggleGroup value cannot be "")
+const DEFAULT_MODEL = "default";
 
 const AGENT_NAME: Record<"claude" | "codex", string> = { claude: "Claude Code", codex: "Codex" };
 
@@ -113,8 +118,13 @@ export default function NewSession() {
   const box = useRef<HTMLTextAreaElement>(null);
 
   const agent: "claude" | "codex" = choice.agent === "codex" ? "codex" : "claude";
+  // a model besides the agent's own (J7BN: DeepSeek, the mainland region's) —
+  // offered only when the home read lists it; never remembered, "" by default
+  const models = modelsOf(homeRead.data);
+  const [modelPick, setModelPick] = useState("");
+  const model = agent === "claude" ? fixModel(modelPick, homeRead.data) : "";
   const loading = homeRead.loading || defaults.loading || unified === null;
-  const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data);
+  const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data, model);
   const canStart = !loading && !why && !busy && !waiting;
 
   // the session page's code fetched while the person types (task PNWW): after
@@ -170,12 +180,14 @@ export default function NewSession() {
     setBusy(true);
     const t0 = Date.now();
     const r = await fetch("/v1/chat/open", { method: "POST", cache: "no-store",
-      headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: JSON.stringify({ agent, ...(say ? { text: say } : {}) }) }).catch(() => null);
+      headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: JSON.stringify(openBody(agent, model, say)) }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
     setBusy(false);
     if (!r?.ok || j.state === "refused") {
       const code = String(j.code || j.reason || "");
-      toast.error(code === "home_down" || code === "home_reconnecting" ? tr("家机器暂时连不上，对话开不了。", "Your machine is out of reach; the chat cannot start.")
+      toast.error(code === "region_not_allowed" ? tr("DeepSeek 会话还在试用，你暂时不能开。", "DeepSeek sessions are a trial you are not on yet.")
+        : code === "no_region_machine" ? tr("现在没有能开 DeepSeek 会话的机器，稍后再试。", "No machine can take a DeepSeek session now; try again later.")
+        : code === "home_down" || code === "home_reconnecting" ? tr("家机器暂时连不上，对话开不了。", "Your machine is out of reach; the chat cannot start.")
         : tr(`没能开始：${j.error || (r ? `HTTP ${r.status}` : "连不上")}`, `Couldn't start it: ${j.error || (r ? `HTTP ${r.status}` : "offline")}`));
       return;
     }
@@ -214,8 +226,15 @@ export default function NewSession() {
                   placeholder={tr("说第一句话…", "Say the first thing…")}
                   className="max-h-60 min-h-20 resize-none border-0 bg-transparent px-0 py-1.5 text-base shadow-none focus-visible:ring-0 dark:bg-transparent" />
                 <div className="flex items-center justify-between gap-2">
-                  <Seg value={agent} label={tr("选助手", "Pick the assistant")} disabled={!!viewAs || !!waiting}
-                    items={(["claude", "codex"] as Agent[]).map((a) => [a, AGENT_NAME[a as "claude" | "codex"]])} onChange={(v) => setChoice({ agent: v as Agent })} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Seg value={agent} label={tr("选助手", "Pick the assistant")} disabled={!!viewAs || !!waiting}
+                      items={(["claude", "codex"] as Agent[]).map((a) => [a, AGENT_NAME[a as "claude" | "codex"]])} onChange={(v) => setChoice({ agent: v as Agent })} />
+                    {models.length > 0 && agent === "claude" ? (
+                      <Seg value={model || DEFAULT_MODEL} label={tr("选模型", "Pick the model")} disabled={!!viewAs || !!waiting}
+                        items={[[DEFAULT_MODEL, tr("默认", "Default")], ...models.map((m): [string, string] => [m.id, m.label])]}
+                        onChange={(v) => setModelPick(v === DEFAULT_MODEL ? "" : v)} />
+                    ) : null}
+                  </div>
                   <Button size="icon" className="size-11 shrink-0 rounded-full md:size-9" disabled={!canStart} onClick={() => void start()} data-testid="new-start"
                     aria-label={tr("开始", "Start")} title={tr("开始", "Start")}>
                     {busy || waiting ? <Loader className="animate-spin" aria-hidden /> : <ArrowUp />}

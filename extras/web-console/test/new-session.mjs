@@ -5,7 +5,7 @@
 // worker_start with or without words; the row it became is found by its key.
 // Run: node --experimental-strip-types test/new-session.mjs
 import assert from 'node:assert/strict';
-import { blocker, chatBlocker, fixChoice, rowForOpen, machinesOf, readChoice, rowForRequest, sendsOnEnter, startArgs, targetOf } from '../src/app/new-session.ts';
+import { blocker, chatBlocker, fixChoice, fixModel, modelsOf, openBody, rowForOpen, machinesOf, readChoice, rowForRequest, sendsOnEnter, startArgs, targetOf } from '../src/app/new-session.ts';
 
 // the five, and nothing else
 const five = [['chat', 'claude'], ['chat', 'codex'], ['term', 'claude'], ['term', 'codex'], ['term', 'shell']];
@@ -100,4 +100,22 @@ assert.equal(chatBlocker({ machine: 'home-1', state: 'ok' }), '');
 for (const st of ['offline', 'maintenance', 'old_agent']) assert.ok(!chatBlocker({ machine: 'home-1', state: st }).includes('home-1'), st);
 assert.match(chatBlocker({ machine: 'home-1', state: 'offline' }), /家机器暂时连不上|out of reach/);
 assert.ok(chatBlocker({ state: 'no_home' }).length > 0);
+
+// DeepSeek (J7BN): offered only when the home read lists it; the default is no model
+const ds = [{ id: 'deepseek', label: 'DeepSeek' }, { id: 'deepseek-pro', label: 'DeepSeek Pro' }];
+assert.deepEqual(modelsOf({ machine: 'home-1', state: 'ok' }), [], 'no models key: nothing offered');
+assert.deepEqual(modelsOf(null), []);
+assert.deepEqual(modelsOf({ state: 'ok', models: [...ds, { id: 'gpt-5', label: 'x' }] }).map((m) => m.id), ['deepseek', 'deepseek-pro'], 'only the two DeepSeek ids');
+assert.equal(fixModel('deepseek', { state: 'ok', models: ds }), 'deepseek');
+assert.equal(fixModel('deepseek', { state: 'ok' }), '', 'a model the home no longer offers is the agent\'s own');
+assert.equal(fixModel('', { state: 'ok', models: ds }), '');
+// the open's body: none is byte for byte as before; a model goes with agent claude
+assert.deepEqual(openBody('codex', '', ' hi '), { agent: 'codex', text: 'hi' });
+assert.deepEqual(openBody('claude', '', ''), { agent: 'claude' });
+assert.deepEqual(openBody('claude', 'deepseek-pro', '整理日报'), { agent: 'claude', model: 'deepseek-pro', text: '整理日报' });
+assert.deepEqual(openBody('codex', 'deepseek', ''), { agent: 'claude', model: 'deepseek' });
+// a DeepSeek session never runs on the home: its state does not stop it
+assert.equal(chatBlocker({ state: 'no_home', models: ds }, 'deepseek'), '');
+assert.equal(chatBlocker({ machine: 'home-1', state: 'offline', models: ds }, 'deepseek-pro'), '');
+assert.ok(chatBlocker({ state: 'no_home' }, 'deepseek').length > 0, 'a model not offered is no way around the home');
 console.log('new-session: ok');

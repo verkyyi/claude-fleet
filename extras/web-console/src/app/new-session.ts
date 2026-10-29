@@ -35,7 +35,24 @@ export function readChoice(raw: string | null, defaultAgent?: Agent): Choice {
 }
 
 // The home, as /v1/chat/home answers it.
-export type Home = { machine?: string; login?: string; state: string; why?: string };
+export type Home = { machine?: string; login?: string; state: string; why?: string; models?: ChatModel[] };
+
+// A model a chat may ask for besides its agent's own (task J7BN): DeepSeek,
+// the mainland region's — offered only when /v1/chat/home lists it (the person
+// on the trial list, a cn cluster up). A DeepSeek session is Claude Code with
+// that model, placed by the hub on a mainland machine, never on the home.
+export type ChatModel = { id: string; label: string };
+const CHAT_MODEL_IDS = new Set(["deepseek", "deepseek-pro"]);
+export function modelsOf(home: Home | null): ChatModel[] {
+  return (home?.models || []).filter((m) => !!m && CHAT_MODEL_IDS.has(m.id) && typeof m.label === "string" && !!m.label);
+}
+// The model a choice holds: one the home offers, else "" (the agent's own).
+export const fixModel = (model: string, home: Home | null) => modelsOf(home).some((m) => m.id === model) ? model : "";
+// /v1/chat/open's body: a model goes with agent claude; none is the agent's own, as before.
+export function openBody(agent: "claude" | "codex", model: string, words: string): Record<string, string> {
+  const w = words.trim();
+  return { ...(model ? { agent: "claude", model } : { agent }), ...(w ? { text: w } : {}) };
+}
 export const hasHome = (h: Home | null): h is Home & { machine: string } => !!h?.machine && h.state !== "no_home";
 
 // The person's machines a session can open on (/v1/nodes): their own logins
@@ -134,8 +151,10 @@ export function sendsOnEnter(e: { key: string; shiftKey?: boolean; isComposing?:
 }
 
 // 会话合一 (Y01K): why a chat cannot start now — the home's own word, never its
-// name (nearly everyone has one) — or "" when it can.
-export function chatBlocker(home: Home | null): string {
+// name (nearly everyone has one) — or "" when it can. A DeepSeek model (J7BN)
+// never runs on the home: the home's state does not stop it.
+export function chatBlocker(home: Home | null, model = ""): string {
+  if (model && fixModel(model, home)) return "";
   if (!hasHome(home)) return home?.why || tr("你还没有家：家是你有登录、上面开着 fleet 的那台机器。先在一台机器上把 fleet 开起来，再回来新建。",
     "You have no home yet: it is a machine with your login and fleet running on it. Start fleet on one, then come back.");
   if (home.state === "offline" || home.state === "home_down") return tr("家机器暂时连不上 · 家机器连回来后才能发", "Your machine is out of reach · send once it is back");

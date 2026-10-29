@@ -101,6 +101,10 @@ type ChatHome struct {
 	// Unified is fleet.chat.unified (会话合一, task PQ41): on, the page talks to
 	// sessions only and the old conversation routes answer 410 moved.
 	Unified bool `json:"unified,omitempty"`
+	// Models are the models a new session may ask for besides its agent's own
+	// (task J7BN: DeepSeek, the mainland region's — chat_open_region.go);
+	// absent when this person may not.
+	Models []ChatModel `json:"models,omitempty"`
 }
 
 // handleChatHome answers the person's home and whether a turn could reach it
@@ -124,7 +128,7 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 	}
 	unified := s.chatUnified()
 	if !ok || home.Machine == "" || home.Login == "" {
-		writeJSON(w, http.StatusOK, ChatHome{State: "no_home", Why: s.noHomeWhy(person), Unified: unified})
+		writeJSON(w, http.StatusOK, ChatHome{State: "no_home", Why: s.noHomeWhy(person), Unified: unified, Models: s.chatModelsFor(person)})
 		return
 	}
 	// The person's login is linked to another replica (claude-fleet#3847):
@@ -134,7 +138,7 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		s.proxyRelay(w, r, peer, "a chat home read for "+home.Machine+"/"+home.Login)
 		return
 	}
-	out := ChatHome{Machine: home.Machine, Login: home.Login, State: "ok", Unified: unified}
+	out := ChatHome{Machine: home.Machine, Login: home.Login, State: "ok", Unified: unified, Models: s.chatModelsFor(person)}
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		if _, flagged := maintenanceOf(home.Machine, settings); flagged {
 			out.State = "maintenance"
@@ -358,6 +362,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// Include scanned-code / approved limited members, through the same
 		// identity rule their credential policy and isolation already use.
 		if s.trialIdentity(settings, person) && !s.trialOpenProvider(w, r, person) {
+			return
+		}
+		// A DeepSeek model (task J7BN) is the mainland region's, never the
+		// home's: the hub places it itself (chat_open_region.go). No model ⇒
+		// the home's open below, byte for byte.
+		model, body, ok := s.chatOpenModel(w, r, person)
+		if !ok {
+			return
+		}
+		if model != "" {
+			s.chatOpenRegion(w, r, person, model, body)
 			return
 		}
 	}

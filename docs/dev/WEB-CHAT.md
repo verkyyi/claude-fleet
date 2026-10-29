@@ -493,6 +493,20 @@ agent, tz}`。入口记 `fleet_chat_timings`（何时、多久、家机机器、
 - **读取**：`GET /v1/fleet/link/stats?days=7`（管理员）按链接给出 ping 失败率、RTT 均值 / p50 / p90 / 最大值、按原因分的掉线次数和中断时长，以及每天平均掉几次；另给北京时间 24 个小时的分布，用来看晚高峰。
 - **保留**：保留 90 天，读取时顺手清掉更早的。
 
+### DeepSeek / 大陆区（J7BN）
+
+DeepSeek 会话是 Claude Code 带模型 `deepseek` | `deepseek-pro`，只开在大陆区（`fleet.cluster_region.<cluster>=cn`
+的集群，如 `ack-sz`）的机器上；家机在海外，所以它**不走家机**。`POST /v1/chat/open {agent, model, text}` 带了 model：
+入口自己放（`tokenledger/hub/api/chat_open_region.go` → 客户端那条 place：`pickNode` 按 provider deepseek 只挑这个人的
+cn 机器 → `worker_start`，no_repo scratch、agent claude、model 固定、第一句是种子，回收方式随新会话的默认），答
+`/v1/chat/open` 一样的 `{fid, worker, state: "sent", agent, model, machine, login}`，页面照常进 `/s/<worker>`——
+会话页走统一的 worker 路（`?worker=`，`termTarget` 认这个人的任何登录），不假设在家机。拒绝：model 不是这两个
+→ 400 `model`；不在 `fleet.region_cn.people`（或 `*`）上 → 403 `region_not_allowed`；没有列出 cn 集群、或没有这个人
+能开的 cn 机器 → 503 `no_region_machine`。不带 model：照旧转给家机，逐字节不变。要不要给选：`GET /v1/chat/home`
+在这个人能开时多一个 `models: [{id:"deepseek",label:"DeepSeek"},{id:"deepseek-pro",label:"DeepSeek Pro"}]`，
+否则没有这个键；新会话页（`NewSession.tsx`，`new-session.ts` 的 `modelsOf` / `openBody`）有它才在助手旁边摆
+「默认 · DeepSeek · DeepSeek Pro」，默认不带 model，不记在浏览器里；选了 DeepSeek，家机连不上也能开。
+
 ## 会话合一 ①：会话门、停放与接回（HHV0）
 
 网页不再自己跑一段对话、也不再「接管 / 交回」：每个对话就是家机器上的一个**会话**（一个窗口、一个
