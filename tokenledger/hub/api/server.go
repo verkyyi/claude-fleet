@@ -533,6 +533,9 @@ type Server struct {
 	// post-release watch (fleet_release_canary.go, claude-fleet#4915).
 	httpStats    httpStats
 	publicHealth publicHealthCache
+	// healthUnrecorded alerts on failed probes the database would not record
+	// (health.go): the database-down case the stored count cannot see.
+	healthUnrecorded healthUnrecorded
 	// logQuiet keeps a repeating line to once a window per signature (T906).
 	logQuiet logQuiet
 	// underivedEPs: endpoints this replica raised fleet_underived for (T906).

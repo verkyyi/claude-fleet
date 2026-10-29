@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 	"net/http"
 	"net/http/httptest"
@@ -147,7 +148,13 @@ func TestHealthTargetsAndEdition(t *testing.T) {
 			t.Fatal(k)
 		}
 	}
-	if ts["core"] != "https://core.tokenman.io/healthz" {
+	// the hub's own entries are probed where the database answers (2026-10-29)
+	for _, k := range []string{"claudefleet", "ccquota", "tokenman", "core"} {
+		if !strings.HasSuffix(ts[k], "/readyz") {
+			t.Fatal(k, ts)
+		}
+	}
+	if ts["core"] != "https://core.tokenman.io/readyz" || ts["notify"] != "https://notify.example.com/healthz" {
 		t.Fatal(ts)
 	}
 	h := newFleetHarness(t)
@@ -219,5 +226,62 @@ func TestHealthTrialIsAlsoSignedIn(t *testing.T) {
 	}
 	if !trialRoute(AppPrefix + "/health") {
 		t.Fatal("health page is not available to trial members")
+	}
+}
+
+// A hub that answers, but slower than healthSlow, is failed: the 2026-10-29
+// outage answered /readyz 200 after seconds while every API call queued.
+func TestHealthSlowProbeFails(t *testing.T) {
+	h := newFleetHarness(t)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(healthSlow + 200*time.Millisecond)
+		w.WriteHeader(200)
+	}))
+	defer slow.Close()
+	t.Setenv("CCQUOTA_HEALTH_TARGETS", `{"core":"`+slow.URL+`/readyz"}`)
+	now := time.Now().Truncate(time.Minute)
+	h.srv.probeHealth(context.Background(), now)
+	ps, err := h.srv.Store.HealthProbes(now.Add(-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, p := range ps {
+		if p.Component == "core" {
+			seen = true
+			if p.State != "failed" {
+				t.Fatal(p)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("no core probe")
+	}
+}
+
+// When the record itself cannot be written (the database is what failed),
+// three failed minutes in a row still notify — once — and an ok resets it.
+func TestHealthUnrecordedNotifiesOnce(t *testing.T) {
+	var u healthUnrecorded
+	dbErr := errors.New("context deadline exceeded")
+	got := 0
+	for i := 0; i < 5; i++ {
+		if u.miss("core", "failed", dbErr) {
+			got++
+		}
+	}
+	if got != 1 {
+		t.Fatalf("notified %d times, want 1", got)
+	}
+	if u.miss("core", "failed", nil) || u.miss("core", "ok", dbErr) {
+		t.Fatal("a recorded failure or an ok must not notify here")
+	}
+	for i := 0; i < 2; i++ {
+		if u.miss("core", "failed", dbErr) {
+			t.Fatal("notified before three after reset")
+		}
+	}
+	if !u.miss("core", "failed", dbErr) {
+		t.Fatal("three after reset did not notify")
 	}
 }
