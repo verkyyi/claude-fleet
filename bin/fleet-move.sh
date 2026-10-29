@@ -225,6 +225,9 @@ ssh_run() { move_ssh "$TO" "$(remote_cmd "$@")"; }
 # Its birth (issue #1750) rides beside it as `<sid>.born` — its own file, so a
 # receiver older than it reads the identity file exactly as before — and the
 # target window keeps its place on every list (@born, else window_created here).
+# The model the session was fixed to for life (task J7BN: @cc_model_fixed 1, a
+# DeepSeek profile) rides as `<sid>.model` — else the target's default model
+# would answer the moved conversation; no fixed model ⇒ no file, as before.
 FIDTAR=()
 fid_bundle() {
   local f d b
@@ -237,6 +240,10 @@ fid_bundle() {
   b=$(TM display-message -p -t "${1:-}" '#{?@born,#{@born},#{window_created}}' 2>/dev/null)
   case "$b" in ''|*[!0-9]*) ;; *)
     printf '%s\n' "$b" > "$d/${2:-}.born" 2>/dev/null && FIDTAR+=("${2:-}.born") ;;
+  esac
+  b=$(TM display-message -p -t "${1:-}" '#{@cc_model_fixed}|#{@cc_model}' 2>/dev/null)
+  case "$b" in '1|deepseek'|'1|deepseek-pro')
+    printf '%s\n' "${b#1|}" > "$d/${2:-}.model" 2>/dev/null && FIDTAR+=("${2:-}.model") ;;
   esac
 }
 fid_bundle_drop() { [ "${#FIDTAR[@]}" -ge 3 ] && rm -rf "${FIDTAR[1]}"; FIDTAR=(); return 0; }

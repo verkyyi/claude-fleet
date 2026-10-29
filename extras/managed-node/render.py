@@ -219,7 +219,7 @@ def egress_rules(dns, blocked, allow=(), closed=False):
     return '\n'.join(v4), '\n'.join(v6)
 
 
-def egress_guard(image, dns, blocked, metadata, allow=(), closed=False):
+def egress_guard(image, dns, blocked, metadata, allow=(), closed=False, tmp_sticky=False):
     v4, v6 = egress_rules(dns, blocked, allow, closed)
     # nft first (Debian's default), legacy when the node's kernel has no nf_tables
     # for us; no backend that writes AND shows the metadata cut = the pod never
@@ -239,6 +239,15 @@ printf '%%s\\n' "$V6" | ip6tables-$ok-restore 2>/dev/null || echo 'egress-guard:
 echo "egress-guard: rules in place ($ok)"
 iptables-$ok -S OUTPUT
 ''' % (v4, v6, metadata)
+    mounts = [{'name': 'egress-run', 'mountPath': '/run'}]
+    if tmp_sticky:
+        # a person's pod (J7BN): the kubelet makes the /tmp emptyDir 2777 root-owned
+        # (fsGroup's setgid, NO sticky bit), so any login could delete another's
+        # socket and Claude Code turns cross-session messaging off. This init is the
+        # pod's one root step before the login's containers: root owns the dir, so
+        # chmod needs no capability. 1777 is what /tmp is everywhere else.
+        script += 'chmod 1777 /tmp\n'
+        mounts.append({'name': 'tmp', 'mountPath': '/tmp'})
     return {
         'name': 'egress-guard', 'image': image, 'command': ['/bin/sh', '-ec', script],
         'resources': {'requests': {'cpu': '10m', 'memory': '16Mi'}, 'limits': {'cpu': '200m', 'memory': '64Mi'}},
@@ -246,7 +255,7 @@ iptables-$ok -S OUTPUT
                             'capabilities': {'drop': ['ALL'], 'add': ['NET_ADMIN', 'NET_RAW']},
                             'seccompProfile': {'type': 'RuntimeDefault'}},
         # the legacy backend's lock file (/run/xtables.lock)
-        'volumeMounts': [{'name': 'egress-run', 'mountPath': '/run'}],
+        'volumeMounts': mounts,
     }
 
 
@@ -843,7 +852,8 @@ def user_pod_resources(image, hub, storage_class, name, namespace='fleet-workers
                       'securityContext': {'fsGroup': uid, 'fsGroupChangePolicy': 'OnRootMismatch',
                                           'seccompProfile': rt()},
                       'imagePullSecrets': [{'name': n} for n in pull_secrets],
-                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed), etc],
+                      'initContainers': [egress_guard(image, dns, blocked, metadata, allow, egress_closed,
+                                                      tmp_sticky=True), etc],
                       'containers': [fleet, sshd],
                       'volumes': [{'name': 'data', 'persistentVolumeClaim': {'claimName': name}},
                                   # 0440 with fsGroup: the login reads its machine join code

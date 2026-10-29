@@ -1315,6 +1315,9 @@ def continue_plan(fid, seg=None):
             "worktree": (o.get("legacy_cwds") or {}).get(s["native"], o.get("worktree", "")),
             "repo": o.get("repo", ""), "title": o.get("title", ""), "closed": rec["closed"] is not None,
             "task": o.get("task", ""),
+            # a model fixed for the session's life (task J7BN: a DeepSeek profile,
+            # @cc_model_fixed) comes back with it; an older ledger has none
+            **({"model": o["model"]} if o.get("model") else {}),
             **({"codex_home": o["codex_home"]} if o.get("codex_home") else {}), **placement}
 
 

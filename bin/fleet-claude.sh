@@ -413,6 +413,46 @@ if [ ${#as_flag[@]} -gt 0 ] && [ "${as_flag[0]}" = --agent ] \
    && command -v fleet_claude_has_agent_flag >/dev/null 2>&1 && ! fleet_claude_has_agent_flag "$_fc_claude"; then
   fleet_as_resolve claude --no-agent-flag
 fi
+# DeepSeek (task J7BN): the tiers wear Claude Code's own ids (modelOverrides send
+# DeepSeek's on the wire), so asked "what model are you" the model reads its
+# settings and answers Opus. One line appended to the system prompt says what it
+# is. An agent file's own --append-system-prompt-file (no --agent flag) is folded
+# into one content-addressed copy beside the agent bodies (Claude Code reads one
+# append file); a caller's own --append-system-prompt* is left alone and wins.
+if [ -n "$_fc_ds" ]; then
+  _fc_dsw=deepseek-flash; [ "$_fc_ds" = deepseek-pro ] && _fc_dsw=deepseek-v4-pro
+  _fc_dsn="This session's model is DeepSeek ($_fc_dsw; deepseek-flash for fast tasks), served through DeepSeek's Anthropic-compatible API. When asked which model you are, say so — the Claude model names in your settings and environment are only aliases."
+  case " $* " in
+    *" --append-system-prompt"*) : ;;
+    *)
+      _fc_i=-1; _fc_n=0
+      for _fc_a in ${as_flag[@]+"${as_flag[@]}"}; do
+        [ "$_fc_a" = --append-system-prompt-file ] && _fc_i=$_fc_n
+        _fc_n=$((_fc_n + 1))
+      done
+      if [ "$_fc_i" -lt 0 ]; then
+        as_flag+=(--append-system-prompt "$_fc_dsn")
+      elif _fc_a=$(python3 -I - "${as_flag[$((_fc_i + 1))]}" "$_fc_dsn" \
+                   "${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}/agents" <<'PY'
+import hashlib, os, sys
+src, note, d = sys.argv[1:4]
+with open(src) as f:
+    t = f.read().rstrip('\n') + '\n\n' + note + '\n'
+os.makedirs(d, exist_ok=True)
+p = os.path.join(d, 'ds-%s.md' % hashlib.sha256(t.encode()).hexdigest()[:16])
+if not os.path.exists(p):
+    tmp = '%s.%d' % (p, os.getpid())
+    with open(tmp, 'w') as f:
+        f.write(t)
+    os.replace(tmp, p)
+print(p)
+PY
+); then
+        as_flag[$((_fc_i + 1))]="$_fc_a"
+      fi ;;
+  esac
+  unset _fc_dsw _fc_dsn _fc_i _fc_n _fc_a
+fi
 fleet_launch_settle
 fleet_launch_yield   # the agent one scheduling class below the 看台 (T691)
 # …and what it runs one more (T691): every Bash tool command and hook goes through

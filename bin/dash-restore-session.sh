@@ -147,7 +147,11 @@ kind=${verdict%%$'\t'*}
 # both the key (col 2) and the title (col 3), so pull them once here (a #PR key
 # resolves to its key too). Best-effort: a missing title falls back to a
 # resume-<key> name below; a missing key simply skips the bind.
-IFS=$'\t' read -r led_key led_title _ <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
+IFS=$'\t' read -r led_key led_title _ led_model _ <<<"$(bash "$BIN/fleet-history.sh" meta --repo "$REPO" "$key" 2>/dev/null)"
+# The model the session was fixed to for life (task J7BN: a DeepSeek profile, the
+# ledger's col 16): the resume runs on it and the window carries it on, else the
+# fleet's default model would answer the reopened conversation.
+case "${led_model:-}" in deepseek|deepseek-pro) ;; *) led_model='' ;; esac
 rname=""
 if [ -n "$led_title" ] && [ "$led_title" != "-" ]; then
   # an EPIC member reopens wearing its batch's 简称 (issue #2355); a scratch has none
@@ -222,11 +226,16 @@ case "$kind" in
     # (its encoded path is where the transcript lives) — that is why resume rebuilt
     # it at the original path.
     args=${cmd#claude }
+    rstamp=$stamp
+    if [ -n "$led_model" ]; then
+      args="--agent claude --model $led_model $args"
+      rstamp="$rstamp$(fleet_win_stamp_cmd @cc_model_fixed 1 @cc_model "$led_model")"
+    fi
     # Same descriptive name as the original worker (kebab of the ledger title);
     # fall back to resume-<key> when the title is missing (issue #319).
     name="$rname"; [ -z "$name" ] && name="resume-${key#\#}"
     win=$(TM new-window ${detach[@]+"${detach[@]}"} -P -F '#{window_id}' -t "$SESS:" -n "$name" -c "$wt" \
-      "$stamp'$BIN/fleet-session-wrap.sh' $args; exec \$SHELL") \
+      "$rstamp'$BIN/fleet-session-wrap.sh' $args; exec \$SHELL") \
       || { refuse "restore: new-window failed for $key"; exit 1; }
     # Mark the window from the ledger for EVERY resume — including #PR-keyed rows,
     # which resolve to their key via the ledger (issue #319) — so the row reads like

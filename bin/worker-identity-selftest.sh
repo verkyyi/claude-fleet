@@ -218,6 +218,22 @@ FMOVE_OUT=$(bash -c '
 st_count; [ "$FMOVE_OUT" = "$PF" ] || st_miss "E: fleet-move.sh bundles the identity as <sid>.fleet-id (and cleans up)" "$FMOVE_OUT"
 st_count; grep -q '\$sid.fleet-id' "$BIN/fleet-move-remote.sh" && grep -q '@fleet_id "$_fid"' "$BIN/fleet-move-remote.sh" \
   || st_miss "E: fleet-move-remote.sh launch stamps the bundled identity"
+# J7BN: a session fixed to a model for life rides the bundle as <sid>.model, and
+# launch resumes it on that model and carries the stamp; none ⇒ no file.
+FMOVE_M=$(bash -c '
+  BIN=$1; L=$2; W=$3
+  . "$BIN/fleet-lib.sh"; . "$BIN/fleet-move.sh" >/dev/null 2>&1
+  TM() { tmux -L "$L" "$@"; }
+  fid_bundle "$W" sid-xyz; d=${FIDTAR[1]}
+  [ -e "$d/sid-xyz.model" ] && echo "unfixed-has-model"; fid_bundle_drop
+  TM set-window-option -t "$W" @cc_model_fixed 1; TM set-window-option -t "$W" @cc_model deepseek-pro
+  fid_bundle "$W" sid-xyz; d=${FIDTAR[1]}
+  case " ${FIDTAR[*]} " in *" sid-xyz.model "*) cat "$d/sid-xyz.model" ;; *) echo "not-in-tar" ;; esac
+  fid_bundle_drop
+  TM set-window-option -u -t "$W" @cc_model_fixed; TM set-window-option -u -t "$W" @cc_model' _ "$BIN" "$L" "$P" 2>&1)
+st_count; [ "$FMOVE_M" = deepseek-pro ] || st_miss "J7BN: fleet-move.sh bundles a fixed model as <sid>.model (none when unfixed)" "$FMOVE_M"
+st_count; grep -q '\$sid.model' "$BIN/fleet-move-remote.sh" && grep -q -- "--agent claude --model \$fixmodel --resume" "$BIN/fleet-move-remote.sh" \
+  || st_miss "J7BN: fleet-move-remote.sh launch resumes on the bundled model"
 for f in dash-issue-session.sh dash-raw-session.sh; do
   st_count; grep -q 'fleet_window_fid "$SESS" "$win" "$SOCK"' "$BIN/$f" || st_miss "E: $f mints the identity at spawn"
 done
