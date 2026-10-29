@@ -201,6 +201,13 @@ ETAG_STAMP=''  # this round's stamp (fetch sets it; curl_sessions writes it)
 LOOP_SECS="${FLEET_HUB_SESSIONS_LOOP_SECS:-70}"; case "$LOOP_SECS" in ''|*[!0-9]*) LOOP_SECS=70 ;; esac
 LP_WAIT="${FLEET_HUB_SESSIONS_WAIT:-25}"; case "$LP_WAIT" in ''|*[!0-9]*|0) LP_WAIT=25 ;; esac
 [ "$LP_WAIT" -le 25 ] || LP_WAIT=25
+# BACKOFF (2026-10-29): rounds that fail in a row wait WATCHED_EVERY doubled per
+# failure, up to FLEET_HUB_SESSIONS_BACKOFF_MAX (60 s; 0 = off), on disk
+# ($BACKOFFF: <fails> <not-before epoch>) so the next loop's life keeps it. A
+# hub queueing every request for minutes was being re-asked every 2 s by every
+# machine, each abandoned ask still running on the hub. A round that stands
+# clears it; a view or a nudge does not cut it short.
+BACKOFF_MAX="${FLEET_HUB_SESSIONS_BACKOFF_MAX:-60}"; case "$BACKOFF_MAX" in ''|*[!0-9]*) BACKOFF_MAX=60 ;; esac
 WAIT=''      # the long poll's wait for THIS round (issue #1526); set by loop only
 NAP_SOCKS=() # this login's fleet sockets, as watched() last listed them (issue #4261)
 NAP_PID=''
@@ -209,6 +216,7 @@ LP_SENT=0    # 1 = this round's ask carried a validator AND a wait
 LAST_FETCH=1 # this round's fetch rc (0 = 200, 3 = 304)
 NSCOPED=0    # 1 = …over this login's node token: cut to its person's logins (issue #3001)
 PIDF="$G/hubsess.pid"
+BACKOFFF="$G/hubsess.backoff"
 # Every --ensure stamps its epoch here, and a running loop keeps going until
 # LOOP_SECS past the newest stamp (issue #3079): with a 70 s loop and a 60 s
 # collector tick, the tick's --ensure used to find the loop still alive, start
@@ -1472,6 +1480,21 @@ PY
 # One round: the sessions (its rc), then the two summaries.
 refresh_all() { local rc; refresh; rc=$?; refresh_summaries; return "$rc"; }
 
+# backoff_note <round rc> — a failed round doubles the wait before the next
+# (BACKOFF above, written to $BACKOFFF); a round that stands clears it.
+backoff_note() {
+  [ "$BACKOFF_MAX" -gt 0 ] || return 0
+  local n=0 u=0 d i
+  if [ "$1" != fail ]; then rm -f "$BACKOFFF" 2>/dev/null; return 0; fi
+  { read -r n u < "$BACKOFFF"; } 2>/dev/null
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  n=$(( n + 1 )); d=$WATCHED_EVERY; i=0
+  while [ "$i" -lt "$n" ] && [ "$d" -lt "$BACKOFF_MAX" ]; do d=$(( d * 2 )); i=$(( i + 1 )); done
+  [ "$d" -le "$BACKOFF_MAX" ] || d=$BACKOFF_MAX
+  printf '%s %s\n' "$n" "$(( $(date +%s) + d ))" > "$BACKOFFF.new.$$" && mv -f "$BACKOFFF.new.$$" "$BACKOFFF"
+  hlog "backoff fails=$n wait=${d}s"
+}
+
 loop() {
   hub_on || return 0
   mkdir -p "$G" 2>/dev/null || return 1
@@ -1519,6 +1542,15 @@ loop() {
     [ $(( want + LOOP_SECS )) -gt "$end" ] && end=$(( want + LOOP_SECS ))
     [ "$first" = 1 ] || [ "$nowt" -lt "$end" ] || { EXIT_WHY=lifetime; break; }
     first=0
+    # backing off (BACKOFF above): wait out the not-before, inside this life only
+    if [ "$BACKOFF_MAX" -gt 0 ] && { read -r _bf _bu < "$BACKOFFF"; } 2>/dev/null; then
+      case "$_bu" in ''|*[!0-9]*) _bu=0 ;; esac
+      while [ "$(date +%s)" -lt "$_bu" ]; do
+        [ "$_bu" -lt "$end" ] || { EXIT_WHY=backoff; break 2; }
+        idle_nap $(( _bu - $(date +%s) ))
+      done
+      FOLLOWUP=0
+    fi
     every=$EVERY; WAIT=''; wseen=no
     if watched; then
       every=$WATCHED_EVERY; wseen=yes
@@ -1533,6 +1565,7 @@ loop() {
     ms_now; ROUNDS_N=$(( ROUNDS_N + 1 ))
     if [ "$rcw" != 0 ]; then rcw=fail; elif [ "$LAST_FETCH" = 3 ]; then rcw=304; else rcw=200; fi
     hlog "round rc=$rcw ms=$(( MS - ms0 )) watched=$wseen"
+    backoff_note "$rcw"
     # The node's nudge and the hub's publication are asynchronous. One bounded
     # follow-up after a local event catches a heartbeat racing the first fetch;
     # it does not keep an unseen list on a timer thereafter.

@@ -33,6 +33,9 @@
 #      (global/hubsess.loopcode); an --ensure of other code — a stamp that differs,
 #      or none (a loop from before the stamp) — replaces the live loop at once,
 #      so a version switch reaches it (issue #3164); the same code keeps it (B)
+#   K. backoff          — rounds that keep failing wait WATCHED_EVERY doubled per
+#      failure (to FLEET_HUB_SESSIONS_BACKOFF_MAX), not the loop's cadence, kept in
+#      global/hubsess.backoff; a round that stands removes it
 # Drives bin/fleet-hub-sessions.sh, names bin/tmux-dash-collect.sh (its caller),
 # bin/fleet-doctor.sh and bin/fleet-lib.sh (fleet_hub_auth_note).
 set -uo pipefail
@@ -213,6 +216,25 @@ wait_for 5 sh -c 'read -r p < "$1" && [ "$p" != "$2" ] && kill -0 "$p"' _ "$G/hu
   || st_fail "J: a loop with no code stamp was not replaced"
 CHECKS=$((CHECKS+1))
 killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || st_fail "J: could not stop the loop"
+
+# --- K: failing rounds back off, a round that stands clears it ---------------------
+# (2026-10-29: a hub queueing every request was re-asked every 2 s by every machine.)
+printf 'exit 1\n' > "$WORK/cmd.sh"
+FLEET_HUB_SESSIONS_CMD="sh '$WORK/cmd.sh'" FLEET_HUB_SESSIONS_BACKOFF_MAX=4 bash "$HUBS" --ensure
+wait_for 5 loop_alive || st_fail "K: --ensure started no loop"
+wait_for 15 grep -q 'backoff fails=2 wait=4s' "$WORK/conf/logs/hubsess.log" \
+  || st_fail "K: two failed rounds must log backoff fails=2 wait=4s" "$(tail -5 "$WORK/conf/logs/hubsess.log" 2>/dev/null)"
+CHECKS=$((CHECKS+1))
+# the rounds behind those two notes were the backoff's 4 s apart, not the loop's 1 s
+gap=$(awk '/round rc=fail/ { split($1, a, "T"); split(a[2], t, ":"); s = t[1]*3600 + t[2]*60 + t[3]; if (p != "") print s - p; p = s }' \
+      "$WORK/conf/logs/hubsess.log" | tail -1)
+CHECKS=$((CHECKS+1)); [ -n "$gap" ] && [ "$gap" -ge 3 ] || st_fail "K: failed rounds must be >= 3 s apart under backoff, got '$gap'"
+CHECKS=$((CHECKS+1)); [ -s "$G/hubsess.backoff" ] || st_fail "K: no hubsess.backoff while failing"
+printf 'cat "%s/sessions.json"\n' "$WORK" > "$WORK/cmd.sh"
+wait_for 15 sh -c '[ ! -e "$1" ]' _ "$G/hubsess.backoff" || st_fail "K: a round that stood must clear hubsess.backoff"
+CHECKS=$((CHECKS+1))
+killloop; wait_for 5 sh -c '! pgrep -f "^bash $1 --loop" >/dev/null' _ "$HUBS" || st_fail "K: could not stop the loop"
+rm -f "$WORK/cmd.sh" "$G/hubsess.backoff"
 
 # --- H: the node token first, and a refusal on record --------------------------------
 cat > "$WORK/hub.py" <<'PY'

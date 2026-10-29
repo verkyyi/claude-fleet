@@ -644,6 +644,7 @@ FLEET_HUB_SESSIONS_IDLE_EVERY      knob: internal pacing, seconds between a NODE
 FLEET_HUB_SESSIONS_WATCHED_EVERY   knob: internal pacing, seconds between the refreshes while a client is attached to any session of this fleet — the loop sends If-None-Match so an unchanged hub answers 304 (fleet-hub-sessions.sh, 2, #1481)
 FLEET_HUB_SESSIONS_WAIT            knob: internal pacing, seconds the hub may hold a watched fleet_sessions ask (long poll) until a heartbeat moves its ETag — capped at 25, under an ingress's 60 s idle timeout (fleet-hub-sessions.sh, 25, #1526)
 FLEET_HUB_SESSIONS_LONGPOLL        knob: 0 = the watched loop never sends `wait` and keeps its fixed 2 s cadence (fleet-hub-sessions.sh, 1, #1526)
+FLEET_HUB_SESSIONS_BACKOFF_MAX     knob: internal pacing, the most seconds the refresh loop waits after rounds that fail in a row — WATCHED_EVERY doubled per failure, kept in global/hubsess.backoff, cleared by a round that stands; 0 = off (fleet-hub-sessions.sh, 60, 2026-10-29 hub incident)
 FLEET_HUB_SESSIONS_LOG_MAX         knob: internal budget, bytes at which the refresh loop's logs/hubsess.log rotates to .1 (fleet-hub-sessions.sh, 1048576)
 FLEET_HUB_SESSIONS_STATUS_STALE    knob: seconds of hub_ok age past which `fleet-hub-sessions.sh --status` (fleet-doctor's hub-sessions row) reports the refresh stalled (fleet-hub-sessions.sh, 60, #1596)
 FLEET_HUB_SESSIONS_LOOP_SECS       knob: internal budget, how long one detached refresh loop lives before the next collector tick restarts it (70, #1423)
