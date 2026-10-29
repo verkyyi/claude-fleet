@@ -166,13 +166,15 @@ assert re.fullmatch(r"[A-Z]\w{3}", by["MU/" + FAR]["code"]) and by["MU/" + FAR][
 assert fi.resolve(code("@2"))[1] == [F["@2"]] and fi.resolve(code("@2")[:4])[0] == 2
 lines = fv.paint(fv.visible(it, "", set()), -1, 100, qo.cells, qo.clip)
 drawn = ["".join(t for t, _ in l) for l in lines]
-assert any(by["@2"]["id"] + " " in d for d in drawn) and not any("T367" in d or "#4539" in d or old2 in d for d in drawn), drawn
+# the ID is internal: the list draws no ID column, the Tab detail carries it (task DDBQ)
+assert not any(by["@2"]["id"] in d or "T367" in d or "#4539" in d or old2 in d for d in drawn), drawn
+assert any(code("@2") in t for t, _ in fv.id_page(by["@2"], 100)), fv.id_page(by["@2"], 100)
 
 # --- B: Agent
 assert by["@2"]["agent"] == "codex" and by["@1"]["agent"] == "claude", (by["@2"]["agent"], by["@1"]["agent"])
 assert by["@4"]["agent"] == "" and fv.agent_word(by["@4"]) == "未知", by["@4"]["agent"]
 seg = fv.row_segs(by["@4"], 100, qo.cells, qo.clip)
-assert seg[4][0].startswith("未知") and "dim" in seg[4][1], seg[4]
+assert seg[3][0].startswith("未知") and "dim" in seg[3][1], seg[3]
 assert by["@7"]["agent"] == "claude"          # no ID, no ledger: the producer's word, as before
 assert by["@8"]["agent"] == "codex", by["@8"]   # C17: no segment, no opened agent ⇒ the window's @cc_agent
 assert by["@9"]["agent"] == "codex", by["@9"]   # C17: nor a window word ⇒ the hub record's actual_agent

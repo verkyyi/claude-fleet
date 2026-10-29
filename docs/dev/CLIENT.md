@@ -70,8 +70,8 @@ extras takes nothing from the Mac's. ⌃] ⌃] always sends one ⌃] on.
 - Not iTerm2 (Ghostty, Terminal.app): a ⌘ chord never reaches the fleet — use
   F12 or ⌃] p.
 
-Terminal 是 iTerm2 中的 tmux 面板，Web 是网页。两者均按待处理入口、PIN、无标题普通任务、
-折叠的「更多会话」排列；旧父子关系和 EPIC 成员平铺，不显示树或成员计数。
+Terminal 是 iTerm2 中的 tmux 面板，Web 是网页。两者均按 PIN、按最近更新时间排的普通任务（不另设待处理分组，进入 needs 即一次更新）、
+折叠的「更多会话」排列；行内不显示会话 ID（只在 Tab 详情里）；旧父子关系和 EPIC 成员平铺，不显示树或成员计数。
 每行只有一个固定状态位，优先级为 `!` 需要回答/批准、`◷` 待启动、`↻` 运行、
 `⟳` Loop；普通静止行留空。详情保留原生观测和错误原因，失联行淡化，不能把空白
 解释为已经停止。普通会话和「更多会话」各自按最近一轮对话活动时间倒序排列，新回复会将会话移到组内前方；PIN 保留置顶顺序。状态或心跳刷新本身不改变排序。旧节点尚未提供活动时间时，回退到原有的创建／结束时间。
@@ -507,5 +507,5 @@ q 回收（`docs/BREAK-IT.md` `session-exit`）。客户端说「会话已结束
 会话列表收纳：个人 bundle 的 `session_list` 为 `{max_visible: 10, idle_hours: 24}`，
 数量可选 5/10/15，小时可选 0/12/24/72（0 关闭）；Hub board 携带有效设置且纳入 ETag。
 网页 `compactRows` 与终端 `compact_task_list` 共享策略测试夹具。当前会话、PIN 计入额度并保护；
-待处理入口最多预览 3 条，余下和更多会话均可搜索。无 Turn 活动且未执行的普通会话超时收起，
+需要处理的会话（needs / failed）同样受保护、不计名额，网页顶部只留一个「待处理 · N」计数，点开下一条；更多会话均可搜索。无 Turn 活动且未执行的普通会话超时收起，
 运行中的会话仅可能因名额收起。收起不改变 board 生命周期、历史保留期限或停止策略。

@@ -7,6 +7,7 @@ import importlib.util
 import contextlib
 import io
 import json
+import time
 import os
 from pathlib import Path
 import sys
@@ -99,7 +100,8 @@ class TaskList(unittest.TestCase):
                  dict(kind="cmd", cmd="reapall", text="legacy cleanup")]
         shown = v.visible(items, "", set())
         self.assertEqual([e["text"] for e in shown if e["kind"] == "hdr"], ["PIN"])
-        self.assertEqual([e["target"] for e in shown if e["kind"] == "sess"], ["ask", "driver", "member"])
+        # one order (task DDBQ): asking is not a group; with no activity the source order holds
+        self.assertEqual([e["target"] for e in shown if e["kind"] == "sess"], ["driver", "member", "ask"])
         self.assertFalse(any(e["kind"] in ("ask", "cmd") for e in shown))
         self.assertTrue(all(not e.get("depth") and not e.get("fold") and not e.get("epic") for e in shown))
         rendered = "".join(t for t, _ in v.row_segs(items[2], 80, qo.cells, qo.clip))
@@ -151,11 +153,17 @@ class TaskList(unittest.TestCase):
         self.assertEqual(targets([a, b]), ["a", "b"])
         a.update(group="queue", source_order=1)
         b.update(group="ask", source_order=0, state="needs")
-        self.assertEqual(targets([b, a]), ["b", "a"])
+        self.assertEqual(targets([b, a]), ["a", "b"], "a state change alone never moves a row (DDBQ)")
         b["group"] = "pin"
         self.assertEqual(targets([b, a]), ["b", "a"])
         b["group"] = "queue"
+        self.assertEqual(targets([b, a]), ["a", "b"])
+        # entering needs is activity (set-claude-state stamps @turn_activity_at): it rises by time
+        t = int(time.time())
+        a["activity_at"], b["activity_at"] = t - 30, t - 20
         self.assertEqual(targets([b, a]), ["b", "a"])
+        a["activity_at"] = t - 10
+        self.assertEqual(targets([b, a]), ["a", "b"], "a newer turn passes an asking row")
 
     def test_board_reserved_is_not_pending_start(self):
         v._BOARD["lang"] = "zh"

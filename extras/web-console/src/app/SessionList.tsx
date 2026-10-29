@@ -225,7 +225,7 @@ function useOpenRef() {
 // The list itself. `variant` side = inside the computer's left column (shadcn
 // SidebarMenu, folds to its glyphs); page = the phone's whole screen.
 export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ variant, chatHome }) => {
-  const { rows: allRows, board, failed, reload } = useWorkRows();
+  const { rows: allRows, board, failed, reload, markSeen } = useWorkRows();
   const [showArchived, setShowArchived] = useState(false);
   const archivedCount = allRows?.filter(r => r.board?.archived).length || 0;
   const rows = allRows?.filter(r => !!r.board?.archived === showArchived) ?? null;
@@ -237,7 +237,6 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const [goneOpen, setGoneOpen] = useState(false);
   const [pressed, setPressed] = useState<Row | null>(null);
   const previous = useRef<CompactGroups | undefined>(undefined);
-  const [attentionOpen, setAttentionOpen] = useState(false);
   const [pointing, setPointing] = useState(false);
   const [focused, setFocused] = useState(false);
   const [now, setNow] = useState(Date.now);
@@ -276,21 +275,20 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
     body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map(row)}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
-    const { pin, attention, attentionVisible, open, gone } = grouped;
+    const { pin, open, gone } = grouped;
     const runningHidden = gone.filter((r) => listStatus(r).kind === "work").length;
-    const attentionTotal = rows.filter(needsAttention).length;
+    // A count, not a group (task DDBQ): the rows stay in time order; the count
+    // opens the next one that needs the person, after the one open now.
+    const waiting = [...pin, ...open].filter(needsAttention);
+    const nextWaiting = waiting[(waiting.findIndex((r) => rowRef(r) === ref) + 1) % (waiting.length || 1)];
     // The old chat entry remains above the task list for older hubs.
     body = (
       <>
         {oldRoad ? <List>{web}</List> : null}
-        {attentionTotal ? <>
-          <button type="button" aria-expanded={attentionOpen} onClick={() => setAttentionOpen(!attentionOpen)}
-            className="text-clay flex min-h-8 w-full items-center gap-2 px-4 text-sm group-data-[collapsible=icon]:hidden">
-            {attentionOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-            {tr("待处理", "Needs attention")} · {attentionTotal}
-          </button>
-          <List>{(attentionOpen ? rows.filter((r) => needsAttention(r) && r.group !== "pin" && rowRef(r) !== ref) : attention.slice(0, attentionVisible)).map(row)}</List>
-        </> : null}
+        {nextWaiting ? <Link to={sessionPath(nextWaiting)} onClick={() => markSeen(nextWaiting)} data-testid="attention-next"
+          className="text-clay flex min-h-8 w-full items-center gap-2 px-4 text-sm no-underline group-data-[collapsible=icon]:hidden">
+          <ChevronRight className="size-4" />{tr("待处理", "Needs attention")} · {waiting.length}
+        </Link> : null}
         {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{pin.map(row)}</List></div></> : null}
         <List>{timeline(open)}</List>
         {gone.length ? <>

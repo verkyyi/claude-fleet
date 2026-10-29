@@ -135,7 +135,7 @@
     "now": 1800000000
   },
   {
-    "name": "attention overflow remains discoverable",
+    "name": "attention keeps time order and is never folded",
     "rows": [
       {
         "id": "a0",
@@ -172,21 +172,109 @@
         "group": "queue",
         "state": "idle",
         "activity_at": 1800000000
+      },
+      {
+        "id": "quiet",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999999
+      },
+      {
+        "id": "stale",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799800000
       }
     ],
     "visible": [
+      "idle",
+      "quiet",
       "a0",
       "a1",
       "a2",
-      "idle"
+      "a3",
+      "a4"
     ],
-    "more": [],
+    "more": [
+      "stale"
+    ],
     "attention": [
       "a0",
       "a1",
       "a2",
       "a3",
       "a4"
+    ],
+    "now": 1800000000
+  },
+  {
+    "name": "attention past the cap still shows",
+    "preferences": {
+      "max_visible": 5,
+      "idle_hours": 24
+    },
+    "rows": [
+      {
+        "id": "a0",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799910000
+      },
+      {
+        "id": "a1",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909999
+      },
+      {
+        "id": "a2",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909998
+      },
+      {
+        "id": "a3",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909997
+      },
+      {
+        "id": "a4",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909996
+      },
+      {
+        "id": "a5",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799909995
+      },
+      {
+        "id": "idle",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1800000000
+      }
+    ],
+    "visible": [
+      "a0",
+      "a1",
+      "a2",
+      "a3",
+      "a4",
+      "a5"
+    ],
+    "more": [
+      "idle"
+    ],
+    "attention": [
+      "a0",
+      "a1",
+      "a2",
+      "a3",
+      "a4",
+      "a5"
     ],
     "now": 1800000000
   },

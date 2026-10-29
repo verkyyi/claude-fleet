@@ -1651,7 +1651,7 @@ def id_page(e, w):
     if not e.get("fid"):
         return []
     out = [("", ())]
-    # the WRITTEN code (≥ 4, EPIC T644 C4) — the column shows the shorter one
+    # the WRITTEN code (≥ 4, EPIC T644 C4) — the one place a session's ID is shown (DDBQ)
     out.append(("  " + say("view_id_head_fmt", e.get("code") or e.get("id") or "", e["fid"]), ("dim",)))
     if e.get("aliases"):
         out.append(("  " + say("view_id_aliases_fmt", " ".join(e["aliases"])), ("dim",)))
@@ -2747,15 +2747,12 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     recent = [e for e in rows if e.get("group") != "pin"]
     if any(e.get("activity_at") for e in recent):
         recent.sort(key=lambda e: (-int(e.get("activity_at") or 0), e.get("fid") or e["target"]))
-    protected = {e["target"] for e in recent if e["target"] in (current, selected)}
-    attention = [e for e in recent if needs_attention(e) and e["target"] not in protected]
+    # One order (task DDBQ): no group lifts a row that needs the person —
+    # entering needs is itself activity — but such a row is never folded.
+    protected = {e["target"] for e in recent if e["target"] in (current, selected) or needs_attention(e)}
     room = max(0, prefs["max_visible"] - len(pin) - len(protected))
-    preview = min(3, room, len(attention))
-    room -= preview
     ordinary, history = [], []
     for e in recent:
-        if e in attention:
-            continue
         at = e.get("activity_at") or 0
         expired = prefs["idle_hours"] and at and now - at >= prefs["idle_hours"] * 3600 and task_status(e) not in ("work", "pending")
         if e["target"] in protected or (e.get("sec") != "gone" and not expired and room > 0):
@@ -2768,14 +2765,6 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
             e["sec"] = "gone"
             history.append(e)
     out = []
-    total = sum(bool(needs_attention(e)) for e in rows)
-    if total:
-        out.append({"kind": "sec", "sec": "attention", "text": ("Needs attention" if ui_lang() == "en" else "待处理") + " · %d" % total, "n": total})
-        for i, e in enumerate(attention):
-            e.pop("sec", None)
-            if i >= preview:
-                e["sec"] = "attention"
-            out.append(e)
     if pin:
         out += [{"kind": "hdr", "group": "pin", "text": "PIN"}] + pin
     out += ordinary
@@ -2819,7 +2808,7 @@ def legend():
 
 
 PUNCT = "，。；：、！？,;:!?·—)）」』"
-ID_W, AGENT_W, REPO_W = 8, 7, 13
+AGENT_W, REPO_W = 7, 13
 
 
 def ellipsis(text, room, cells, clip):
@@ -2850,11 +2839,12 @@ def agent_word(e):
 
 def name_col(width):
     """The cell the name column starts at, as row_segs lays a row out."""
-    return TEXT_X + ID_W + 1 + (AGENT_W + 1 if width >= 40 else 0)
+    return TEXT_X + (AGENT_W + 1 if width >= 40 else 0)
 
 
 def row_segs(e, width, cells, clip, lit=False, glyph=True):
-    """One status slot · ID(8) · Agent(7) · title · repo(13).
+    """One status slot · Agent(7) · title · repo(13).
+    The session ID is internal: the Tab detail shows it, the row does not (task DDBQ).
     Only a request for input is red/bold; lost observations dim the whole row.
     Legacy parent/member metadata never changes title geometry.
     """
@@ -2866,8 +2856,7 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     show_repo = width >= 60
     show_agent = width >= 40
     agent = agent_word(e)
-    segs = [(" " * ICON_X, base), (gl[sym], gstyle), (" ", base),
-            ((e.get("id") or "").ljust(ID_W) + " ", base + ("bold",))]
+    segs = [(" " * ICON_X, base), (gl[sym], gstyle), (" ", base)]
     if show_agent:
         # Keep the plan marker visible even in the seven-cell engine column.
         if e.get("agent_basis") == "planned":
