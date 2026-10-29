@@ -286,7 +286,7 @@ OUT="$SB/out/ds"
 check "DS: launch rc" 0 "$(cat "$OUT/rc")"
 check "DS: the session holds a deepseek hub pass" "fcp-h1.PASS-deepseek.sig" "$(envv CLAUDE_CODE_OAUTH_TOKEN)"
 case "$(envv ANTHROPIC_BASE_URL)" in http://127.0.0.1:[0-9]*/deepseek) pass "DS: ANTHROPIC_BASE_URL is the proxy's /deepseek road" ;; *) fail "DS: ANTHROPIC_BASE_URL=$(envv ANTHROPIC_BASE_URL) ($(cat "$OUT/stderr"))" ;; esac
-check "DS: ANTHROPIC_MODEL" "deepseek-flash[1m]" "$(envv ANTHROPIC_MODEL)"
+check "DS: ANTHROPIC_MODEL" "claude-opus-5-5[1m]" "$(envv ANTHROPIC_MODEL)"
 check "DS: the request reached the central deepseek road" "/central/v1/proxy/deepseek/v1/messages" "$(resp path)"
 check "DS: …carrying the pass" "Bearer fcp-h1.PASS-deepseek.sig" "$(resp auth)"
 check "DS: the record says central" route=central "$(grep '^route=' "$FLEET_CONF_DIR/cred-proxy/sessions/sDS")"
