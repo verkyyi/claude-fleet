@@ -19,6 +19,8 @@ overlays/example/  the shape a deployment's own overlay takes (names nothing of 
 overlays/kind/     the rolling drill on a throwaway kind cluster (hub-rolling.yml)
 overlays/aws-k3s/  a 10-person trial on ONE EC2 box running k3s (task PNWW; ../aws/README.md) —
                    never rendered by hub-deploy
+overlays/ack-sz-cn/ the mainland region's WORKER side for that hub (task J7BN P1): DeepSeek-only
+                   people's pods on ACK's fleet/region=cn pool, cluster ack-sz — applied by a person
 egress/ us-egress/ fleet-workers' way out and its US parent (#3547, #4313), with
 credproxy/ caches/ the cluster credential proxy and the package caches — fleet-workers/
                    applies all but us-egress, which goes on its own (a person, never hub-deploy)

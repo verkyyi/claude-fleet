@@ -1,0 +1,47 @@
+# The cluster credential proxy beside the mainland pods (task J7BN P1), as
+# ../../aws-k3s/workers/credproxy makes it (fleet-credproxy:80, in-cluster only,
+# from the environment-free base so a private overlay laid over
+# credproxy/fleet-workers never reaches it). One replica on the mainland pool:
+# a person's pod here only ever asks it for DeepSeek (hub setting
+# fleet.cred_pod_providers.ack-sz=deepseek), which it reaches directly.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: fleet-workers
+resources:
+  - ../../../credproxy/base
+images:
+  - name: ccquota
+    newName: acr.invalid/fleet/ccquota
+    newTag: set-by-person
+patches:
+  - path: deployment-env.yaml
+  - patch: |-
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: ccquota-credproxy
+  # one replica: a PDB of minAvailable 1 would hold every drain of the one node
+  - patch: |-
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: ccquota-credproxy
+  - target: {kind: Deployment, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      # no Singapore relay: DeepSeek is always direct, and nothing else is asked here
+      - op: replace
+        path: /spec/template/spec/containers/0/command
+        value: ["ccquota", "credproxy", "--listen=:8788", "--direct"]
+  - target: {kind: Service, name: ccquota-credproxy}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: fleet-credproxy

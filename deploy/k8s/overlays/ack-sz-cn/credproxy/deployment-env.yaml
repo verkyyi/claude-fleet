@@ -1,0 +1,34 @@
+# The AWS hub over its public address (no hub Service in this cluster): one
+# resolve per session pass, cached ≤ 30 s, ridden out on --stale. Its token from
+# Secret fleet-credproxy — the same value as the AWS hub's
+# CCQUOTA_FLEET_CREDPROXY_TOKEN (the hub knows ONE credproxy token; README.md).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ccquota-credproxy
+spec:
+  template:
+    metadata:
+      labels:
+        fleet/role: ops
+    spec:
+      serviceAccountName: fleet-credproxy
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: acr-credential-6731ef77d88edc24b279ebf20860f30f
+      nodeSelector:
+        fleet/region: cn
+      tolerations:
+        - {key: fleet/region, operator: Equal, value: cn, effect: NoSchedule}
+      containers:
+        - name: credproxy
+          env:
+            - name: CCQUOTA_CREDPROXY_HUB_URL
+              value: "https://core.tokenman.io"
+            - name: CCQUOTA_FLEET_CREDPROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: fleet-credproxy
+                  key: credproxy-token
+            - name: CCQUOTA_CREDPROXY_RELAY_URL
+              value: ""

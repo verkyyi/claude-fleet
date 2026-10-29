@@ -739,6 +739,82 @@ class LinuxNode(unittest.TestCase):
         res = patch_['spec']['template']['spec']['containers'][0]['resources']
         self.assertEqual((res['requests']['cpu'], res['requests']['memory'], res['limits']['cpu']), ('500m', '3Gi', '3'))
 
+    def test_user_pod_placed_in_a_region(self):
+        """Task J7BN P1: a cluster's mainland pool (ACK Shenzhen: label
+        fleet/region=cn, taint fleet/region=cn:NoSchedule) is named in the
+        provisioner template's user_pod.node_selector / tolerations, and
+        exec_region "cn" puts FLEET_EXEC_REGION=cn into the pod and every
+        shell's /etc/fleet-devnet.env. None given = byte for byte as before;
+        anything else is refused; the provisioner's off_template still passes."""
+        r = module('fleet-provisioner').render()
+        args = (IMG, 'https://hub.example', 'essd', 'u-drill1')
+        kw = {'login': 'fleetu7', 'uid': 10002, 'cred_central': CENTRAL}
+        plain = json.dumps(r.user_pod_resources(*args, **kw))
+        # absent, or present and empty: the same bytes, and the CLI's bytes too
+        self.assertEqual(json.dumps(r.user_pod_resources(*args, node_selector={}, tolerations=[], exec_region='',
+                                                         **kw)), plain)
+        self.assertEqual(rendered(USER_POD), json.loads(plain))
+        for word in ('nodeSelector', 'tolerations', 'FLEET_EXEC_REGION'):
+            self.assertNotIn(word, plain)
+        cn = rendered(USER_POD + ['--node-selector', 'fleet/region=cn', '--toleration',
+                                  'fleet/region=cn:NoSchedule', '--exec-region', 'cn'])
+        pod = cn[2]['spec']['template']['spec']
+        self.assertEqual(pod['nodeSelector'], {'fleet/region': 'cn'})
+        self.assertEqual(pod['tolerations'], [{'key': 'fleet/region', 'operator': 'Equal', 'value': 'cn',
+                                               'effect': 'NoSchedule'}])
+        for c in (pod['containers'][0], pod['initContainers'][1]):  # the node program, pod-etc
+            self.assertIn({'name': 'FLEET_EXEC_REGION', 'value': 'cn'}, c['env'])
+        # only the pod spec moved: the disk and the Service are the same
+        self.assertEqual(cn[:2], json.loads(plain)[:2])
+        prov = module('fleet-provisioner')
+        self.assertIsNone(prov.off_template(cn[2], 'fleet-workers'))
+        # from the template, as the provisioner passes it
+        tpl = r.user_pod_resources(*args, node_selector={'fleet/region': 'cn'},
+                                   tolerations=[{'key': 'fleet/region', 'operator': 'Equal', 'value': 'cn',
+                                                 'effect': 'NoSchedule'}], exec_region='cn', **kw)
+        self.assertEqual(tpl[2]['spec']['template']['spec']['tolerations'], pod['tolerations'])
+        for bad in ({'exec_region': 'us'}, {'node_selector': ['fleet/region']},
+                    {'node_selector': {'bad key!': 'cn'}}, {'node_selector': {'fleet/region': 'c n'}},
+                    {'tolerations': {'key': 'x'}}, {'tolerations': [{'key': 'x', 'operator': 'Gt'}]},
+                    {'tolerations': [{'key': 'x', 'effect': 'Never'}]}, {'tolerations': [{'operator': 'Equal'}]},
+                    {'tolerations': [{'key': 'x', 'nodeName': 'n1'}]},
+                    {'tolerations': [{'key': 'x', 'effect': 'NoSchedule', 'tolerationSeconds': 5}]}):
+            with self.assertRaises(ValueError, msg=bad):
+                r.user_pod_resources(*args, **dict(kw, **bad))
+        for bad in (['--exec-region', 'us'], ['--toleration', 'nocolon']):
+            self.assertNotEqual(subprocess.run(USER_POD + bad, capture_output=True).returncode, 0, bad)
+        # a shared node is many people's: no region flags there
+        self.assertNotEqual(subprocess.run(NODE + ['--exec-region', 'cn'], capture_output=True).returncode, 0)
+        # the Shenzhen overlay's own template (deploy/k8s/overlays/ack-sz-cn/template.json.tmpl)
+        # makes such a pod through the provisioner, on the mainland pool, sized as it says
+        text = (BIN.parent / 'deploy/k8s/overlays/ack-sz-cn/template.json.tmpl').read_text()
+        conf = json.loads(text.replace('@MANAGED_NODE_IMAGE@', IMG).replace('@CREDPROXY_IP@', '192.0.2.10'))
+        self.assertEqual((conf['cluster'], conf['user_pod']['exec_region']), ('ack-sz', 'cn'))
+
+        class API:
+            sent = []
+
+            def call(self, method, path, body=None, ctype=None):
+                self.sent.append((method, body))
+                return 201, {}
+
+        prov.act({'op': 'create-user-pod', 'pod': 'u-drill1', 'limits': '', 'login': 'fleetu7', 'uid': 10002,
+                  'join': 'code'}, conf, API())
+        dep = [b for m, b in API.sent if m == 'POST' and b['kind'] == 'Deployment'][0]
+        self.assertIsNone(prov.off_template(dep, 'fleet-workers'))
+        ps = dep['spec']['template']['spec']
+        self.assertEqual((ps['nodeSelector'], ps['tolerations']), (pod['nodeSelector'], pod['tolerations']))
+        self.assertIn({'name': 'FLEET_EXEC_REGION', 'value': 'cn'}, ps['containers'][0]['env'])
+        self.assertIn({'name': 'FLEET_CN_MIRRORS', 'value': '1'}, ps['containers'][0]['env'])
+        self.assertEqual(ps['containers'][0]['resources']['limits']['memory'], '8Gi')
+        self.assertIn('-A OUTPUT -d 192.0.2.10/32 -p tcp -m tcp --dport 80 -j ACCEPT', ps['initContainers'][0]['command'][-1])
+        n = module('fleet-node-linux')
+        _, shell = n.devnet_settings({'FLEET_EXEC_REGION': 'cn', 'FLEET_CN_MIRRORS': '1'})
+        self.assertIn('FLEET_EXEC_REGION=cn\n', shell)
+        self.assertNotIn('FLEET_EXEC_REGION', n.devnet_settings({'FLEET_CN_MIRRORS': '1'})[1])
+        with self.assertRaises(ValueError):
+            n.devnet_settings({'FLEET_EXEC_REGION': 'cn;rm -rf /'})
+
     def test_user_pod_table_has_no_machine_loops(self):
         """#3550: a user pod runs no machine-level loop (they are the cluster's
         one copy); its own children stay. Off = the table as before."""
