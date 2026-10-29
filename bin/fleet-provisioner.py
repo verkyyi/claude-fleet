@@ -235,6 +235,11 @@ class API(object):
         self.token_file = os.path.join(sa, 'token')
         ca = os.path.join(sa, 'ca.crt')
         self.ctx = ssl.create_default_context(cafile=ca) if os.path.exists(ca) else None
+        if self.ctx is not None and hasattr(ssl, 'VERIFY_X509_STRICT'):
+            # the cluster's own CA is the only trust here, and ACK's (task J7BN)
+            # carries no Authority Key Identifier, which Python 3.13's strict
+            # default refuses: keep the chain check, drop that RFC-5280 nit
+            self.ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
 
     def call(self, method, path, body=None, ctype='application/json'):
         """(status, decoded body); a transport failure raises OSError."""
