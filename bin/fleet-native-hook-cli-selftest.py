@@ -442,6 +442,7 @@ def main():
                 (managed / "studio-guard.py").write_bytes((arguments.fleet_root / "hooks/studio-guard.py").read_bytes())
                 (managed.parent / "bin").mkdir(exist_ok=True)
                 (managed.parent / "bin/fleet_studio.py").write_bytes((arguments.fleet_root / "bin/fleet_studio.py").read_bytes())
+                (managed.parent / "bin/fleet_iso.py").write_bytes((arguments.fleet_root / "bin/fleet_iso.py").read_bytes())
                 (managed / "capture.py").write_text(CAPTURE_SCRIPT, encoding="utf-8")
                 check((managed / "base-readonly-guard.py").read_bytes() == base_guard_source,
                       "real Fleet base-readonly guard copied without modification")

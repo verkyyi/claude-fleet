@@ -6,7 +6,6 @@ and sends approved actions through the ordinary session gate. All writers share
 one lock, including different MCP processes and a restarted webchat service.
 """
 import contextlib
-import datetime
 import fcntl
 import json
 import os
@@ -16,6 +15,7 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlparse
+import fleet_iso
 
 
 def root():
@@ -57,10 +57,7 @@ def https(value):
 
 
 def epoch(value):
-    try:
-        return datetime.datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
-    except (ValueError, TypeError):
-        return 0
+    return fleet_iso.epoch(value, utc=True)
 
 
 def session(state, fid, proposal=''):

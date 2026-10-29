@@ -1721,7 +1721,7 @@ done
     @staticmethod
     def managed_release(destination):
         for relative in ('bin/fleet-hooks-emit.sh', 'hooks/codex-map.json', 'hooks/settings-hooks.json',
-                         'hooks/bash-guard.py', 'hooks/base-readonly-guard.py', 'hooks/studio-guard.py', 'bin/fleet_studio.py'):
+                         'hooks/bash-guard.py', 'hooks/base-readonly-guard.py', 'hooks/studio-guard.py', 'bin/fleet_studio.py', 'bin/fleet_iso.py'):
             target = Path(destination) / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(BIN.parent / relative, target)

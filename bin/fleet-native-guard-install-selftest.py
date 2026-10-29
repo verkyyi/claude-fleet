@@ -67,7 +67,7 @@ def install_fixture(arguments, repository):
     source = system / 'release' / ('a' * 40)
     relative_files = ('bin/fleet-hooks-emit.sh', 'bin/fleet-codex-runtime.py', 'bin/fleet-node-linux.py',
                       'hooks/codex-map.json', 'hooks/settings-hooks.json',
-                      'hooks/bash-guard.py', 'hooks/base-readonly-guard.py', 'hooks/studio-guard.py', 'bin/fleet_studio.py')
+                      'hooks/bash-guard.py', 'hooks/base-readonly-guard.py', 'hooks/studio-guard.py', 'bin/fleet_studio.py', 'bin/fleet_iso.py')
     for relative in relative_files:
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)
