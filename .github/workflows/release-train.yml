@@ -395,7 +395,7 @@ jobs:
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
-      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}
+      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-24.04' }}
       mirror: ${{ needs.linux-pick.outputs.linux_mirror }}
       shards: ${{ needs.plan.outputs.linux_shards }}
       budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
@@ -723,7 +723,7 @@ jobs:
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       phase: build
-      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}
+      runs_on: ${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-24.04' }}
     # FLEET_HUB_TARGET=aws-k3s: the build job may read AWS_DEPLOY_ROLE_ARN as a secret
     secrets: inherit
 

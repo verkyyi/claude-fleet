@@ -240,7 +240,7 @@ drill_train_ack_down() {
   local t0 d out wf
   [ -x "$BIN/fleet-train-runner.sh" ] || { WHY="no bin/fleet-train-runner.sh"; return 1; }
   wf="$BIN/../.github/workflows/release-train.yml"
-  grep -q "runs_on: \${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-latest' }}" "$wf" \
+  grep -q "runs_on: \${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-24.04' }}" "$wf" \
     || { WHY="release-train.yml's Linux half does not fall back to ubuntu-latest without a pick"; return 1; }
   sed -n '/^  linux-pick:/,/^  linux:/p' "$wf" | grep -q "vars.FLEET_TRAIN_RUNNER != ''" \
     || { WHY="linux-pick runs with FLEET_TRAIN_RUNNER empty"; return 1; }
@@ -258,7 +258,7 @@ drill_train_ack_down() {
   printf '%s' '{"total_count":0,"runners":[]}' > "$d/zero.json"
   pick() { GITHUB_OUTPUT="$d/out" FLEET_TRAIN_GIT_MIRROR=git://mirror/claude-fleet.git bash "$BIN/fleet-train-runner.sh" pick "$@" 2>/dev/null; }
   out=$(FLEET_TRAIN_RUNNER='' pick --runners-file "$d/up.json")
-  case "$out" in *'linux_runs_on=ubuntu-latest'*'linux_where=github'*'linux_mirror='|*'linux_mirror='$'\n'*) ;;
+  case "$out" in *'linux_runs_on=ubuntu-24.04'*'linux_where=github'*'linux_mirror='|*'linux_mirror='$'\n'*) ;;
     *) WHY="the variable empty, the pick was not ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
   out=$(FLEET_TRAIN_RUNNER=fleet-ack pick --runners-file "$d/up.json")
   case "$out" in *'linux_runs_on=["fleet-ack"]'*'linux_where=fleet-ack'*'linux_mirror=git://mirror/claude-fleet.git'*) ;;
@@ -269,7 +269,7 @@ drill_train_ack_down() {
       zero)    out=$(FLEET_TRAIN_RUNNER=fleet-ack pick --runners-file "$d/zero.json") ;;
       notoken) out=$(FLEET_TRAIN_RUNNER=fleet-ack FLEET_TRAIN_RUNNER_TOKEN='' pick --repo o/r) ;;
     esac
-    case "$out" in *'linux_runs_on=ubuntu-latest'*'linux_where=github'*'深圳不可用，退回 GitHub'*) ;;
+    case "$out" in *'linux_runs_on=ubuntu-24.04'*'linux_where=github'*'深圳不可用，退回 GitHub'*) ;;
       *) WHY="($c) the train did not fall back to ubuntu-latest saying 深圳不可用: $out"; rm -rf "$d"; return 1 ;; esac
     case "$out" in *'linux_mirror=git'*) WHY="($c) a GitHub runner was handed the cluster mirror"; rm -rf "$d"; return 1 ;; esac
   done
@@ -1577,7 +1577,7 @@ drill_pr_ack_down() {
   printf 'ts=%s\nlinux_where=github\nlinux_why=no fleet-ack runner online (0 registered)\n' "$(date +%s)" > "$d/down"
   pick() { GITHUB_OUTPUT="$d/out" GITHUB_REPOSITORY=o/r bash "$BIN/fleet-train-runner.sh" pr-pick "$@" 2>/dev/null; }
   out=$(FLEET_PR_RUNNER='' pick --status "$d/up" --head-repo o/r --fork false)
-  case "$out" in *'pr_runs_on=ubuntu-latest'*'pr_where=github'*) ;;
+  case "$out" in *'pr_runs_on=ubuntu-24.04'*'pr_where=github'*) ;;
     *) WHY="the variable empty, the pick was not ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
   out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo o/r --fork false)
   case "$out" in *'pr_runs_on=["fleet-ack"]'*'pr_where=fleet-ack'*) ;;
@@ -1590,7 +1590,7 @@ drill_pr_ack_down() {
       fork)    out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo evil/r --fork true) ;;
       flagged) out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo o/r --fork true) ;;
     esac
-    case "$out" in *'pr_runs_on=ubuntu-latest'*'pr_where=github'*) ;;
+    case "$out" in *'pr_runs_on=ubuntu-24.04'*'pr_where=github'*) ;;
       *) WHY="($c) the PR's checks were not sent to ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
   done
   grep -q '^pr_runs_on=' "$d/out" || { WHY="the pick wrote nothing to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }

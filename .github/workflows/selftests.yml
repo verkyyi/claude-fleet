@@ -182,7 +182,7 @@ jobs:
       # names its runners (issue #4821: fleet-ack for this repo's own PR when the
       # cluster is up) and keeps the 18 below
       sha: ${{ github.event_name == 'workflow_dispatch' && github.sha || '' }}
-      runs_on: ${{ inputs.runs_on || 'ubuntu-latest' }}
+      runs_on: ${{ inputs.runs_on || 'ubuntu-24.04' }}
       mirror: ${{ inputs.mirror || '' }}
       # the plan's bounds follow its forecast (a full-suite PR's heaviest shard
       # was predicted 417 s, ran 479 s against the old fixed 8 minutes); the

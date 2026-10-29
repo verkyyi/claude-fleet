@@ -8,17 +8,18 @@
 #
 # pick (the train's `board` job): the Shenzhen cluster's fleet-ack runners when the
 #   repo variable FLEET_TRAIN_RUNNER (--runner) says `fleet-ack` and the set is up,
-#   GitHub's ubuntu-latest otherwise. Up = a runner of that set is registered and
+#   GitHub's ubuntu-24.04 otherwise (pinned: ubuntu-latest moved to 26.04, where
+#   playwright has no chromium and several selftests go red — task DDBQ). Up = a runner of that set is registered and
 #   online right now (GitHub's runner list — ARC keeps minRunners idle ones
 #   registered while the set lives, named <set>-<hash>-runner-<id> with NO label;
 #   a classic runner by its label); the list is read with $FLEET_TRAIN_RUNNER_TOKEN
 #   (a token that may read the repo's self-hosted runners — the runner app's
 #   installation token, minted in the job; never an argv). No variable ⇒
-#   ubuntu-latest and nothing asked: the train is byte for byte as before. Asked and
-#   not up — nobody online, no token, no answer — ⇒ ubuntu-latest, and the why says
+#   ubuntu-24.04 and nothing asked: the train is byte for byte as before. Asked and
+#   not up — nobody online, no token, no answer — ⇒ ubuntu-24.04, and the why says
 #   「深圳不可用，退回 GitHub」. The train runs either way (BREAK-IT train-ack-down).
 #   Prints, and appends to $GITHUB_OUTPUT when set, one `key=value` line each:
-#     linux_runs_on  `ubuntu-latest`, or the JSON label list `["fleet-ack"]`
+#     linux_runs_on  `ubuntu-24.04`, or the JSON label list `["fleet-ack"]`
 #     linux_where    fleet-ack | github
 #     linux_why      one line: which runners, or why GitHub's
 #     linux_mirror   the cluster's git mirror ($FLEET_TRAIN_GIT_MIRROR) on fleet-ack,
@@ -51,7 +52,7 @@
 #   repo variable FLEET_PR_RUNNER (--runner) names the set, the PR's head is this
 #   repo's own branch (--head-repo = --repo and --fork false: a fork's PR never runs
 #   on our runners) and the status is fresh (≤ --max-age, 1800 s) and «up»;
-#   otherwise ubuntu-latest and the why says which. No variable ⇒ nothing read.
+#   otherwise ubuntu-24.04 and the why says which. No variable ⇒ nothing read.
 #   Prints (and to $GITHUB_OUTPUT): pr_runs_on · pr_where · pr_why.
 #
 # gh reads $GH_TOKEN; $FLEET_TRAIN_GH is a test seam for the gh command.
@@ -80,7 +81,7 @@ pick() {
     shift
   done
   if [ -z "$runner" ]; then
-    emit 'linux_runs_on=ubuntu-latest' 'linux_where=github' 'linux_why=FLEET_TRAIN_RUNNER 未设：GitHub 的 ubuntu-latest' 'linux_mirror=' 'linux_slots='
+    emit 'linux_runs_on=ubuntu-24.04' 'linux_where=github' 'linux_why=FLEET_TRAIN_RUNNER 未设：GitHub 的 ubuntu-24.04' 'linux_mirror=' 'linux_slots='
     printf 'Linux: github — FLEET_TRAIN_RUNNER is empty\n' >&2
     return 0
   fi
@@ -129,7 +130,7 @@ else:
     [ "$slots" -le 44 ] || slots=44
     say="$say · $slots 个机位"
   else
-    where=github labels=ubuntu-latest say="深圳不可用，退回 GitHub（${say:-could not decide}）"
+    where=github labels=ubuntu-24.04 say="深圳不可用，退回 GitHub（${say:-could not decide}）"
   fi
   emit "linux_runs_on=$labels" "linux_where=$where" "linux_why=$say" "linux_mirror=$mirror" "linux_slots=$slots"
   printf 'Linux: %s — %s\n' "$where" "$say" >&2
@@ -153,7 +154,7 @@ pr_pick() {
   case "$maxage" in ''|*[!0-9]*) die "pr-pick: --max-age takes seconds" ;; esac
   local why='' ts='' where='' said='' age
   if [ -z "$runner" ]; then
-    emit 'pr_runs_on=ubuntu-latest' 'pr_where=github' 'pr_why=FLEET_PR_RUNNER 未设：GitHub 的 ubuntu-latest'
+    emit 'pr_runs_on=ubuntu-24.04' 'pr_where=github' 'pr_why=FLEET_PR_RUNNER 未设：GitHub 的 ubuntu-24.04'
     printf 'PR checks: github — FLEET_PR_RUNNER is empty\n' >&2
     return 0
   fi
@@ -175,7 +176,7 @@ pr_pick() {
     fi
   fi
   if [ -n "$why" ]; then
-    emit 'pr_runs_on=ubuntu-latest' 'pr_where=github' "pr_why=$why"
+    emit 'pr_runs_on=ubuntu-24.04' 'pr_where=github' "pr_why=$why"
     printf 'PR checks: github — %s\n' "$why" >&2
   else
     emit "pr_runs_on=[\"$runner\"]" 'pr_where=fleet-ack' "pr_why=${runner}（${said:-up}，${age}s 前）"
