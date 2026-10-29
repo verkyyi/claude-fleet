@@ -99,7 +99,7 @@ export type PageDef = {
 };
 
 export const PAGES: PageDef[] = [
-  { id: "studio", path: "/studio", label: "活页工作台", icon: Layers, page: lazy(() => import("./pages/studio")) },
+  { id: "studio", path: "/studio", label: "增长运营 Agent", icon: Layers, page: lazy(() => import("./pages/studio")) },
   { id: "schedules", path: "/schedules", label: tr("定时任务", "Schedules"), icon: Gauge, page: lazy(() => import("./pages/schedules")) },
   { id: "health", path: "/health", label: tr("服务健康", "Service health"), icon: Gauge, page: lazy(() => import("./pages/health")) },
   { id: "home", path: "/", label: tr("会话", "Sessions"), icon: Layers, page: Home },

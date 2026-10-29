@@ -11,7 +11,7 @@ skills) adds its tools here and in `bin/fleet-mcp.py`, nowhere else.
 The core also lists `page_target`, `show_page` and `studio_projects`. They call
 `bin/fleet_studio.py` with the verified current pane identity, never a caller-supplied
 session. These tools read or update only the home login's studio projection; they
-perform no network publishing. See [the studio flow](WEB-CHAT.md#活页工作台).
+perform no network publishing. See [the studio flow](WEB-CHAT.md#增长运营-agent).
 Unbound sessions get an explicit refusal; existing tools and handlers are unchanged.
 
 ## The rule

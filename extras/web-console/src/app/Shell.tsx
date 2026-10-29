@@ -127,7 +127,7 @@ const PersonMenu: FC = () => {
             ))}
             <DropdownMenuItem onSelect={() => location.assign("/status")}><ShieldCheck />{tr("服务健康", "Service health")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => go(meTab("account").path)}><CircleUserRound />{tr("我的", "Me")}</DropdownMenuItem>
-            {me?.studio ? <DropdownMenuItem onSelect={() => go("/studio")}>活页工作台</DropdownMenuItem> : null}
+            {me?.studio ? <DropdownMenuItem onSelect={() => go("/studio")}>增长运营 Agent</DropdownMenuItem> : null}
             {isAdmin(me) ? (
               <DropdownMenuItem asChild className="text-clay focus:text-clay [&_svg]:!text-clay">
                 <a href={ADMIN_HREF} className="no-underline"><ShieldCheck />{tr("管理后台", "Admin")}</a>
@@ -175,7 +175,7 @@ const Side: FC = () => (
   </Sidebar>
 );
 
-const StudioLink: FC = () => useShell().me?.studio ? <Link to="/studio" className="mx-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">活页工作台</Link> : null;
+const StudioLink: FC = () => useShell().me?.studio ? <Link to="/studio" className="mx-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">增长运营 Agent</Link> : null;
 
 const QuotaPillOf: FC = () => <QuotaPill quota={useShell().quota} />;
 
