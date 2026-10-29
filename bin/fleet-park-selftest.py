@@ -455,6 +455,25 @@ class client:
         self.assertEqual(self.opt('@cc_session_id'), self.sid)
         self.assertEqual(self.opt('@fleet_id'), self.fid)
 
+    def test_idle_page_wakes_off_the_gate_dir_not_the_slow_poll(self):
+        # The page no longer forks a tmux client every .25 s per parked window: it
+        # stats the fid directory and asks tmux only when it moved. With the safety
+        # poll pushed to a minute, a gate wake past the page's start window must
+        # still be taken at once — the directory, not the slow poll, carried it.
+        self.env['FLEET_PARK_WAKE_POLL_SECS'] = '60'
+        self.fake()
+        with patch.dict(os.environ, self.env):
+            self.assertTrue(gate.park(self.fid)['ok'])
+        self.wait(lambda: self.opt('@park_held'))
+        time.sleep(3.5)   # past the page's fast start window
+        started = time.monotonic()
+        with patch.dict(os.environ, self.env):
+            result = gate.wake(self.fid, why='消息')
+        self.assertTrue(result.get('ok'), result)
+        self.wait(lambda: self.opt('@park_relay'))
+        self.assertLess(time.monotonic() - started, 10, 'the wake waited for the slow poll')
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+
     def test_late_wake_receipt_is_not_a_second_turn(self):
         # A wrapper has taken the seed, but its native ready report arrives
         # after the sender's wait. The queue retries the SAME delivery id.

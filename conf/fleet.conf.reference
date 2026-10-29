@@ -339,6 +339,11 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # 已停放 / 接回中. 1 = also the old 「已停放 · 直接打字…」 row at its bottom (EQBE).
 # @label=Parked screen hint row @group=spawn @tier=internal @scope=fleet @edit=bool
 #FLEET_PARK_HINT=0
+# A parked page checks for a wake (@park_wake) off its fid directory's mtime —
+# no fork; it asks tmux every .25 s only for a few seconds after that directory
+# moves, and otherwise once every this many seconds as the safety net.
+# @label=Parked page slow wake check @group=janitor @tier=internal @scope=fleet @edit=int @unit=seconds
+#FLEET_PARK_WAKE_POLL_SECS=5
 # A sentence the web said waits this long for its session to be free, then goes
 # back to the page's box with its reason; a parked session that does not come
 # back within FLEET_GATE_WAKE_SECS returns its sentence (「这一句没送到 · 重试」).
