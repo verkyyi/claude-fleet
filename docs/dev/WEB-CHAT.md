@@ -3,6 +3,49 @@
 一个人一条对话，在浏览器里（手机 Safari 也行）跟 Claude 说话。后端是 **Claude Agent SDK**，
 跑在这个人自己的登录上，走 fleet 额度池的凭据代理 —— 和 fleet 会话里的 claude 同一条路。
 
+## 活页工作台
+
+`/app/studio` 是按需开启的桌面三栏工作台：左侧原生会话，中间活页预览，右侧发布与数据。
+手机用「对话 / 画布 / 发布与数据」切换。入口也在「我的 · 账号」。
+
+上线先将 hub 设置 `fleet.studio.principals` 配为发起人本人不可变 principal（逗号分隔，默认空，
+即关闭）；不按显示名或管理员角色放行。其它人菜单隐藏、页面及 `/v1/chat/studio*` 返回 404。
+以他人视角、只读验收票据均不能进入。发布前后的写入验收需要本人正常登录，不能提升只读票据权限。
+
+家登录必须安装本版本，具备完整的个人 `space` MCP；`fleet-agent-def.py ship` 会将
+`conf/agent-defaults/claude/agents/livepage-studio.md` 发到 `~/.claude/agents/`，无仓库会话也能解析。
+初次开始默认 Claude Code，可选择 Codex；已有页面复用原会话及其 Agent。
+`CCQUOTA_FLEET_CHAT_FRAME_ORIGINS` 必须允许活页实际返回的嵌入来源。
+
+1. 点击「刷新项目」，Agent 用 `list_proposals` 读取全部页面并回传列表。点项目复用它的会话。
+2. 新页面可输入需求，或选择企业品牌样板、官网首页三语更新、模板上新、本周阅读与留资。
+3. Agent 使用完整 space 工具与 `list_examples`；内容先存 hold，再取 `preview_version(embed_origin)`。
+   `fleet.page_target` 返回当前绑定及确认记录，`fleet.show_page` 回传真实版本和预览，
+   `fleet.studio_projects` 回传真实项目列表。画布自动跟随新结果，保留最近八个版本，可切换手机/电脑宽度。
+4. 右栏「发布当前预览版本」确认后，只有指定版本可以上线；公开、更改范围及发到本人微信分别确认。
+   其它按钮也只发送会话指令；Agent 完成后读取真实结果再回传，不把「已送达」当作「已发布」。
+   二维码在浏览器本地从 Agent 回传的真实正式链接生成，不向第三方传链接。
+   预览过期需刷新；未读取的阅读与留资显示未知，并保留实际读取时间。
+5. 官网三语各有独立预览和发布确认；Agent 用 `show_page(related:true)` 登记附属语言，
+   项目列表复用同一原生会话，不能一次确认就发布其它语言。其它页面不自动合并会话。
+
+后端复用 `/v1/chat/` 的本人认证、家登录解析及签名 relay，`studio/open` 经现有 spawner
+以 `--as livepage-studio --no-repo` 打开会话；对话、回答、停止仍走原有接口和队列。
+`studio/action` 验证预览与确认，按同一 delivery id 送入队列，重试不重复发送。
+`$FLEET_CONF_DIR/webchat/studio.json` 是家登录的展示投影及绑定；文件锁 + 原子替换，随 webchat 状态迁移，
+不含 space 凭据。公开数据或权限不经过工作台服务，仍由原生 Agent 使用现有 space MCP 执行。
+
+远程 space 的原生 PreToolUse 钩子 `hooks/studio-guard.py` 与 stdio gateway 使用同一检查：
+`publish_file` / `finalize_upload` / `create_upload_link` 必须 hold；发布、可见范围、微信推送
+必须匹配本会话十分钟内、未使用的右栏确认。三语发布按精确版本分别核对。
+这是防误操作措施，不是对本登录任意代码执行的安全隔离；Agent 定义禁止其它路径绕开它。
+新 hook 只服务新工作台会话，旧会话与旧工具 handler 保留。只读统计、项目与模板读取不受影响。
+
+验证：`fleet-studio-selftest.py`、`extras/web-chat/studio.test.mjs`、Go `TestStudioFounderGate`；
+BREAK-IT `studio-unconfirmed-publish`；原生 hook 生成和托管安装测试覆盖 Claude/Codex 的注册。
+线上验收仍需在真实 URL、本人登录下走 hold → 预览 → 右栏确认 → 读取生效状态，
+并拍 1440 与 390 宽截图；隔离夹具的截图不算线上验收。
+
 ## 经官网（EPIC #3642）
 
 人从官网 `/chat` 进来；**入口只认人、找家、转发，不跑对话**。对话跑在这个人的家登录上，入口和别的机器都碰不到内容。

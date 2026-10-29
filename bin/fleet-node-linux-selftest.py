@@ -1721,7 +1721,7 @@ done
     @staticmethod
     def managed_release(destination):
         for relative in ('bin/fleet-hooks-emit.sh', 'hooks/codex-map.json', 'hooks/settings-hooks.json',
-                         'hooks/bash-guard.py', 'hooks/base-readonly-guard.py'):
+                         'hooks/bash-guard.py', 'hooks/base-readonly-guard.py', 'hooks/studio-guard.py', 'bin/fleet_studio.py', 'bin/fleet_iso.py'):
             target = Path(destination) / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(BIN.parent / relative, target)
@@ -1798,7 +1798,7 @@ done
             self.assertEqual(policy['mcp_servers'], {'docs': {'identity': {'url': 'https://docs.example/mcp'}}})
             self.assertEqual(policy['features'], {'remote_plugin': False, 'hooks': True})
             self.assertEqual(policy['hooks']['managed_dir'], str(current / 'hooks'))
-            self.assertEqual(len(policy['hooks']['PreToolUse']), 2)
+            self.assertEqual(len(policy['hooks']['PreToolUse']), 3)
             self.assertNotIn(source.name, installed.decode())
             self.assertEqual(image.install_managed_guards(current, system), 'kept')
             self.assertEqual(target.read_bytes(), installed)
@@ -1973,7 +1973,7 @@ done
                            capture_output=True, text=True, check=True).stdout
         parsed = image._TomlSubset(emitted).load()
         self.assertEqual(parsed['hooks']['managed_dir'], '/Library/Application Support/claude-fleet/current/hooks')
-        self.assertEqual(len(parsed['hooks']['PreToolUse']), 2)
+        self.assertEqual(len(parsed['hooks']['PreToolUse']), 3)
         if tomllib:
             self.assertEqual(parsed, tomllib.loads(emitted))
 

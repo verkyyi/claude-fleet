@@ -439,6 +439,10 @@ def main():
                 patch_capture = root / "patch-capture.json"
                 base_guard_source = (arguments.fleet_root / "hooks/base-readonly-guard.py").read_bytes()
                 (managed / "base-readonly-guard.py").write_bytes(base_guard_source)
+                (managed / "studio-guard.py").write_bytes((arguments.fleet_root / "hooks/studio-guard.py").read_bytes())
+                (managed.parent / "bin").mkdir(exist_ok=True)
+                (managed.parent / "bin/fleet_studio.py").write_bytes((arguments.fleet_root / "bin/fleet_studio.py").read_bytes())
+                (managed.parent / "bin/fleet_iso.py").write_bytes((arguments.fleet_root / "bin/fleet_iso.py").read_bytes())
                 (managed / "capture.py").write_text(CAPTURE_SCRIPT, encoding="utf-8")
                 check((managed / "base-readonly-guard.py").read_bytes() == base_guard_source,
                       "real Fleet base-readonly guard copied without modification")
@@ -499,10 +503,10 @@ def main():
                         managed_hook_count = 1
                         (system / "requirements.toml").write_text(base_requirements, encoding="utf-8")
                     elif phase == "fleet-deny":
-                        managed_hook_count = 3
+                        managed_hook_count = 4  # three Fleet guards + SessionStart fixture
                         (system / "requirements.toml").write_text(generated_with_fixture, encoding="utf-8")
                     elif phase == "patch-deny":
-                        managed_hook_count = 4
+                        managed_hook_count = 5  # Fleet guards + SessionStart + patch capture
                         (system / "requirements.toml").write_text(generated_with_fixture, encoding="utf-8")
                         with (system / "requirements.toml").open("a", encoding="utf-8") as config:
                             config.write('[[hooks.PreToolUse]]\nmatcher="^apply_patch$"\n[[hooks.PreToolUse.hooks]]\n'

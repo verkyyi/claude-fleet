@@ -38,8 +38,11 @@ const ChatPathPrefix = "/v1/chat/"
 // chatRoutes is the whole API: the name after ChatPathPrefix, the one method it
 // takes. Each is the conversation service's /api/<name>.
 var chatRoutes = map[string]string{
-	"conversation": http.MethodGet,
-	"turn":         http.MethodPost,
+	"studio":        http.MethodGet,
+	"studio/open":   http.MethodPost,
+	"studio/action": http.MethodPost,
+	"conversation":  http.MethodGet,
+	"turn":          http.MethodPost,
 	// the home conversation's own stop / answer; with ?worker= a session's
 	// (chat_worker.go, task PQ41)
 	"stop":   http.MethodPost,
@@ -268,6 +271,10 @@ func (s *Server) chatPerson(r *http.Request) (person string, status int, code, m
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	name := strings.TrimPrefix(r.URL.Path, ChatPathPrefix)
+	if strings.HasPrefix(name, "studio") && !s.studioAllowed(r) {
+		http.NotFound(w, r)
+		return
+	}
 	if name == chatViewRoute || name == "turn" {
 		var release func()
 		r, release = s.drainRequest(r)
@@ -551,7 +558,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			if (name == "open" || name == "turn") && resp.StatusCode == http.StatusOK {
 				s.trialNextDayLine(person, time.Now())
 			}
-			if name == "open" && resp.StatusCode == http.StatusOK {
+			if (name == "open" || name == "studio/open") && resp.StatusCode == http.StatusOK {
 				s.chatOpenWorker(resp, home.Machine, home.Login)
 			}
 			if refund == nil {

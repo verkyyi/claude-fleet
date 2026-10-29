@@ -42,7 +42,7 @@ def native_read(binary, repository):
                 assert requirements['hooks']['managedDir'] == '/etc/codex/release/current/hooks'
                 entries = client.call('hooks/list', {'cwds': [temporary]})['data']
                 hooks = [hook for entry in entries for hook in entry['hooks'] if hook.get('isManaged')]
-                assert len(hooks) == 2, 'installed guards must survive user hooks=false'
+                assert len(hooks) == 3, 'installed guards must survive user hooks=false'
                 assert all(hook['source'] == 'system' and hook['trustStatus'] == 'managed'
                            and hook['enabled'] is True for hook in hooks)
             finally:
@@ -67,7 +67,7 @@ def install_fixture(arguments, repository):
     source = system / 'release' / ('a' * 40)
     relative_files = ('bin/fleet-hooks-emit.sh', 'bin/fleet-codex-runtime.py', 'bin/fleet-node-linux.py',
                       'hooks/codex-map.json', 'hooks/settings-hooks.json',
-                      'hooks/bash-guard.py', 'hooks/base-readonly-guard.py')
+                      'hooks/bash-guard.py', 'hooks/base-readonly-guard.py', 'hooks/studio-guard.py', 'bin/fleet_studio.py', 'bin/fleet_iso.py')
     for relative in relative_files:
         target = source / relative
         target.parent.mkdir(parents=True, exist_ok=True)

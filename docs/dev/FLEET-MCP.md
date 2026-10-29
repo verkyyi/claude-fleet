@@ -6,6 +6,14 @@ the same tools; Claude shows them as `mcp__fleet__<action>`. **This file is the 
 spec** — a later member (C6 报问记合, C7 identity, C8 the hub route, C9 the
 skills) adds its tools here and in `bin/fleet-mcp.py`, nowhere else.
 
+## LivePage studio projection
+
+The core also lists `page_target`, `show_page` and `studio_projects`. They call
+`bin/fleet_studio.py` with the verified current pane identity, never a caller-supplied
+session. These tools read or update only the home login's studio projection; they
+perform no network publishing. See [the studio flow](WEB-CHAT.md#活页工作台).
+Unbound sessions get an explicit refusal; existing tools and handlers are unchanged.
+
 ## The rule
 
 A tool only **checks** its arguments, then runs the existing script **unchanged**

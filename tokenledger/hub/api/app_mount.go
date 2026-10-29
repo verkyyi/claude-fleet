@@ -100,7 +100,7 @@ func isMeTab(p string) bool {
 // link, a home-screen shortcut), each is the console's page, never a 404.
 func isSessionPage(p string) bool {
 	const one = AppPrefix + "/s/"
-	return p == AppPrefix+"/health" || p == AppPrefix+"/chat" || p == AppPrefix+"/new" || (strings.HasPrefix(p, one) && len(p) > len(one))
+	return p == AppPrefix+"/studio" || p == AppPrefix+"/health" || p == AppPrefix+"/chat" || p == AppPrefix+"/new" || (strings.HasPrefix(p, one) && len(p) > len(one))
 }
 
 // devicesPagePath is 设备 (C7): the computer's install, the phone's way in,
@@ -379,6 +379,10 @@ func (s *Server) consoleBuilt(side string) bool {
 // index.html.
 func (s *Server) appSide() http.Handler {
 	return s.withPageLang(s.viewerOnly(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSuffix(r.URL.Path, "/") == AppPrefix+"/studio" && !s.studioAllowed(r) {
+			http.NotFound(w, r)
+			return
+		}
 		s.serveConsole(w, r, "app", strings.TrimPrefix(r.URL.Path, AppPrefix))
 	})))
 }

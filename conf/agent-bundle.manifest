@@ -28,6 +28,8 @@ hooks/agent-guard.py                hooks
 hooks/artifact-guard.py             hooks
 hooks/base-readonly-guard.py        hooks
 hooks/bash-guard.py                 hooks
+hooks/studio-guard.py               hooks
+bin/fleet_studio.py                 hooks
 bin/fleet-hook-run.sh               hooks
 bin/fleet-hook-personal.sh          hooks
 

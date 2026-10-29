@@ -127,6 +127,7 @@ const PersonMenu: FC = () => {
             ))}
             <DropdownMenuItem onSelect={() => location.assign("/status")}><ShieldCheck />{tr("服务健康", "Service health")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => go(meTab("account").path)}><CircleUserRound />{tr("我的", "Me")}</DropdownMenuItem>
+            {me?.studio ? <DropdownMenuItem onSelect={() => go("/studio")}>活页工作台</DropdownMenuItem> : null}
             {isAdmin(me) ? (
               <DropdownMenuItem asChild className="text-clay focus:text-clay [&_svg]:!text-clay">
                 <a href={ADMIN_HREF} className="no-underline"><ShieldCheck />{tr("管理后台", "Admin")}</a>
@@ -160,6 +161,7 @@ const Side: FC = () => (
     </SidebarHeader>
     <SidebarContent>
       <div className="flex gap-2 px-2 group-data-[collapsible=icon]:hidden"><NewButton label className="flex-1" /><NewScheduleButton /></div>
+      <StudioLink />
       <ScheduleGroup />
       <SidebarGroup className="px-1.5">
         <SidebarGroupContent><SessionRows variant="side" chatHome /></SidebarGroupContent>
@@ -172,6 +174,8 @@ const Side: FC = () => (
     <SidebarRail />
   </Sidebar>
 );
+
+const StudioLink: FC = () => useShell().me?.studio ? <Link to="/studio" className="mx-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">活页工作台</Link> : null;
 
 const QuotaPillOf: FC = () => <QuotaPill quota={useShell().quota} />;
 
@@ -277,6 +281,7 @@ const ScheduleNotice: FC = () => {
 // between the bars; a page that scrolls scrolls inside <main>.
 export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: () => void }> = ({ children, quotaKey, bumpQuota }) => {
   const { me } = useMe();
+  const studio = useLocation().pathname === "/studio";
   const { quota, trial, setTrial } = useUsageHead(quotaKey);
   const [sideOpen, setSideOpen] = useSideOpen();
   const [title, setTitle] = useState("");
@@ -289,13 +294,13 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
       <ReplyToast />
       <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none"
         style={{ height: "var(--app-h, 100dvh)", "--sidebar-width": "20rem" } as CSSProperties}>
-        <Side />
+        {studio ? null : <Side />}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <ViewAsBar />
-          <TopBar title={title} />
+          {studio ? null : <TopBar title={title} />}
           <NetBarOf />
-          <LegacyMigrationNotice />
-          <ScheduleNotice />
+          {studio ? null : <LegacyMigrationNotice />}
+          {studio ? null : <ScheduleNotice />}
           <TrialBar trial={trial} onAsked={setTrial} />
           <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
         </div>
