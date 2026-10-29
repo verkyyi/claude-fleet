@@ -1507,8 +1507,9 @@ cmd_meta() {
   done
   local row; row=$(find_row "$repo" "$key")
   [ -z "$row" ] && return 0
-  # col 4 (task J7BN): the model the session was fixed to, '-' for none
-  awk -F'\t' '{print $2 "\t" $3 "\t" $11 "\t" ($16 == "" ? "-" : $16)}' <<<"$row"
+  # col 4 (task J7BN): the model the session was fixed to — only when the row has
+  # one, so every other row's meta is byte for byte the 3 columns it always was
+  awk -F'\t' '{print $2 "\t" $3 "\t" $11 ($16 == "" ? "" : "\t" $16)}' <<<"$row"
 }
 
 # row — the raw ledger row for a key (newest wins), for the hub upload that hands

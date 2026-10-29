@@ -723,7 +723,7 @@ st_eq "model: beside a task — col 15 the record, 16 the model" "T41|deepseek" 
 : > "$FLEET_HISTORY_LEDGER"
 run record-closed --key scratch-12 --worktree "$TWT" --title 'plain' --model fable >/dev/null
 st_eq "model: not a DeepSeek profile ⇒ the 11-column row" "10" "$(tr -cd '\t' < "$FLEET_HISTORY_LEDGER" | wc -c | tr -d ' ')"
-st_eq "model: meta col 4 is '-' with none" "-" "$(run meta scratch-12 | cut -f4)"
+st_eq "model: meta is its 3 columns with none" "2" "$(run meta scratch-12 | tr -cd '\t' | wc -c | tr -d ' ')"
 
 # ============================================================================
 # R. rows renders in ONE perl pass, byte for byte the bash loop's output
