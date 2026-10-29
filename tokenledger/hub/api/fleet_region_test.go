@@ -148,7 +148,7 @@ func TestProviderForAndStartModel(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"idempotency_key": "m2", "issue": float64(3), "repo": writeRepo, "model": "bogus"},
 		{"idempotency_key": "m3", "issue": float64(3), "repo": writeRepo, "model": "deepseek", "agent": "codex"},
-		{"idempotency_key": "m4", "issue": float64(3), "repo": writeRepo, "model": 7},
+		{"idempotency_key": "k4", "issue": float64(3), "repo": writeRepo, "model": 7},
 	} {
 		if _, _, err := parseWrite("worker_start", args); err == nil || errorObject(err)["code"] != "INVALID_ARGUMENT" {
 			t.Fatalf("parseWrite(%v) = %v; want INVALID_ARGUMENT", args, err)
@@ -305,7 +305,7 @@ func TestClusterPodProviders(t *testing.T) {
 	if p := s.podProvidersFor(settings, pod); !only(p, credvault.DeepSeek) {
 		t.Fatalf("per-cluster: %v", p)
 	}
-	if p := s.podProvidersFor(settings, "fleet-linux-0"); !only(p, credvault.Codex, credvault.Claude) {
+	if p := s.podProvidersFor(settings, "plain-worker-0"); !only(p, credvault.Codex, credvault.Claude) {
 		t.Fatalf("a pod of no known cluster keeps the fleet-wide value: %v", p)
 	}
 	if p := podProvidersIn(settings, pod, "ack-sg"); !only(p, credvault.Codex, credvault.Claude) {
