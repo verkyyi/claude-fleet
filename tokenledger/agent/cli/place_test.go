@@ -197,6 +197,31 @@ func TestPlaceCLIScratch(t *testing.T) {
 	}
 }
 
+// --model (task J7BN): the model chosen at creation rides the ask, case-folded;
+// none sends no key; anything but deepseek / deepseek-pro is usage (2).
+func TestPlaceCLIModel(t *testing.T) {
+	var got map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = nil
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"local":false,"placement":{"machine":"u-sz","reason":"cn"},"operation":{"operation_id":"op_1","status":"succeeded"},"outcome":{"state":"done","exit":0,"window":"@2","node":"u-sz"}}`))
+	}))
+	defer ts.Close()
+	fleet := "11111111-1111-4111-8111-111111111111"
+	if code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--model", "DeepSeek-Pro", "o/r", "scratch", fleet}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 || got["model"] != "deepseek-pro" {
+		t.Fatalf("--model: exit %d body %v", code, got)
+	}
+	if code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "o/r", "scratch", fleet}, &bytes.Buffer{}, &bytes.Buffer{}); code != 0 {
+		t.Fatalf("no model: exit %d", code)
+	} else if _, has := got["model"]; has {
+		t.Fatalf("no --model sent a model: %v", got)
+	}
+	if code, _ := place([]string{"--hub", ts.URL, "--token", "tok", "--model", "gpt-5", "o/r", "scratch", fleet}, &bytes.Buffer{}, &bytes.Buffer{}); code != 2 {
+		t.Fatalf("--model gpt-5: exit %d, want 2", code)
+	}
+}
+
 // claude-fleet#1810: the worker assertion a session's tool service hands the
 // spawn travels as the X-Fleet-Worker header, from the environment only —
 // and with none set, no header at all (the node's own call, as before).

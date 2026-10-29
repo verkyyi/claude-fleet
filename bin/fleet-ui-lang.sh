@@ -513,6 +513,10 @@ fleet_ui_t() {
     en:view_grid_norepo) printf 'No repo' ;;
     zh:view_grid_agent) printf 'Agent' ;;
     en:view_grid_agent) printf 'Agent' ;;
+    zh:view_grid_model) printf '模型' ;;
+    en:view_grid_model) printf 'Model' ;;
+    zh:view_grid_model_default) printf '默认' ;;
+    en:view_grid_model_default) printf 'Default' ;;
     zh:view_grid_only_fmt) printf '只开放了 %s，就用它' "${1:-}" ;;
     en:view_grid_only_fmt) printf 'only %s is open to you — using it' "${1:-}" ;;
     zh:view_new_agent_fmt) printf '%s — 这次用 %s 开' "${1:-}" "${2:-}" ;;

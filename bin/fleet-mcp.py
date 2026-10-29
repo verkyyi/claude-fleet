@@ -884,7 +884,8 @@ def tool_spawn(args):
     repo = repo_or_caller(args)   # no repo: the caller window's own (issue #4761)
     reap = ["--reap", args["reap"]] if args.get("reap") else []   # issue #1902
     as_ = ["--as", args["agent"]] if args.get("agent") else []    # issue #3122
-    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_ + (["--agent", args["coding_agent"]] if args.get("coding_agent") else []), SPAWN_TIMEOUT_S,
+    model = ["--model", args["model"]] if args.get("model") else []   # task J7BN
+    return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_ + (["--agent", args["coding_agent"]] if args.get("coding_agent") else []) + model, SPAWN_TIMEOUT_S,
                   env=hub_env(ASSERT_TTL_S))
 
 
@@ -942,6 +943,8 @@ def tool_task(args):
         argv += ["--as", args["agent"]]
     if args.get("coding_agent"):
         argv += ["--agent", args["coding_agent"]]
+    if args.get("model"):
+        argv += ["--model", args["model"]]   # task J7BN: a DeepSeek session, placed by the hub
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
             env=hub_env(ASSERT_TTL_S))
     out = {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
@@ -1370,6 +1373,12 @@ def preview_stop(args):
 # the script canonicalizes or refuses (exit 2), this is only its shape.
 REAP_POLICY = {"type": "string", "maxLength": 48,
                "pattern": r"^(?:(?:merged|done|idle)(?::[1-9][0-9]{0,6}[smhd]?)?|loop-end|keep|at:[0-9][0-9TZ:+-]{0,31})$"}
+# The model a start may be opened on (task J7BN): optional, so an old caller's
+# arguments stay valid; the spawners refuse anything else (exit 2).
+START_MODEL = {"type": "string", "enum": ["deepseek", "deepseek-pro"],
+               "description": "Open it as a DeepSeek session (Claude Code on DeepSeek), placed by the hub "
+                              "in its region; only for people the hub lets start one. Absent = the "
+                              "agent's own model."}
 ISSUE = {"type": "integer", "minimum": 1, "description": 'The GitHub issue number (a positive integer, no "#").'}
 PR_NUM = {"type": "integer", "minimum": 1,
           "description": "The PR number. In a repo the fleet lands itself (FLEET_LAND=fleet, issue #3602): the "
@@ -1466,6 +1475,7 @@ TOOLS = {
         "inputSchema": {"type": "object", "properties": {
             "issue": ISSUE, "repo": REPO,
             "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; overrides template, labels and fleet defaults."},
+            "model": START_MODEL,
             "reap": dict(REAP_POLICY, description="When the fleet may close it on its own (default merged: "
                                                   "after its PR merged) — see set_reap."),
             "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
@@ -1520,6 +1530,7 @@ TOOLS = {
             "spawn": {"type": "boolean", "description": "Start its session now."},
             "reap": dict(REAP_POLICY, description="When the fleet may close a no-repo session on its own."),
             "coding_agent": {"type": "string", "enum": ["claude", "codex"], "description": "CLI provider; independent of the agent definition."},
+            "model": START_MODEL,
             "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
                       "description": "The agent file a no-repo session starts as (issue #3122)."},
 },

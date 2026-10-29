@@ -5543,7 +5543,7 @@ def grid_read(vid, repo=""):
     ({repo: the agent it last opened with, else the default}), missing ({agent:
     why} this machine lacks, or the admin has not opened — issue #3826), blocked
     (those last ones)}."""
-    g = {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": []}
+    g = {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": [], "models": []}
     argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "grid",
             "--view", "%s@view-%s" % (view_fleet(vid), vid)] + (["--repo", repo] if repo else [])
     try:
@@ -5576,8 +5576,35 @@ def bolt_new(g=None):
     fleet's default — and the cell Tab is on ('' · repo · agent).
     No `g` yet (the popup reads it off its thread): not `ready` — the repo cell
     says …, and a ↵ waits for the read rather than guess 不绑仓库."""
-    return {"g": g or {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": []},
-            "repo": None, "agent": None, "focus": "", "ready": g is not None}
+    return {"g": g or {"repos": [], "last": "", "agent": "claude", "agents": {}, "missing": {}, "blocked": [],
+                       "models": []},
+            "repo": None, "agent": None, "model": None, "focus": "", "ready": g is not None}
+
+
+# the start models the box may offer (task J7BN), as a person reads them
+MODEL_NAMES = {"deepseek": "DeepSeek", "deepseek-pro": "DeepSeek Pro"}
+
+
+def bolt_models(st):
+    """The models the hub lets this person choose (grid's `models`, task J7BN):
+    [] = none, and the box has no 模型 cell — a start exactly as before."""
+    return [m for m in (st.get("g") or {}).get("models") or [] if m in MODEL_NAMES]
+
+
+def bolt_model(st):
+    """The box's model: the person's pick while the hub still offers it, else ""
+    (the agent's own — go_new's road, untouched)."""
+    m = st.get("model") or ""
+    return m if m and m in bolt_models(st) else ""
+
+
+def bolt_order(st):
+    """The box's items in drawn order (its `box` ids): 0 仓库 · 1 Agent · [3 模型,
+    only when the hub offers models] · 2 开."""
+    return [0, 1] + ([3] if bolt_models(st) else []) + [2]
+
+
+BOLT_FOCUS = {0: "repo", 1: "agent", 3: "model"}
 
 
 def bolt_repo(st, query=""):
@@ -5617,17 +5644,30 @@ def bolt_step(st, query, d):
         i = opts.index(cur) if cur in opts else 0
         st["repo"] = opts[(i + d) % len(opts)]
     elif st["focus"] == "agent":
+        if bolt_model(st):
+            return      # a DeepSeek model is a Claude Code session (task J7BN)
         use = bolt_usable(st)
         cur = bolt_agent(st)
         i = use.index(cur) if cur in use else 0
         st["agent"] = use[(i + d) % len(use)]
+    elif st["focus"] == "model":
+        opts = [""] + bolt_models(st)
+        cur = bolt_model(st)
+        i = opts.index(cur) if cur in opts else 0
+        st["model"] = opts[(i + d) % len(opts)]
 
 
 def bolt_cells(st, query):
     """([(text, focused)], note): 仓库 ‹…› · Agent ‹…›, and why an agent is grey."""
     repo = bolt_repo(st, query) if st.get("ready", True) or st["repo"] is not None else "…"
     cells = [("%s ‹%s›" % (say("view_grid_repo"), repo or say("view_grid_norepo")), st["focus"] == "repo"),
-             ("%s ‹%s›" % (say("view_grid_agent"), bolt_agent(st).capitalize()), st["focus"] == "agent")]
+             ("%s ‹%s›" % (say("view_grid_agent"), ("claude" if bolt_model(st) else bolt_agent(st)).capitalize()),
+              st["focus"] == "agent")]
+    if bolt_models(st):
+        # 模型 (task J7BN): only when the hub offers this person a model
+        m = bolt_model(st)
+        cells.append(("%s ‹%s›" % (say("view_grid_model"), MODEL_NAMES.get(m) or say("view_grid_model_default")),
+                      st["focus"] == "model"))
     miss = st["g"].get("missing") or {}
     note = " · ".join(str(why) for why in miss.values())
     use = [a for a in AGENTS if a not in miss]
@@ -5697,9 +5737,18 @@ def panel_hit(q, text, extra=""):
 def bolt_argv(qo, vid, client, st, query=""):
     """The 「新会话」 box's 开 (T652, EPIC T651 C1): ONE road, `do new` (go_new) with
     the repo and agent — nothing typed, no draft, no first turn. Under hub
-    authority go_new makes a repo's start a record titled 「新会话」 first."""
+    authority go_new makes a repo's start a record titled 「新会话」 first.
+    A model picked in the box (task J7BN) is not go_new's: `fleet-quick-dispatch.py
+    send --blank --model` — the record first, placed by the hub in its region, the
+    看台 onto the worker it names; no model = go_new, byte for byte."""
     repo, agent = bolt_repo(st), bolt_agent(st)
     cl = ["--client", client] if client else []
+    model = bolt_model(st)
+    if model:
+        argv = [sys.executable, str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"), "send", "--blank",
+                "--model", model, "--view", "%s@view-%s" % (view_fleet(vid), vid), "--toast"] + \
+            (["--repo", repo] if repo else []) + cl
+        return argv, "", " · ".join((repo or say("view_grid_norepo"), MODEL_NAMES[model]))
     argv = [sys.executable, qo.__file__, "do", "new", "--view", vid] + cl + (["--repo", repo] if repo else []) \
         + ["--agent", agent, "--t0", "%.3f" % time.time()]
     return argv, "", " · ".join((repo or say("view_grid_norepo"), agent.capitalize()))
@@ -5712,7 +5761,7 @@ def bolt_prestart(vid, st):
     FLEET_PRESTART_HOLD) and given back untaken. One a box: a repo changed with
     ←→ starts none (the dispatch's own prestart, beside its record, then)."""
     repo = bolt_repo(st)
-    if not repo or st.get("prestart") or (conf_word("FLEET_PRESTART_ON") or "1").strip() == "0":
+    if not repo or st.get("prestart") or bolt_model(st) or (conf_word("FLEET_PRESTART_ON") or "1").strip() == "0":
         return
     fleet = view_fleet(vid)
     if not fleet:
@@ -5736,7 +5785,7 @@ def bolt_prestart(vid, st):
 def bolt_prestart_env(st):
     """FLEET_PRESTART for the box's ↵ — the prestart made for this very repo and agent."""
     got = st.get("prestart")
-    if got and got[0] == bolt_repo(st) and got[1] == bolt_agent(st) and os.path.isdir(got[2]):
+    if got and got[0] == bolt_repo(st) and got[1] == bolt_agent(st) and not bolt_model(st) and os.path.isdir(got[2]):
         return {"FLEET_PRESTART": got[2]}
     return {}
 
@@ -6405,7 +6454,9 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                     bolt["repo"] = bolt_repo(bolt)
                 # the agent is not pinned: untouched, it is the box's repo's own (T670)
                 cells, note = bolt_cells(bolt, "")
-                for k, label in enumerate([cells[0][0], cells[1][0], say("view_new_open")]):
+                if box not in bolt_order(bolt):
+                    box = 2     # a 模型 cell the hub no longer offers: back on 开
+                for k, label in zip(bolt_order(bolt), [c[0] for c in cells] + [say("view_new_open")]):
                     controls[len(lines)] = k
                     lines.append((" " * TEXT_X + label, ("lit",) if box == k else ()))
                 selected = next(i for i, k in controls.items() if k == box)
@@ -6513,9 +6564,9 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                     # a click lights a value (again: its next one); a click on 开 opens
                     if i not in controls:
                         continue
-                    if controls[i] in (0, 1):
+                    if controls[i] in BOLT_FOCUS:
                         if box == controls[i]:
-                            bolt["focus"] = "repo" if box == 0 else "agent"
+                            bolt["focus"] = BOLT_FOCUS[box]
                             bolt_step(bolt, "", 1)
                         box = controls[i]
                         continue
@@ -6596,11 +6647,13 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 # the 「新会话」 box (T652): Tab / ↑↓ walk the three, ←→ change the
                 # lit value, ↵ on a value goes to 开, ↵ on 开 opens
                 if ch in ("\t", curses.KEY_BTAB, curses.KEY_UP, curses.KEY_DOWN, "\x10", "\x0e"):
-                    box = (box + (1 if ch in ("\t", curses.KEY_DOWN, "\x0e") else -1)) % 3
-                elif box in (0, 1) and ch in (curses.KEY_LEFT, curses.KEY_RIGHT, " "):
-                    bolt["focus"] = "repo" if box == 0 else "agent"
+                    order = bolt_order(bolt)
+                    at_box = order.index(box) if box in order else len(order) - 1
+                    box = order[(at_box + (1 if ch in ("\t", curses.KEY_DOWN, "\x0e") else -1)) % len(order)]
+                elif box in BOLT_FOCUS and ch in (curses.KEY_LEFT, curses.KEY_RIGHT, " "):
+                    bolt["focus"] = BOLT_FOCUS[box]
                     bolt_step(bolt, "", -1 if ch == curses.KEY_LEFT else 1)
-                elif box in (0, 1) and ch in ("\n", "\r", curses.KEY_ENTER):
+                elif box in BOLT_FOCUS and ch in ("\n", "\r", curses.KEY_ENTER):
                     box = 2
                 elif box == 2 and ch in ("\n", "\r", curses.KEY_ENTER, " "):
                     if not bolt["ready"]:
@@ -6611,11 +6664,12 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                         msg = say("view_draft_repo_gone")
                         continue
                     missing = bolt["g"].get("missing") or {}
-                    if bolt_agent(bolt) in missing:
+                    if not bolt_model(bolt) and bolt_agent(bolt) in missing:
                         msg = str(missing[bolt_agent(bolt)]) or say("view_draft_agent_gone")
                         continue
                     argv, title, where = bolt_argv(qo, vid, client, bolt)
-                    if bolt_stub(vid, client, argv, where, bolt_prestart_env(bolt), qo):
+                    # a model start (task J7BN) is not `do new`: no stub, its job says how it ended
+                    if not bolt_model(bolt) and bolt_stub(vid, client, argv, where, bolt_prestart_env(bolt), qo):
                         # the new session's window is on the screen (T992): the
                         # road goes on behind it, the popup closes now
                         return 0

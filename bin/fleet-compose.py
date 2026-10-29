@@ -3,7 +3,7 @@
 EPIC #1949 C4; one box and three options since issue #2231, EPIC #2230 C1).
 
     fleet-compose.py --send <payload.json> [--repo R | --no-repo] [--node N]
-                     [--agent claude|codex] [--reap P]
+                     [--agent claude|codex] [--reap P] [--model deepseek|deepseek-pro]
                                           the ONE way out: the payload a ↵ wrote,
                                           to the machine that opens it —
                                           fleet-client-place.sh <repo> new (an
@@ -13,7 +13,10 @@ EPIC #1949 C4; one box and three options since issue #2231, EPIC #2230 C1).
                                           agent ride along (--node / --agent, issue
                                           #2232; null = auto / the fleet's default).
                                           Prints the place's one line and returns
-                                          its code.
+                                          its code. --model (or the payload's
+                                          `model`, task J7BN): a DeepSeek session —
+                                          fleet-client-place.sh --model, the hub
+                                          places it in its region, never here.
     fleet-compose.py payload <text-file> [--repo R | --no-repo] [--node N] [--agent A]
                                           the payload a ↵ on that text would write
                                           ({title, body, attachments, repo, node,
@@ -274,7 +277,10 @@ def hub_repos():
         return None
 
 
-def send(path, repo="", node="", reap="", mode="", agent="", *, stdout=None, stderr=None):
+MODELS = ("deepseek", "deepseek-pro")   # the start models (task J7BN), the hub's checkStartModel
+
+
+def send(path, repo="", node="", reap="", mode="", agent="", model="", *, stdout=None, stderr=None):
     """The way out (`--send`): the payload to fleet-client-place.sh. Prints its
     line, returns its code. 2 = nothing to send / no repo to send it to. `mode`
     none (--no-repo) beats the payload's repo; a named --repo beats both. The
@@ -293,6 +299,13 @@ def send(path, repo="", node="", reap="", mode="", agent="", *, stdout=None, std
     agent = agent or data.get("agent") or ""
     if agent not in ("claude", "codex", ""):
         print("fleet-compose: agent is claude or codex, not %s" % agent, file=errors)
+        return 2
+    model = (model or data.get("model") or "").lower()
+    if model and model not in MODELS:
+        print("fleet-compose: model is deepseek or deepseek-pro, not %s" % model, file=errors)
+        return 2
+    if model and agent == "codex":
+        print("fleet-compose: model %s is a Claude Code session, not codex" % model, file=errors)
         return 2
     if not title:
         print("fleet-compose: the payload has no title", file=errors)
@@ -349,6 +362,8 @@ def send(path, repo="", node="", reap="", mode="", agent="", *, stdout=None, std
         args += ["--agent", agent]
     if reap:
         args += ["--reap", reap]
+    if model:
+        args += ["--model", model]   # task J7BN: the hub places it in its region
     if draft is None and data.get("via") == "dispatch" and (norepo or data.get("issue", True)):
         # ⌘P's words (issue #3325): a person's task — the hub writes its record
         # T<n> first; a repo's is still a new issue, one with no repo the record
@@ -423,7 +438,7 @@ def main(argv):
     if argv[:1] != ["--send"]:
         TEXT = load_text()
     if argv[:1] in (["--send"], ["payload"]) and len(argv) >= 2:
-        opts = {"--repo": "", "--node": "", "--agent": "", "--reap": ""}
+        opts = {"--repo": "", "--node": "", "--agent": "", "--reap": "", "--model": ""}
         mode, chosen = "", 0
         rest = argv[2:]
         while rest:
@@ -447,7 +462,8 @@ def main(argv):
                            node=None if opts["--node"] in ("", "auto") else opts["--node"], agent=opts["--agent"])
             print(json.dumps(data, ensure_ascii=False, sort_keys=True))
             return 0
-        return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode, opts["--agent"])
+        return send(argv[1], opts["--repo"], opts["--node"], opts["--reap"], mode, opts["--agent"],
+                    **({"model": opts["--model"]} if opts["--model"] else {}))
     print(__doc__.split("\n\n")[1], file=sys.stderr)
     return 2
 

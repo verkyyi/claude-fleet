@@ -131,7 +131,7 @@ for _a in "$@"; do
     # --model <m> (task J7BN P1): the model chosen at creation — a DeepSeek
     # profile only (deepseek | deepseek-pro): Claude Code on DeepSeek through the
     # credential proxy, so the session is Claude even on a codex fleet, fixed for
-    # its life (@cc_model_fixed 1), and opened on this machine. Anything else is
+    # its life (@cc_model_fixed 1), placed by the hub with it. Anything else is
     # refused (exit 2).
     --model) _want=model ;;
     --model=*) MODEL_ARG="${_a#--model=}" ;;
@@ -180,7 +180,6 @@ if [ -n "$MODEL_ARG" ]; then
     *) printf 'dash-issue-session: --model must be deepseek or deepseek-pro (got %s)\n' "$MODEL_ARG" >&2; exit 2 ;;
   esac
   AGENT=claude                              # a DeepSeek profile is Claude Code, whatever the fleet's agent
-  [ -z "$NODE_ARG" ] && NODE_ARG=local      # the model does not ride a placement
 fi
 EXPLICIT_AGENT=$AGENT
 case "$ACCOUNT_ARG" in
@@ -392,9 +391,14 @@ if [ -n "$AS_ARG" ]; then
   if fleet_agent_file_travels "$AS_ARG"; then PLACE_AS=$AS_ARG
   elif [ "$NODE" = auto ]; then PLACING=0; fi
 fi
-if [ -n "$MODEL_ARG" ] && [ "$PLACING" = 1 ]; then
-  [ "$NODE" = auto ] || { refuse "#$num: --model $MODEL_ARG opens on this machine only — not opening it on $NODE"; exit "$RC_INFRA"; }
-  PLACING=0
+# A model chosen at creation (--model, task J7BN) rides the placement: the hub
+# sends a DeepSeek session to its region's machine (FLEET_PLACE_MODEL → ccquota
+# place --model). No --node names a machine: the hub picks (auto), never the
+# personal-machine default of «here».
+if [ -n "$MODEL_ARG" ] && [ -z "$NODE_ARG" ] && [ "$TAIL_ONLY" != 1 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] \
+   && [ "$NODE" != auto ] && fleet_node_is_self "$NODE" \
+   && { [ -z "$AS_ARG" ] || [ -n "$PLACE_AS" ]; }; then
+  NODE=auto; PLACING=1
 fi
 # @placed (issue T672): `hub` when the hub chose this machine, `fallback-local`
 # when the hub could not be asked and it opened here anyway; the tail carries it.
@@ -532,7 +536,7 @@ if [ "$PLACING" = 1 ]; then
     _wait=''; [ "$ASYNC_FLAG" = 1 ] && _wait=0
     python3 "$BIN/fleet_dispatch.py" --accepted "$DISPATCH" --task "$TASK_REF" --placement-code 0 >/dev/null || exit 2
     _dispatch_result=$(mktemp "${TMPDIR:-/tmp}/fleet-dispatch.XXXXXX") || exit 1
-    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" FLEET_PLACE_AS="$PLACE_AS" \
+    place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_MODEL="$MODEL_ARG" \
       fleet_hub_place "$SESS" "$REPO" "$num" "$NODE" "" "$AGENT" "$_wait" "$ACCOUNT" '' "$REAP"); place_rc=$?
     if [ -s "$_dispatch_result" ]; then
       DISPATCH=$(python3 "$BIN/fleet_dispatch.py" --agent "$AGENT" --accepted "$(cat "$_dispatch_result")") || { rm -f "$_dispatch_result"; exit 2; }
@@ -589,6 +593,11 @@ if [ "$PLACING" = 1 ]; then
       *)
         if [ "$NODE" != auto ]; then
           refuse "#$num 不能开在 $NODE: ${_why:-${_pv:-hub unreachable}}"
+          [ "$place_rc" = 4 ] && exit "$RC_CAP"; exit "$RC_INFRA"
+        fi
+        # a model chosen at creation (task J7BN) is the hub's to place, never here
+        if [ -n "$MODEL_ARG" ]; then
+          refuse "#$num --model $MODEL_ARG 只由入口安排到它的区域，入口没有安排: ${_why:-${_pv:-hub unreachable}}"
           [ "$place_rc" = 4 ] && exit "$RC_CAP"; exit "$RC_INFRA"
         fi
         # Every machine at its session cap (issue #1587): the hub says all-full.

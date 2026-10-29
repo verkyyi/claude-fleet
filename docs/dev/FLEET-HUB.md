@@ -1856,7 +1856,17 @@ egress probe says «unsupported region» still takes deepseek (like Codex).
 case-insensitive) rides the client's place (`clientPlaceRequest.model`),
 `/v1/node/place` and `worker_start`; anything else is 400, a deepseek model with
 `agent: codex` is 400. Its provider is `deepseek` (`providerFor`) and its agent
-`claude`; the node receives it as `params.model`.
+`claude`; the node receives it as `params.model`. A node's own spawner asks for
+it with `ccquota place --model` (`fleet_hub_place`'s `FLEET_PLACE_MODEL`): a
+`--model` spawn with no `--node` is always the hub's to place, and a hub that
+cannot be asked opens nothing here.
+
+**Who may choose one.** `GET /v1/node/models` (node token: the login's person,
+as a placement judges it) and the client place's `action: "models"` (the
+client's person) answer `{"models": [...]}` — `["deepseek", "deepseek-pro"]`
+while a `cn` cluster is listed and the trial gate lets the person through, else
+`[]` (`regionModels`). The 「新会话」 box shows its 模型 cell only then
+(docs/dev/CLIENT.md).
 
 **Trial gate.** A deepseek start while a `cn` cluster is listed, by a principal
 not on `fleet.region_cn.people`, is refused 403 (`FORBIDDEN`) on every road

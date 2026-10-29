@@ -9,6 +9,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import types
 sys.path.insert(0, sys.argv[1])
 from fleet_dispatch import resolve, placement_check
 from fleet_hub_common import validate_write, Fault
@@ -89,7 +90,18 @@ m.hub_env=lambda ttl:{}
 m.script=lambda argv,*args,**kw:seen.append(argv)
 m.tool_spawn(dict(issue=7,agent="reviewer",coding_agent="codex"))
 assert seen[0][-4:]==["--as","reviewer","--agent","codex"],seen
+# task J7BN: an optional model rides both tools; none adds nothing
+m.tool_spawn(dict(issue=7,model="deepseek"))
+assert seen[1][-2:]==["--model","deepseek"],seen
+m.run=lambda argv,**kw:(seen.append(argv),types.SimpleNamespace(returncode=1,stdout="",stderr=""))[1]
+m.tool_task(dict(title="t",spawn=True,model="deepseek-pro"))
+assert seen[2][-2:]==["--model","deepseek-pro"],seen
+m.tool_task(dict(title="t"))
+assert "--model" not in seen[3],seen
+for tool in ("spawn","task"):
+    prop=m.TOOLS[tool][1]["inputSchema"]["properties"]["model"]
+    assert prop["enum"]==["deepseek","deepseek-pro"] and "model" not in m.TOOLS[tool][1]["inputSchema"].get("required",[]),prop
 print("PASS provider acceptance: title-independent choice, frozen defaults, invalid/conflicting input rejected")
 print("PASS controller: task T17 / generation 3 / attempt task:T17:g3 / request fixture-1 unchanged")
-print("PASS MCP: agent=reviewer -> --as reviewer; coding_agent=codex -> --agent codex")
+print("PASS MCP: agent=reviewer -> --as reviewer; coding_agent=codex -> --agent codex; model -> --model (optional)")
 PY

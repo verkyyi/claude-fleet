@@ -114,6 +114,18 @@ printf '{"title":"看日志","body":"看日志","repo":"acme/web"}\n' > "$WORK/e
 python3 "$QB/fleet-compose.py" --send "$WORK/e3.json" >/dev/null 2>&1 || st_fail "E: a writing-area --send exited non-zero"
 case "$(cat "$Q_ARGS")" in *--task*) st_fail "E: the writing area (not ⌘P) asked for a task" "$(cat "$Q_ARGS")" ;; esac
 CHECKS=$((CHECKS + 1))
+# a DeepSeek model (task J7BN) rides the place road as --model; none adds nothing
+: > "$Q_ARGS"
+printf '{"title":"看看风扇","body":"看看风扇","repo":null,"via":"dispatch","model":"deepseek"}\n' > "$WORK/e4.json"
+python3 "$QB/fleet-compose.py" --send "$WORK/e4.json" >/dev/null 2>&1 || st_fail "E: a model --send exited non-zero"
+st_has 'E: a model payload rides as --model' "$(cat "$Q_ARGS")" ' --model deepseek --task --via ⌘P'
+: > "$Q_ARGS"
+python3 "$QB/fleet-compose.py" --send "$WORK/e2.json" --model DeepSeek-Pro >/dev/null 2>&1 || st_fail "E: --send --model exited non-zero"
+st_has 'E: --model on the command line too' "$(cat "$Q_ARGS")" ' --model deepseek-pro '
+CHECKS=$((CHECKS + 1)); python3 "$QB/fleet-compose.py" --send "$WORK/e2.json" --model gpt-5 >/dev/null 2>&1 \
+  && st_fail "E: --model gpt-5 was sent"
+CHECKS=$((CHECKS + 1)); python3 "$QB/fleet-compose.py" --send "$WORK/e2.json" --model deepseek --agent codex >/dev/null 2>&1 \
+  && st_fail "E: --model with codex was sent"
 st_has 'E: stderr says the issue filed' "$(cat "$WORK/e.err")" 'filed: #42'
 st_eq 'E: stdout stays the place'"'"'s one line' 'REMOTE mac-b start done U/f42' "$(tr -d '\t' < "$WORK/e.out")"
 
@@ -166,6 +178,8 @@ cat > "$WORK/task.sh" <<EOF
 printf '%s\n' "\$*" > "$WORK/task-args"
 [ -n "\${H_FAIL:-}" ] && { printf 'fleet-task-record: the hub refused\n' >&2; exit 1; }
 [ -n "\${H_CODE:-}" ] && printf 'K7W0\n'   # a hub with task codes (EPIC T644 C3)
+# the hub placed it on another machine (T716, task J7BN): no window here, its worker_id
+[ -n "\${H_REMOTE:-}" ] && { printf 'T78\nREMOTE\tu-sz\tU/scratch-4\t@4\n'; exit 0; }
 printf 'T77\n@31\tclaude-fleet-scratch-9\t/tmp/wt\tfid\n'
 EOF
 chmod +x "$WORK/auth.sh" "$WORK/task.sh"
@@ -231,6 +245,27 @@ print(q.defaults("", ["acme/app"], {}, "claude", {})[0])' "$BIN/fleet-quick-disp
 FLEET_DISPATCH_SEND_CMD="$WORK/send.sh" D send --title x --repo acme/app --agent claude >/dev/null 2>&1
 st_eq 'I: a send merges: its repo, its agent, the others kept' 'acme/app claude claude' \
   "$(D grid | G last) $(D grid | G agents.acme/app) $(D grid | G agents.acme/web)"
+
+# --- J. a DeepSeek session (task J7BN): offered only when the hub says so, record first, the hub places it
+st_eq 'J: no view → no models offered' '[]' "$(D grid | G models)"
+st_eq 'J: the hub offers none → none' '[]' "$(FLEET_DISPATCH_MODELS='' D grid --view 'fleet@view-t1' | G models)"
+st_eq 'J: the hub offers both → both, in order' "['deepseek', 'deepseek-pro']" \
+  "$(FLEET_DISPATCH_MODELS='deepseek-pro,deepseek,gpt-5' D grid --view 'fleet@view-t1' | G models)"
+: > "$WORK/go.log"; rm -f "${WORK:?}/task-args" "${WORK:?}/sent.json"
+out=$(H_MODE=legacy H_REMOTE=1 H send --view 'fleet@view-t1' --client /dev/ttys009 --blank --model DeepSeek 2>&1) \
+  || st_fail "J: a blank DeepSeek send exited non-zero" "$out"
+st_eq 'J: a blank DeepSeek session: record first, no repo, Claude on the model, whatever the authority' \
+  'dispatch --title 新会话 --spawn --origin hub --via ⌘P --print --blank --agent claude --model deepseek --session fleet' \
+  "$(cat "$WORK/task-args")"
+CHECKS=$((CHECKS + 1)); [ -f "$WORK/sent.json" ] && st_fail "J: a model send took the place road"
+st_eq 'J: the 看台 went to the worker the hub placed' 'fleet@view-t1 U/scratch-4 --how dispatch --client /dev/ttys009' \
+  "$(cat "$WORK/go.log")"
+H send --view 'fleet@view-t1' --title '修 登录' --repo acme/web --agent codex --model deepseek-pro >/dev/null 2>&1 \
+  || st_fail "J: a repo DeepSeek send exited non-zero"
+st_has 'J: a repo'"'"'s DeepSeek task names its repo and the model, as Claude' "$(cat "$WORK/task-args")" \
+  '--repo acme/web --spawn --origin hub --via ⌘P --print --agent claude --model deepseek-pro'
+out=$(H send --view 'fleet@view-t1' --blank --model gpt-5 2>&1) && st_fail "J: --model gpt-5 exited 0" "$out"
+st_has 'J: an unknown model is refused' "$out" 'deepseek or deepseek-pro'
 
 # --- F. the key ------------------------------------------------------------------------
 st_eq 'F: the switch table row' 'dispatch ⌘T 0x74-0x100000 932 t' "$(bash "$BIN/dash-keymap.sh" --panel switch list | awk '$1 == "dispatch"')"

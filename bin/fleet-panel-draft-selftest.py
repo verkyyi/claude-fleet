@@ -312,6 +312,45 @@ class PanelDraftTests(unittest.TestCase):
                         argv, _, _ = fleet_view.bolt_argv(quick, "v1", "", {}, query)
                     self.assertEqual(argv[argv.index("--agent") + 1], agent)
 
+    def test_model_cell_only_when_the_hub_offers_one(self):
+        # task J7BN: the 「新会话」 box shows 模型 only when grid's `models` names
+        # some; untouched (or 默认) it is go_new's road, byte for byte
+        quick = SimpleNamespace(__file__="quickopen.py")
+        none = fleet_view.bolt_new({"repos": ["acme/web"], "last": "acme/web", "agent": "claude", "agents": {},
+                                    "missing": {}, "blocked": [], "models": []})
+        self.assertEqual(fleet_view.bolt_order(none), [0, 1, 2])
+        self.assertEqual(len(fleet_view.bolt_cells(none, "")[0]), 2)
+        st = fleet_view.bolt_new(dict(none["g"], models=["deepseek", "deepseek-pro"]))
+        self.assertEqual(fleet_view.bolt_order(st), [0, 1, 3, 2])
+        self.assertEqual(len(fleet_view.bolt_cells(st, "")[0]), 3)
+        self.assertEqual(fleet_view.bolt_model(st), "")
+        before, _, _ = fleet_view.bolt_argv(quick, "v1", "", st)
+        self.assertEqual(before[2:4], ["do", "new"])
+        st["focus"] = "model"
+        fleet_view.bolt_step(st, "", 1)
+        self.assertEqual(fleet_view.bolt_model(st), "deepseek")
+        self.assertIn("DeepSeek", fleet_view.bolt_cells(st, "")[0][2][0])
+        with patch.object(fleet_view, "view_fleet", return_value="fleet"):
+            argv, title, where = fleet_view.bolt_argv(quick, "v1", "/dev/ttys1", st)
+        self.assertEqual(argv[2:5], ["send", "--blank", "--model"])
+        self.assertEqual(argv[argv.index("--model") + 1], "deepseek")
+        self.assertEqual(argv[argv.index("--repo") + 1], "acme/web")
+        self.assertEqual(argv[argv.index("--view") + 1], "fleet@view-v1")
+        self.assertNotIn("do", argv)
+        self.assertIn("DeepSeek", where)
+        # the agent cell reads Claude and does not move while a model is picked
+        st["focus"] = "agent"
+        fleet_view.bolt_step(st, "", 1)
+        self.assertIsNone(st["agent"])
+        st["focus"] = "model"
+        fleet_view.bolt_step(st, "", 1)
+        fleet_view.bolt_step(st, "", 1)
+        self.assertEqual(fleet_view.bolt_model(st), "")     # back to 默认
+        # a pick the hub no longer offers is no pick
+        st["model"] = "deepseek"
+        st["g"]["models"] = []
+        self.assertEqual(fleet_view.bolt_model(st), "")
+
     def test_dispatch_preserves_long_literal_draft(self):
         draft = '检查 #42 "$(not-a-command)" ' + "完整文字" * 100
         with patch.object(dispatch, "send", return_value=(True, "opened")) as send:

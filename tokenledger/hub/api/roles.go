@@ -88,6 +88,7 @@ var routeAccess = map[string]string{
 	"/v1/node/move": accessSelf, "/v1/node/move/bundle": accessSelf, "/v1/node/move/bundle/": accessSelf,
 	"/v1/node/attachment/": accessSelf,
 	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf, "/v1/node/gate": accessSelf,
+	NodeModelsPath:         accessSelf,
 	"/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf, "/v1/node/peers": accessSelf,
 	NodeLeavePath:     accessSelf,
 	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,

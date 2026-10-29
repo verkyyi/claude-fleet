@@ -22,6 +22,13 @@ it — from any window of a thin client's 看台: a worker's, a no-repo session'
                                           (T652, EPIC T651 C1): its record opens on
                                           the placeholder 「新会话」 with no first
                                           turn; the first prompt renames both, once
+    … send … --model deepseek|deepseek-pro
+                                          a DeepSeek session (task J7BN; --blank
+                                          with or without --repo, or --title): ALWAYS
+                                          record first and placed by the hub in its
+                                          region (fleet-task-record.sh dispatch
+                                          --model), never opened here; the 看台 then
+                                          goes to the worker the hub names
     fleet-quick-dispatch.py pick          the repo ⌘P's 「新任务」 sends to: line 1
                                           the pick (empty = ask), then every repo
     fleet-quick-dispatch.py grid [--view V] [--repo R]
@@ -32,7 +39,10 @@ it — from any window of a thin client's 看台: a worker's, a no-repo session'
                                           fleet's default) · agents {repo: its last
                                           agent, else the default} · missing {agent:
                                           why} — not installed here, or 「管理员暂未开放」
-                                          (the hub's allowlists, issue #3826)
+                                          (the hub's allowlists, issue #3826) ·
+                                          models [the start models the hub lets
+                                          this person choose — task J7BN; [] = none,
+                                          the box shows no 模型 cell]
     fleet-quick-dispatch.py remember --repo R [--agent A]
                                           a new session opened on R ("" = none) with
                                           A: the next box's defaults (compose-state.json)
@@ -81,6 +91,8 @@ machine does not host is said, never tried here. Legacy authority: as above.
 FLEET_DISPATCH_AUTHORITY_CMD (tests): prints the authority mode for <repo> <fleet>.
 FLEET_DISPATCH_HOSTED (tests): the repos this machine hosts, comma-separated.
 FLEET_DISPATCH_TASK_CMD (tests): replaces `fleet-task-record.sh`.
+FLEET_DISPATCH_MODELS (tests): the models the hub offers, comma-separated, in
+place of asking it (GET /v1/node/models, fleet_node_http.py).
 """
 import curses
 import importlib.util
@@ -155,6 +167,39 @@ def repo_pick(have=None, last=None):
 
 
 AGENTS = ("claude", "codex")
+# The start models a session may be opened on (task J7BN): DeepSeek's, served to
+# Claude Code — offered only when the hub says this person may (models()).
+MODELS = ("deepseek", "deepseek-pro")
+MODELS_FRESH = 120      # seconds an answer is trusted (the panel asks as it opens)
+
+
+def models_cache():
+    return compose.state_dir() / "models-seen.json"
+
+
+def models():
+    """The start models the hub lets this login's person choose (task J7BN), in
+    MODELS order — [] when none, no hub or it cannot tell (the box then shows no
+    模型 cell: a start is exactly as before). Asked of the hub with the node's
+    own token (GET /v1/node/models), kept MODELS_FRESH seconds."""
+    seam = os.environ.get("FLEET_DISPATCH_MODELS")
+    if seam is not None:
+        return [m for m in MODELS if m in seam.split(",")]
+    try:
+        got = json.loads(models_cache().read_text(encoding="utf-8"))
+        if 0 <= time.time() - float(got["at"]) < MODELS_FRESH:
+            return [m for m in MODELS if m in got["models"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        sys.path.insert(0, str(BIN))
+        import fleet_node_http
+        answer = fleet_node_http.get_json("/v1/node/models").get("models")
+        have = [m for m in MODELS if m in (answer if isinstance(answer, list) else [])]
+    except Exception:  # noqa: BLE001 — no token, no hub, an older hub (404): none to offer
+        return []
+    compose.write_atomic(models_cache(), json.dumps({"at": time.time(), "models": have}) + "\n")
+    return have
 
 
 def state_read():
@@ -357,16 +402,17 @@ def task_send(data, view="", client=""):
     """A repo's start under hub authority (issue #4965): the record first
     (fleet-task-record.sh dispatch --repo --spawn), then its session here — a 看台
     goes to the window it opened. (ok, words)."""
-    repo, fleet = data["repo"], fleet_of(view)
+    repo, fleet = data.get("repo") or "", fleet_of(view)
+    model = data.get("model") if data.get("model") in MODELS else ""
     title = data.get("draft") or data.get("title") or ""
     blank = bool(data.get("blank"))
     if blank:
         title = tr("dispatch_new_title")
     host = socket.gethostname().split(".")[0]
-    if repo.lower() not in hosted(fleet):
+    if repo and repo.lower() not in hosted(fleet):
         failed(data, view, "not hosted here")
         return False, tr("compose_failed_fmt", tr("dispatch_hub_elsewhere_fmt", repo, host))
-    if blank:
+    if blank and not model:
         # the record in-process (T992, bin/fleet_blank_start.py): the script's bash
         # was ~0.6 s of a start; None ⇒ that road cannot take it, the script does
         try:
@@ -387,10 +433,12 @@ def task_send(data, view="", client=""):
         # the hub's record holds a title of 1..200; the whole words ride as its body
         body = title
         title = head if len(head) <= TASK_TITLE_MAX else head[:TASK_TITLE_MAX - 1] + "…"
-    argv += ["--title", title, "--repo", repo, "--spawn", "--origin", "hub", "--via", "⌘P", "--print"]
+    argv += ["--title", title] + (["--repo", repo] if repo else []) + ["--spawn", "--origin", "hub", "--via", "⌘P", "--print"]
     argv += ["--blank"] if blank else []
     argv += ["--body-file", "-"] if body is not None else []
-    argv += ["--agent", data["agent"]] if data.get("agent") in AGENTS else []
+    # a DeepSeek session (task J7BN) is a Claude Code one, placed by the hub
+    argv += ["--agent", "claude", "--model", model] if model else \
+        ["--agent", data["agent"]] if data.get("agent") in AGENTS else []
     argv += ["--session", fleet] if fleet else []
     try:
         out = subprocess.run(argv, input=body or "", capture_output=True, text=True, timeout=180)
@@ -447,7 +495,10 @@ def send(data, view="", client=""):
     """Write it, --send it here. (ok, words): how it ended — a 看台 then goes to
     the window it opened (issue #3097, fleet-view-go.sh). A send that did not open is logged (`dispatch_failed`
     in logs/compose.ndjson) as well as said, never only said. Under hub authority a
-    repo's send is a task record first (task_send, issue #4965)."""
+    repo's send is a task record first (task_send, issue #4965) — and so is a
+    model's (task J7BN), whatever the authority: the hub places it in its region."""
+    if data.get("model") in MODELS:
+        return task_send(data, view, client)
     if data.get("repo") and authority(data["repo"], fleet_of(view)) == "hub":
         return task_send(data, view, client)
     path = compose.send_path()
@@ -613,7 +664,7 @@ def fleet_of(view):
 
 
 def opts(argv):
-    out = {"--title": "", "--repo": "", "--session": "", "--view": "", "--client": "", "--agent": ""}
+    out = {"--title": "", "--repo": "", "--session": "", "--view": "", "--client": "", "--agent": "", "--model": ""}
     i = 0
     while i < len(argv):
         if argv[i] in out and i + 1 < len(argv):
@@ -677,20 +728,28 @@ def main(argv):
         # panel only shows them (约定 2)
         print(json.dumps({"repos": have, "last": repo, "agent": dflt,
                           "agents": {r: agent_for(r, st, dflt, missing) for r in [""] + have},
-                          "missing": missing, "blocked": sorted(agent_blocked()) if view else []},
+                          "missing": missing, "blocked": sorted(agent_blocked()) if view else [],
+                          "models": models() if view else []},
                          ensure_ascii=False))
         return 0
     if argv[:1] == ["remember"]:
         o = opts(argv[1:])
         return 0 if remember(o["--repo"], o["--agent"] if o["--agent"] in AGENTS else None) else 1
     o = opts(argv[1:] if argv[:1] in (["payload"], ["send"]) else argv)
+    model = (o["--model"] or "").lower()
+    if model and model not in MODELS:
+        print("fleet: --model is %s" % " or ".join(MODELS), file=sys.stderr)
+        return 2
     if argv[:1] == ["send"] and o.get("--blank"):
-        # a blank session under hub authority (T652): a record, no words — go_new's road
-        if not o["--repo"]:
+        # a blank session under hub authority (T652): a record, no words — go_new's
+        # road; a model's (task J7BN) may name no repo
+        if not o["--repo"] and not model:
             print(tr("dispatch_norepo"), file=sys.stderr)
             return 2
         data = {"repo": o["--repo"], "agent": o["--agent"] if o["--agent"] in AGENTS else None,
                 "blank": True, "via": "dispatch"}
+        if model:
+            data.update(model=model, agent="claude")
         ok, said = task_send(data, o["--view"], o["--client"])
         print(said)
         return 0 if ok else 1
@@ -706,10 +765,12 @@ def main(argv):
         if not data:
             print(tr("compose_empty"), file=sys.stderr)
             return 2
+        if model:
+            data.update(model=model, agent="claude")
         if argv[0] == "payload":
             print(json.dumps(data, ensure_ascii=False))
             return 0
-        if not data["repo"]:
+        if not data["repo"] and not model:
             print(tr("dispatch_norepo"), file=sys.stderr)
             return 2
         ok, said = send(data, o["--view"], o["--client"])

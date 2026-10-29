@@ -238,6 +238,17 @@ bash "$R" dispatch --title '新会话' --repo o/r --spawn --blank >/dev/null 2>&
 tok2=$(grep -o '"token": "[^"]*"' "$CURL_LOG" | head -1)
 [ -n "$tok1" ] && [ -n "$tok2" ] && [ "$tok1" != "$tok2" ] \
   && ok "G …each blank open is its own record (its token carries a nonce)" || st_miss "G tokens: [$tok1] [$tok2]"
+# a DeepSeek session (task J7BN): the model rides the record and the spawner, as Claude
+rm -f "$WORK/calls"; : > "$CURL_LOG"
+out=$(bash "$R" dispatch --title '新会话' --spawn --blank --model DeepSeek 2>&1); rc=$?
+[ "$rc" = 0 ] && grep -q '^dash-raw-session.sh --no-repo --task T5 --name 新会话 --agent claude --model deepseek --placeholder$' "$WORK/calls" \
+  && grep -q '"model": "deepseek"' "$CURL_LOG" \
+  && ok "G --model: the record keeps it, the spawner opens on it as Claude" || st_miss "G model: rc=$rc [$out] $(cat "$WORK/calls" 2>&1)"
+rm -f "$WORK/calls"
+bash "$R" dispatch --title x --spawn --model gpt-5 >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && [ ! -f "$WORK/calls" ] && ok "G --model gpt-5 is usage" || st_miss "G model gpt-5 rc=$rc"
+bash "$R" dispatch --title x --spawn --agent codex --model deepseek >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && [ ! -f "$WORK/calls" ] && ok "G --model with codex is usage" || st_miss "G model+codex rc=$rc"
 rm -f "$WORK/calls"
 printf 'x\n' | bash "$R" dispatch --title '新会话' --body-file - --repo o/r --spawn --blank >/dev/null 2>&1; rc=$?
 [ "$rc" = 2 ] && [ ! -f "$WORK/calls" ] && ok "G --blank takes no words" || st_miss "G blank+words rc=$rc"
