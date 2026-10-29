@@ -387,9 +387,16 @@ jobs:
             sleep $((try * 20))
           done
           [ -n "$ok" ] || { echo "::error::HUB_MIRROR_ACR: could not copy $PUSH_REPO@$DIGEST to $ACR_REPO:$TAG (the mainland region's credproxy would stay on an old image)"; exit 1; }
-          got=$(docker buildx imagetools inspect "$ACR_REPO:$TAG" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin).get("digest") or "")')
-          [ "$got" = "$DIGEST" ] || { echo "::error::HUB_MIRROR_ACR: $ACR_REPO:$TAG is '$got', not ECR's $DIGEST"; exit 1; }
-          echo "### ACR 镜像副本 \`$ACR_REPO:$TAG\` · \`$got\`（与 ECR 同 digest）" >> "$GITHUB_STEP_SUMMARY"
+          # imagetools create writes a NEW index (its own digest), so the copy is
+          # held to the same platform images: the image manifests it lists, by digest
+          plats() { docker buildx imagetools inspect --raw "$1" | python3 -c 'import json,sys
+          m=json.load(sys.stdin); ms=m.get("manifests")
+          print(" ".join(sorted(x["digest"] for x in ms if (x.get("platform") or {}).get("os") not in (None, "unknown"))) if ms else "")'; }
+          want=$(plats "$PUSH_REPO@$DIGEST"); got=$(plats "$ACR_REPO:$TAG")
+          [ -n "$want" ] || want=$DIGEST   # a single-platform image: its own manifest
+          [ -n "$got" ] || got=$(docker buildx imagetools inspect "$ACR_REPO:$TAG" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin).get("digest") or "")')
+          [ "$got" = "$want" ] || { echo "::error::HUB_MIRROR_ACR: $ACR_REPO:$TAG holds '$got', not ECR's images $want"; exit 1; }
+          echo "### ACR 镜像副本 \`$ACR_REPO:$TAG\` · 平台镜像与 ECR 一致（\`$got\`）" >> "$GITHUB_STEP_SUMMARY"
 
   deploy:
     # FLEET_HUB_TARGET=aws-k3s: `deploy-aws` below instead (unset = this job, as always)
