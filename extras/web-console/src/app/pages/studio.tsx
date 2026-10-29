@@ -34,7 +34,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export default function StudioPage() {
-  usePage("增长运营 Agent");
+  usePage("一站式企业增长运营 Agent");
   useVisualViewport();
   const { me } = useShell();
   return me?.studio ? <Studio /> : <div className="p-8" role="status">{me ? "404 · 页面不存在" : "正在读取…"}</div>;
@@ -131,7 +131,7 @@ function Studio() {
   return <div className="flex h-full min-h-0 flex-col bg-background" data-testid="livepage-studio">
     <header className="flex min-h-16 flex-wrap items-center gap-3 border-b px-4 py-2">
       <Link to="/" aria-label="返回会话" className="rounded-lg p-2 text-muted-foreground hover:bg-muted"><ArrowLeft className="size-4" /></Link>
-      <div className="mr-auto"><h1 className="text-base font-semibold tracking-tight">增长运营 Agent</h1><p className="text-xs text-muted-foreground">从一个想法，到可以分享的页面</p></div>
+      <div className="mr-auto"><h1 className="text-base font-semibold tracking-tight">一站式企业增长运营 Agent</h1><p className="text-xs text-muted-foreground">从一个想法，到可以分享的页面</p></div>
       <label className="min-w-0 flex-1 sm:max-w-72"><span className="sr-only">项目</span>
         <select aria-label="项目" className="h-9 w-full rounded-lg border bg-background px-2 text-sm" value={session?.proposal_id || (key === "catalog" ? "catalog" : "")} onChange={e => {
           const p = state.projects.find(x => x.proposal_id === e.target.value); if (p) void open(p);
