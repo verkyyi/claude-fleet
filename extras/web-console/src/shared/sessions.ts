@@ -47,6 +47,8 @@ export type BoardGroup = "pin" | "ask" | "work" | "queue" | "gone";
 export type BoardRow = {
   archived?: boolean;
   schedule_id?: string; run_id?: string;
+  // who opened it (task DDBQ): absent = a person's; the list groups the rest apart
+  source?: "agent" | "schedule" | "api";
   agent?: string; agent_basis?: "planned" | "native" | "actual" | "runtime";
   agent_words?: [string, string]; context?: [string, string]; coordinator?: string; outcome?: string;
   id: string; code?: string; task?: string; task_id?: string; title: string; group: BoardGroup; tag: string;

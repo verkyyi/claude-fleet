@@ -247,6 +247,9 @@ case "$mode" in
     # carries it as the row's origin.
     # Column 36 (task HHV0): `cantalk=1` when the web may say a sentence into it (the
     # session gate, bin/fleet_session_gate.py), else empty: read-only there.
+    # Last, after park= and the native facts (task DDBQ): `source=agent|schedule|api`
+    # — who opened a session no person opened (@session_source, the spawners); the
+    # hub's list groups it apart. Absent on a person's session: the row as before.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -258,7 +261,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}\t#{?@turn_activity_at,#{@turn_activity_at},#{@claude_state_ts}}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}\t#{?@turn_activity_at,#{@turn_activity_at},#{@claude_state_ts}}\t#{@session_source}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     orep=''
     [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
@@ -377,7 +380,7 @@ from fleet_hub_common import inventory_row
 from fleet_park_metrics import inventory_park
 from fleet_loop_mark import parse, prune
 import re, time
-facts = {}
+facts, sources = {}, {}
 for raw in os.environ["TASK_FACTS"].splitlines():
     cells = raw.split("\t")
     if len(cells) >= 17:
@@ -385,6 +388,8 @@ for raw in os.environ["TASK_FACTS"].splitlines():
         wait = cells[16] if re.fullmatch(r"[a-z,]*", cells[16]) else ""
         activity = int(cells[17]) if len(cells) > 17 and cells[17].isdigit() else 0
         facts[cells[0]] = (bool(plan.get("cron")), wait, activity)
+        if len(cells) > 18 and cells[18] in ("agent", "schedule", "api"):
+            sources[cells[0]] = cells[18]
 census = json.loads(os.environ["PARK_CENSUS"])
 for line in sys.stdin:
     line = line.rstrip("\n")
@@ -394,6 +399,9 @@ for line in sys.stdin:
         p = inventory_park(p, parts[4], extra.get("busy"))
     mark = facts.get(line.split("\t", 1)[0])
     suffix = ("\tloop=%d\tnativewait=%s\tactivity=%d" % mark) if mark is not None else ""
+    # who opened it (task DDBQ): last, and only for a session a person did not open
+    src = sources.get(line.split("\t", 1)[0])
+    suffix += ("\tsource=" + src) if src else ""
     print(line + "\tpark=" + (json.dumps(p, separators=(",", ":")) if p else "") + suffix)'
 
     ;;

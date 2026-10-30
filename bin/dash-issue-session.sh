@@ -897,6 +897,9 @@ _rorig=$(fleet_reap_origin "$SOCK" "$AS_ARG" "$ORIGIN" "$ORIGIN_WID" "" \
 [ -n "$REAP" ] || REAP=$(python3 "$BIN/fleet_reap_policy.py" origin-default "${_rorig:-person}" --kind issue) || REAP=idle:2h
 _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-idle:2h}")
 [ -n "$_rorig" ] && _sw+=(\; set-window-option -t "$win" @reap_origin "$_rorig")
+# who opened it (task DDBQ): a session's spawn tool names its own key as --origin;
+# the hub / a person gives none or `hub` — a person's session carries nothing
+case "$ORIGIN" in ''|hub) ;; *) _sw+=(\; set-window-option -t "$win" @session_source agent) ;; esac
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) ;; *) _sw+=(\; set-window-option -t "$win" @task "$TASK_REF") ;; esac ;; esac
 [ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")

@@ -113,7 +113,7 @@ LAUNCH="${FLEET_MIGRATE_LAUNCH:-$BIN/fleet-session-wrap.sh}"   # selftest seam: 
 # lists (@task_line, @name_manual — issue #3317) read. @fleet_role rides
 # apart: it defaults to worker. A hub task's record (@task, @task_flow — issue
 # #4974) rides too: its reapers and top bar read it off the window.
-MIGRATE_CARRY="@reap_policy @reap_origin @reap_keep_by @reap_unreported @reap_hold @pin @epic @test_identity @task_line @name_manual @task @task_flow"
+MIGRATE_CARRY="@reap_policy @reap_origin @reap_keep_by @reap_unreported @reap_hold @pin @epic @test_identity @task_line @name_manual @task @task_flow @session_source"
 EXIT_WAIT="${FLEET_MIGRATE_EXIT_WAIT:-30}"                 # s to wait for Claude to exit
 CLOSE_WAIT="${FLEET_MIGRATE_CLOSE_WAIT:-15}"               # s to wait for the hook to close the window
 BOOT_WAIT="${FLEET_MIGRATE_BOOT_WAIT:-15}"                 # s to wait for the resumed Claude to appear

@@ -81,6 +81,10 @@ type fleetPrincipal struct {
 	// never widens scope — the node's own rules still hold — it narrows what
 	// the call may name to that session, and the journal and audit carry it.
 	Worker *workerClaims
+	// API is a caller that came with an Authorization bearer (a script, the
+	// hub MCP), not a browser's cookie (task DDBQ): what it starts is listed
+	// apart, as API 派发.
+	API bool
 }
 
 // All reports whether the caller sees every machine.
@@ -118,7 +122,7 @@ func (s *Server) FleetPrincipal(r *http.Request) (fleetPrincipal, error) {
 	if actor == "" {
 		actor = "operator"
 	}
-	return fleetPrincipal{Actor: actor, Person: person, scope: scope}, nil
+	return fleetPrincipal{Actor: actor, Person: person, scope: scope, API: bearer(r) != ""}, nil
 }
 
 // --- registry feed (heartbeats) -----------------------------------------

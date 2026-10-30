@@ -110,10 +110,16 @@ type BoardRow struct {
 	// and whether the web may talk to it now (a live session on a machine not
 	// lost, not ended: a terminal one too, by default). A record with no session
 	// has neither.
-	Origin     string        `json:"origin,omitempty"`
-	CanTalk    bool          `json:"can_talk"`
-	History    *BoardHistory `json:"history,omitempty"`
+	Origin  string        `json:"origin,omitempty"`
+	CanTalk bool          `json:"can_talk"`
+	History *BoardHistory `json:"history,omitempty"`
+	// Who opened it (task DDBQ), the list's group: agent (a session's task /
+	// spawn tool), schedule (a scheduled run), api (a bearer caller of
+	// worker_start). Empty = a person's (⌘P, the web, the CLI) — the main list.
+	Source     string `json:"source,omitempty"`
 	parentTask string
+	taskVia    string
+	taskAgent  bool
 }
 
 // BoardHistory is resolved directly from the owner's FID ledger, independently
@@ -398,6 +404,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		if t != nil {
 			r.Task, r.TaskID, r.parentTask = t.Ref, t.FID, t.ParentTask
+			r.taskVia, r.taskAgent = t.Via, t.ParentTask != "" || t.ParentSession != ""
 			r.ExecutionEndpoint = t.ExecutionEndpoint
 			r.CancelRequest, r.Generation = t.CancelRequest, t.Generation
 			r.Outcome = taskEnd(*t)
@@ -554,6 +561,10 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if wstr(w, "origin") == "web" {
 			r.Origin = "web"
 		}
+		switch src := wstr(w, "source"); src {
+		case boardSourceAgent, boardSourceSchedule, boardSourceAPI:
+			r.Source = src
+		}
 		r.CanTalk = r.Group != "gone" && !r.Lost && wid != "" && fs.Availability != "maintenance" && fs.Availability != MachineAvailDisabled
 		if v, ok := w["can_talk"].(bool); ok && !v {
 			r.CanTalk = false // the home's session gate says no (task HHV0 ①)
@@ -692,6 +703,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 				r.Title = run.Title
 			}
 		}
+		r.Source = boardSource(*r)
 	}
 	b := finishBoard(kept)
 	b.SessionList = SessionListPreferences{MaxVisible: 10, IdleHours: 24}
@@ -920,4 +932,30 @@ func finishBoard(rows []BoardRow) *Board {
 	h.Write(enc)
 	b.Digest = hex.EncodeToString(h.Sum(nil))[:12]
 	return b
+}
+
+// The list's groups (task DDBQ): who opened a session. Empty is a person's.
+const (
+	boardSourceAgent    = "agent"
+	boardSourceSchedule = "schedule"
+	boardSourceAPI      = "api"
+)
+
+// boardSource is the ONE place a row's source is decided: a scheduled run's
+// session is the schedule's; else what the node stamped at the spawn
+// (@session_source); else the task record's word — via `api` (a bearer
+// worker_start), via 编排 or a parent (a session's task tool). Anything else,
+// and every row an older node or hub sends, is a person's.
+func boardSource(r BoardRow) string {
+	switch {
+	case r.ScheduleID != "":
+		return boardSourceSchedule
+	case r.Source != "":
+		return r.Source
+	case r.taskVia == boardSourceAPI:
+		return boardSourceAPI
+	case r.taskVia == "编排" || r.taskAgent:
+		return boardSourceAgent
+	}
+	return ""
 }

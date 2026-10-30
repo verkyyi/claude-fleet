@@ -514,6 +514,9 @@ EOF
   # The task's own ID (EPIC T644 C1) rides to the spawner, bound to THIS record: its
   # first window goes by it (C2, fleet_task_fid) without asking the hub again.
   fleet_is_fid "$tfid" && export FLEET_TASK_FID="$t=$tfid"
+  # who asked (task DDBQ): a session's `task` tool (via 编排) opens an agent's
+  # session; ⌘P (`--via ⌘P`) a person's, which carries nothing
+  src=''; [ "$via" = 编排 ] && src=agent
   # A development task the hub accepted is the record alone (issue #4897, EPIC
   # #4895 批 0): no GitHub issue — the session opens in its own worktree of the
   # repo, bound to T<n> (dash-raw-session.sh --repo --task stamps @task_flow), reads
@@ -529,7 +532,7 @@ EOF
       pfa="--prompt-file=$pf"
     fi
     trap - EXIT   # its prestart is the spawner's now (FLEET_PRESTART)
-    exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" \
+    exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" ${src:+--source "$src"} \
       ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${model:+--model "$model"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
   fi
   [ "$spawn" = 1 ] || exit 0
@@ -539,7 +542,7 @@ EOF
     printf '%s\n' "${body:-$title}" > "$pf"
     pfa="--prompt-file=$pf"
   fi
-  exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} \
+  exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} ${src:+--source "$src"} \
     ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${model:+--model "$model"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
 fi
 

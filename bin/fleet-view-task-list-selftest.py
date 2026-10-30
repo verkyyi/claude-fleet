@@ -125,14 +125,20 @@ class TaskList(unittest.TestCase):
         fixtures = BIN.parent / "extras/web-console/test/fixtures/session-list-policy.json"
         for c in json.loads(fixtures.read_text()):
             with self.subTest(c["name"]):
-                items = [row(r["id"], state=r["state"], group=r["group"], activity_at=r["activity_at"],
+                items = [row(r["id"], state=r["state"], group=r["group"], activity_at=r["activity_at"], source=r.get("source", ""),
                              sec="gone" if r["group"] == "gone" else "", gone=r["group"] == "gone",
                              running=r["state"] == "working", lost=r["state"] == "unknown") for r in c["rows"]]
                 projected = v.compact_task_list(items, c.get("current", ""), c.get("preferences"), c["now"])
                 sessions = [e for e in projected if e["kind"] == "sess"]
-                self.assertEqual([e["target"] for e in sessions if not e.get("sec")], c["visible"])
+                self.assertEqual([e["target"] for e in sessions if not e.get("sec") and e["target"] not in c.get("shown_in_group", [])], c["visible"])
                 self.assertEqual([e["target"] for e in sessions if e.get("sec") == "gone"], c["more"])
                 self.assertEqual([e["target"] for e in sessions if v.needs_attention(e)], c["attention"])
+                for k in ("agent", "schedule", "api"):
+                    at = next((i for i, e in enumerate(projected) if e.get("sec") == "src-" + k and e["kind"] == "sec"), None)
+                    members = [e["target"] for e in projected[at + 1:at + 1 + len(c["sources"][k])]] if at is not None else []
+                    self.assertEqual(members, c["sources"][k], k)
+                    self.assertTrue(all(e.get("sec") == "src-" + k or e["target"] in c.get("shown_in_group", [])
+                                        for e in sessions if e["target"] in c["sources"][k]), k)
                 self.assertEqual(len({e["target"] for e in sessions}), len(items))
                 self.assertEqual([e.get("sec") for e in items], ["gone" if r["group"] == "gone" else "" for r in c["rows"]], "folding never mutates source lifecycle")
 

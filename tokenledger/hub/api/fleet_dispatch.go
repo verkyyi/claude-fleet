@@ -185,7 +185,11 @@ func (s *Server) acceptDispatch(p fleetPrincipal, w *writeRequest) error {
 		// A task is a T<n> (claude-fleet#4896): it carries a ticket only when
 		// the caller names one; none is made up from where a repo's tickets live.
 		ref := asString(w.params["ticket_ref"])
-		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, Repo: w.repo, TicketRef: ref,
+		via := ""
+		if p.API {
+			via = boardSourceAPI // listed apart (task DDBQ)
+		}
+		t, err = s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, Repo: w.repo, TicketRef: ref, Via: via,
 			AuthorityVersion: 1, Agent: d.ResolvedAgent, RequestedAgent: d.RequestedAgent,
 			ResolvedAgent: d.ResolvedAgent, RequestPayload: dispatchPayload(w)},
 			"dispatch:"+owner+":"+d.RequestID, time.Now())

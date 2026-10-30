@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
-import { compactRows, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, rowMeta, rowRef, searchRows, type CompactGroups } from "./session-list";
+import { compactRows, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, ROW_SOURCES, rowMeta, rowRef, searchRows, sourceLabel, type CompactGroups, type RowSource } from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
@@ -235,6 +235,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const oldRoad = useUnified() === false;
   const { ref, pathname } = useOpenRef();
   const [goneOpen, setGoneOpen] = useState(false);
+  const [sourceOpen, setSourceOpen] = useState<Partial<Record<RowSource, boolean>>>({});
   const [pressed, setPressed] = useState<Row | null>(null);
   const previous = useRef<CompactGroups | undefined>(undefined);
   const [pointing, setPointing] = useState(false);
@@ -275,11 +276,12 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
     body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map(row)}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
-    const { pin, open, gone } = grouped;
+    const { pin, open, gone, sources } = grouped;
     const runningHidden = gone.filter((r) => listStatus(r).kind === "work").length;
     // A count, not a group (task DDBQ): the rows stay in time order; the count
-    // opens the next one that needs the person, after the one open now.
-    const waiting = [...pin, ...open].filter(needsAttention);
+    // opens the next one that needs the person, after the one open now —
+    // a folded source group's included.
+    const waiting = [...pin, ...open, ...ROW_SOURCES.flatMap((s) => sources[s])].filter(needsAttention);
     const nextWaiting = waiting[(waiting.findIndex((r) => rowRef(r) === ref) + 1) % (waiting.length || 1)];
     // The old chat entry remains above the task list for older hubs.
     body = (
@@ -291,6 +293,23 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
         </Link> : null}
         {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{pin.map(row)}</List></div></> : null}
         <List>{timeline(open)}</List>
+        {ROW_SOURCES.map((src) => {
+          const items = sources[src];
+          if (!items.length) return null;
+          // folded unless opened, or it holds the session open now
+          const shown = sourceOpen[src] ?? items.some((r) => rowRef(r) === ref);
+          const asking = items.filter(needsAttention).length;
+          return <div key={src} data-source-group={src}>
+            <button type="button" onClick={() => setSourceOpen({ ...sourceOpen, [src]: !shown })} aria-expanded={shown}
+              className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
+                variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
+              {shown ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+              <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{sourceLabel(src)}<span className="font-mono"> · {items.length}</span>
+                {asking ? <span className="text-destructive font-medium">{tr(` · ${asking} 个在问你`, ` · ${asking} asking`)}</span> : null}</span>
+            </button>
+            {shown ? <List>{items.map(row)}</List> : null}
+          </div>;
+        })}
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
