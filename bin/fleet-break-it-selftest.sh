@@ -7296,6 +7296,13 @@ drill_task_stop_replay_cleanup() {
   SECS=$(since "$t0")
 }
 
+drill_private_preview_login() {
+  CAP=180; local t0; t0=$(now)
+  term_go 'TestPreviewSlowLogin TestPreviewExpiredLoginRestarts TestPreviewOtherHubLogin TestPreviewPortalLoginReturn TestPreviewLoginOrigins TestPreviewAuthExpiry TestPreviewSignedOutOAuthReturn TestPreviewSlowLoginAndOtherHubSession' './hub/api ./hub/store ./e2e' \
+    '私人预览：慢登录 / 过期重试 / 多入口已有会话 / 未登录有界返回' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_private_preview_registration() {
   CAP=180; local t0; t0=$(now)
   term_go 'TestPreviewRegisteredTask TestPreviewEnrollmentBinding TestPreviewTaskBinding TestPreviewRegistrationEndToEnd' './hub/api ./hub/store ./e2e' \

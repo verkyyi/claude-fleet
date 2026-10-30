@@ -182,6 +182,10 @@ func TestPreviewSignedOutOAuthReturn(t *testing.T) {
 	if ret == nil {
 		t.Fatal("no return")
 	}
+	// A slow QR/OAuth consent must still return to the pending preview.
+	if _, e := h.srv.Store.DB().Exec(`UPDATE fleet_preview_auth SET expires=expires-181`); e != nil {
+		t.Fatal(e)
+	}
 	// Issue the consent code for the actual PKCE start.
 	start := previewRequest(h.srv, "GET", h.srv.FleetPublicURL+"/auth/github/start")
 	loc, _ := url.Parse(start.Header().Get("Location"))

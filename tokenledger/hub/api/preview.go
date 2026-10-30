@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -211,7 +212,7 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, id string)
 			http.Error(w, "preview authorization unavailable", 503)
 			return
 		}
-		previewSetCookie(w, previewStateCookie, state, 120)
+		previewSetCookie(w, previewStateCookie, state, int(store.PreviewAuthTTL.Seconds()))
 		http.Redirect(w, r, strings.TrimRight(s.FleetPublicURL, "/")+previewAuthorize+"?preview="+id+"&state="+state, http.StatusFound)
 		return
 	}
@@ -298,6 +299,58 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, id string)
 	rp.ServeHTTP(w, r)
 }
 
+// previewLoginNext checks existing host-only sessions with top-level GETs, so
+// SameSite=Lax cookies work across the configured Hub sites. The sorted chain
+// ends at the login origin with probe=1, where a signed-out browser signs in once.
+// Only configured HTTPS origins participate; no browser-supplied redirect URL
+// or Hub session cookie is ever forwarded to another host.
+func (s *Server) previewLoginNext(r *http.Request) string {
+	primary := strings.TrimRight(s.FleetPublicURL, "/")
+	primaryURL, _ := url.Parse(primary)
+	origins := map[string]bool{primary: true}
+	for _, origin := range s.PublicHosts {
+		u, err := url.Parse(origin)
+		if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			continue
+		}
+		// A mapping may name a canonical origin different from its map key.
+		// It must itself be a public Hub host accepted by previewHosts.
+		if u.Host != primaryURL.Host && s.PublicHosts[strings.ToLower(u.Host)] == "" {
+			continue
+		}
+		origins[u.Scheme+"://"+u.Host] = true
+	}
+	// A portal alias redirects /app/signin to the portal. Remember the return
+	// there, otherwise its host-only cookie is stranded on the old host.
+	loginOrigin := primary
+	if origins[strings.TrimRight(s.PortalURL, "/")] && !inWeChat(r) {
+		loginOrigin = strings.TrimRight(s.PortalURL, "/")
+	}
+	delete(origins, loginOrigin)
+	ordered := make([]string, 0, len(origins))
+	for origin := range origins {
+		ordered = append(ordered, origin)
+	}
+	sort.Strings(ordered)
+	ordered = append(ordered, loginOrigin)
+	if r.URL.Query().Get("probe") != "1" {
+		for _, origin := range ordered {
+			u, _ := url.Parse(origin)
+			if r.Host != u.Host {
+				return origin
+			}
+		}
+		return ""
+	}
+	for i, origin := range ordered {
+		u, _ := url.Parse(origin)
+		if r.Host == u.Host && i+1 < len(ordered) {
+			return ordered[i+1]
+		}
+	}
+	return ""
+}
+
 func (s *Server) handlePreviewAuthorize(w http.ResponseWriter, r *http.Request) {
 	previewNoCache(w)
 	if !s.previewOn() {
@@ -315,7 +368,18 @@ func (s *Server) handlePreviewAuthorize(w http.ResponseWriter, r *http.Request) 
 	}
 	sess, person, ok := s.personSession(r)
 	if !ok || sess.Sid == "" {
-		rememberAppReturn(w, r)
+		if next := s.previewLoginNext(r); next != "" {
+			q := url.Values{"preview": {id}, "state": {state}, "probe": {"1"}}
+			http.Redirect(w, r, next+previewAuthorize+"?"+q.Encode(), http.StatusFound)
+			return
+		}
+		// The probe marker only bounds cross-host navigation. The login return
+		// remains the existing exact preview/state pair, on this host.
+		login := r.Clone(r.Context())
+		q := login.URL.Query()
+		q.Del("probe")
+		login.URL.RawQuery = q.Encode()
+		rememberAppReturn(w, login)
 		http.Redirect(w, r, appURL("/signin"), 302)
 		return
 	}
@@ -339,8 +403,14 @@ func (s *Server) handlePreviewAuthorize(w http.ResponseWriter, r *http.Request) 
 	if sess.Exp < expiry {
 		expiry = sess.Exp
 	}
-	if s.Store.TicketPreview(HashToken(state), id, callback, HashToken(ticket), store.PreviewSession{Owner: person, SID: sess.Sid, Issued: sess.Iat, Expires: expiry}, time.Now()) != nil {
-		http.Error(w, "invalid or spent preview state", 403)
+	if e := s.Store.TicketPreview(HashToken(state), id, callback, HashToken(ticket), store.PreviewSession{Owner: person, SID: sess.Sid, Issued: sess.Iat, Expires: expiry}, time.Now()); e != nil {
+		if errors.Is(e, store.ErrPreview) {
+			// Sign-in may outlive the state, or a back-button visit may reuse
+			// it. Start with a fresh browser-bound state, never reuse a ticket.
+			http.Redirect(w, r, s.previewURL(id)+"/", http.StatusFound)
+			return
+		}
+		http.Error(w, "preview authorization unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	http.Redirect(w, r, callback+"?state="+state+"&ticket="+ticket, 302)
