@@ -66,7 +66,7 @@ func (s *Server) handleChatUpload(w http.ResponseWriter, r *http.Request) {
 		s.chatRefuse(w, person, name, http.StatusRequestEntityTooLarge, "too_large", "文件太大：一个最多 20 MB · at most 20 MB a file")
 		return
 	}
-	home, ok, err := s.chatHomeOf(person)
+	home, ok, err := s.Store.EntryHomeOf(person)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

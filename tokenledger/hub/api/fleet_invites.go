@@ -157,9 +157,6 @@ func (s *Server) admitInviteAs(pid, kind, subject, name, invite string, now time
 		return "", err
 	}
 	_ = s.Store.HubAudit(actor, "invite", target, "ok", "邀请已使用 · invite used ("+inv.ID+", made by "+orDefault(inv.CreatedBy, "?")+")", now)
-	// an invited member speaks from their first line (task GXR5): the
-	// subscriptions an approved request gets, unless a list is already theirs
-	s.memberCredDefault(pid, "invite "+inv.ID+" used", "invite "+inv.ID+" by "+orDefault(inv.CreatedBy, "?"), now)
 	return "", nil
 }
 

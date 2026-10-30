@@ -7183,22 +7183,6 @@ drill_task_continue_entry() {
   SECS=$(since "$t0")
 }
 
-drill_invite_member_no_sub() {
-  local t0; t0=$(now); CAP=120
-  _drill_go_tests 'TestInviteLetsANewcomerIn' \
-    "$ROOT/tokenledger/hub/api/fleet_invites_test.go" \
-    '邀请进来的新成员当场有自己的订阅名单（"*"），第一句不被代理 403' ./hub/api || return 1
-  SECS=$(since "$t0")
-}
-
-drill_chat_first_home() {
-  local t0; t0=$(now); CAP=120
-  _drill_go_tests 'TestChatHomeSetsTheFirstHome' \
-    "$ROOT/tokenledger/hub/api/chat_home_ensure_test.go" \
-    '直奔对话的新成员第一次读对话就有家（set_by auto），不再说「你还没有家」' ./hub/api || return 1
-  SECS=$(since "$t0")
-}
-
 drill_task_continue_historical_outcome() {
   local t0; t0=$(now); CAP=120
   _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \

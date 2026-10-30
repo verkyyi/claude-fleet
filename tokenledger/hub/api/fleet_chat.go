@@ -122,7 +122,7 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		s.chatRefuse(w, person, chatHomeRoute, status, code, msg)
 		return
 	}
-	home, ok, err := s.chatHomeOf(person)
+	home, ok, err := s.Store.EntryHomeOf(person)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -387,7 +387,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.handleChatCached(w, r, person, provider)
 		return
 	}
-	home, ok, err := s.chatHomeOf(person)
+	home, ok, err := s.Store.EntryHomeOf(person)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

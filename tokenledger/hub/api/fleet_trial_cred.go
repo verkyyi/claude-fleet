@@ -93,15 +93,6 @@ func (s *Server) trialNoSub() bool {
 // when it has none, so approval does not cut off the subscription the trial
 // was using (strict mode would deny a member with no list).
 func (s *Server) trialCredOnConvert(pid, by string, now time.Time) {
-	s.memberCredDefault(pid, "trial converted", by, now)
-}
-
-// memberCredDefault gives a NEW member — a converted trial, an approved
-// request, a spent invite (task GXR5), an administrator's add — the trial's
-// allowance as their own list when they have none: in strict mode «no list»
-// is none, and their first line answered the proxy's raw 403. A list already
-// written for them (an administrator's narrowing, [] included) is kept.
-func (s *Server) memberCredDefault(pid, why, by string, now time.Time) {
 	settings, err := s.Store.FleetSettings()
 	if err != nil {
 		log.Printf("fleet: trial of %s: convert allowlist: %v", pid, err)
@@ -120,7 +111,7 @@ func (s *Server) memberCredDefault(pid, why, by string, now time.Time) {
 		return
 	}
 	if err := s.Store.AddCredAudit(store.CredAudit{Action: store.CredPolicy, PrincipalID: pid,
-		Detail: "user " + pid + ": unconfigured → " + value + " · " + why + " (" + TrialCredAllowKey + ") · by " + by}); err != nil {
+		Detail: "user " + pid + ": unconfigured → " + value + " · trial converted (" + TrialCredAllowKey + ") · by " + by}); err != nil {
 		log.Printf("fleet: trial of %s: convert allowlist audit: %v", pid, err)
 	}
 	s.settingAudit(by, key, "", value, now)

@@ -255,7 +255,6 @@ func (s *Server) addFleetUser(w http.ResponseWriter, r *http.Request) {
 	if created {
 		_ = s.Store.HubAudit(actor, "user.add", target, "ok", "as user", now)
 		log.Printf("hub users: %s added by %s", target, actor)
-		s.memberCredDefault(pid, "added by an administrator", actor, now)
 	}
 	var moved *store.RekeyResult
 	if machineLogin != "" {

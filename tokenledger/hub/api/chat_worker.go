@@ -110,7 +110,7 @@ func (s *Server) handleChatWorker(w http.ResponseWriter, r *http.Request, name s
 		return
 	}
 	_ = s.Store.TouchTrial(person, time.Now()) // a trial in use is not idle (claude-fleet#3590)
-	home, ok, err := s.chatHomeOf(person)
+	home, ok, err := s.Store.EntryHomeOf(person)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

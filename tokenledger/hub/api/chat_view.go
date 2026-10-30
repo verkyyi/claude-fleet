@@ -108,7 +108,7 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		}
 		fwd.Set("s", v)
 	}
-	home, ok, err := s.chatHomeOf(person)
+	home, ok, err := s.Store.EntryHomeOf(person)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
