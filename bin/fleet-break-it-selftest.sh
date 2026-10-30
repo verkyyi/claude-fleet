@@ -7711,6 +7711,14 @@ drill_chat_first_open_cold() {
 # the holder (chatRelayPeer) and a data half is handed on BEFORE it is verified
 # (claimedEndpoint). Go (hub/api + e2e chat_relay_replica_test.go: two replicas, a
 # front splitting the halves, a real signing agent), run when a toolchain is here.
+drill_chat_pod_no_ensure() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-node-supervisor-selftest.py" U_OnDemand.test_pod_ensure >"$WORK/chat-pod.log" 2>&1 || {
+    WHY="pod cold-start regression: $(tail -12 "$WORK/chat-pod.log")"; return 1;
+  }
+  SECS=$(since "$t0"); WHAT='pod 本登录首次 ensure 启动真实 svc 子进程并回答健康检查；普通机器、别的登录和 UID 不符仍拒绝'
+}
+
 drill_chat_relay_replica_hop() {
   CAP=180; local t0 out rc tests f="$ROOT/tokenledger/hub/api/ssh_relay.go"
   tests='TestChatRelayReplicaHop TestChatRelayReplicaNobodyHolds TestChatRelayReplicaSingleNeverProxies TestSSHRelayDataHalfOnOtherReplica'

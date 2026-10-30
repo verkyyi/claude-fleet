@@ -268,7 +268,15 @@ export async function newChat(p: Provider, signal?: AbortSignal): Promise<{ ok: 
   const r = await chatFetch(at(`${API}/new`, p), { method: "POST", headers: H, signal, body: "{}" }).catch(() => null);
   if (r?.ok) { clockOpened(`legacy:${p}`, t0, p); return { ok: true }; }
   const j = r ? await r.json().catch(() => ({})) : {};
-  return { ok: false, code: String(j.code || ""), error: String(j.error || (r ? `HTTP ${r.status}` : "")) };
+  return { ok: false, code: String(j.code || ""), error: chatError(j, r?.status) };
+}
+
+function chatError(j: { code?: string; error?: string }, status?: number): string {
+  if (status === 502 && j.code === "relay") return tr(
+    "你家的对话服务暂时没有响应，请稍后重试。",
+    "Your conversation service is not responding. Please try again shortly.",
+  );
+  return String(j.error || (status ? `HTTP ${status}` : ""));
 }
 
 // blockedBy: a limit the page knows of before the service refuses a turn (the
@@ -388,6 +396,12 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     if (!r || !r.ok) {
       if (r?.status === 401 && SITE) { location.assign("/app/signin"); return; }
       const code = String(j.code || "");
+      if (r?.status === 502 && code === "relay") {
+        setSync("offline");
+        setNotice(chatError(j, r.status));
+        setLoaded(true);
+        return;
+      }
       if (code === "home_reconnecting" || code === "home_down" || !r || r.status >= 500) {
         // the hub moved under the home's link (a deploy): it is back in seconds
         if (hadCopy.current || hadLocal.current) setSync("syncing");
@@ -409,7 +423,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     markFirst("home");
     setNotice("");
     setGate(null);
-    if (hadCopy.current || hadLocal.current) setSync("synced");
+    setSync(hadCopy.current || hadLocal.current ? "synced" : "");
     homeDefault.current = String(j.default || "");
     setBudget(j.budget && typeof j.budget === "object" ? j.budget : { blocked: false });
     setModels(j.models || []);
@@ -516,7 +530,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });
-        setItems((xs) => [...xs, { t: "error", msg: String(j.error || r.status) }]);
+        setItems((xs) => [...xs, { t: "error", msg: chatError(j, r.status) }]);
         return;
       }
       await readLines(r, (batch) => {
@@ -629,7 +643,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     try {
       const r = await chatFetch(at(`${API}/take`, provider), { method: "POST", headers: H, body: "{}" });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) setNotice(j.error || tr("没接过来，稍后再试", "Could not take it over; try again"));
+      if (!r.ok) setNotice(chatError(j, r.status) || tr("没接过来，稍后再试", "Could not take it over; try again"));
     } catch { setNotice(tr("没接过来，稍后再试", "Could not take it over; try again")); }
     setTaking(false);
     await load();

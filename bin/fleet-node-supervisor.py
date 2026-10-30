@@ -8529,7 +8529,12 @@ def _svc_args(rest):
     return opts, ex
 
 
-def _svc_root(what):
+def _svc_root(what, login=None):
+    # A user pod owns its register as its sole login, not root. Only the
+    # fixed on-demand ensure path opts in; verify the OS identity as well as
+    # the requested login. Shared nodes retain their root-only register.
+    if what == "ensure" and login and pod_self_uid(login) is not None:
+        return True
     if os.geteuid() != 0 and env("FLEET_NODE_TEST", "") != "1":
         print("fleet-node-supervisor: service %s writes root's register — run it as root "
               "(bin/fleet-service.sh runs it through sudo -n)" % what, file=sys.stderr)
@@ -8823,7 +8828,7 @@ def service_ensure(paths, login, name, tries):
         print("fleet-node-supervisor: %s is no on-demand service (%s)" % (name, ", ".join(sorted(SVC_ON_DEMAND))),
               file=sys.stderr)
         return 2
-    if not _svc_root("ensure"):
+    if not _svc_root("ensure", login):
         return 1
     ident = _svc_ident(login)
     if ident is None:
