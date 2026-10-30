@@ -17,6 +17,12 @@ spec:
         - name: ecr-pull
       containers:
         - name: ccquota
+          # 2Gi, not the base's 1Gi (2026-10-29): with requests queueing for a
+          # database connection, a replica held enough in-flight work to be
+          # OOM-killed at 1Gi — both at once, the hub 0/2 ready. The box has 16 GB.
+          resources:
+            limits:
+              memory: 2Gi
           envFrom:
             - configMapRef:
                 name: ccquota-site

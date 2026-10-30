@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -55,6 +56,18 @@ func (s *Server) RunHealth(ctx context.Context) {
 		}
 	}
 }
+
+// healthSlow is how long a probe may take before it counts as failed. The
+// hub's own entries are probed at /readyz, which reads the database: on
+// 2026-10-29 /healthz answered in 0.1 s while /readyz timed out on
+// hub_migrations and every API call queued for 10 s to minutes — the status
+// page stayed green. Slow is that outage's shape, so slow fails too.
+const healthSlow = 3 * time.Second
+
+// healthHubPath is what a probe of the hub's own entries asks: /readyz (a
+// database read with a 2 s deadline), never the always-200 /healthz.
+const healthHubPath = "/readyz"
+
 func healthHTTP(ctx context.Context, target string) error {
 	req, e := http.NewRequestWithContext(ctx, "GET", target, nil)
 	if e != nil {
@@ -97,15 +110,15 @@ func (s *Server) healthTargets() map[string]string {
 	for _, h := range ordered {
 		switch {
 		case strings.HasPrefix(h, "claudefleet."):
-			targets["claudefleet"] = "https://" + h + "/healthz"
+			targets["claudefleet"] = "https://" + h + healthHubPath
 		case strings.HasPrefix(h, "ccquota."):
-			targets["ccquota"] = "https://" + h + "/healthz"
+			targets["ccquota"] = "https://" + h + healthHubPath
 		case h == "tokenman.io":
-			targets["tokenman"] = "https://" + h + "/healthz"
+			targets["tokenman"] = "https://" + h + healthHubPath
 		}
 	}
 	if u, e := url.Parse(s.FleetPublicURL); e == nil && u.Host != "" {
-		targets["core"] = u.Scheme + "://" + u.Host + "/healthz"
+		targets["core"] = u.Scheme + "://" + u.Host + healthHubPath
 	}
 	if base := strings.TrimRight(os.Getenv("FLEET_NOTIFY_KF_URL"), "/"); base != "" {
 		targets["notify"] = base + "/healthz"
@@ -165,6 +178,9 @@ func (s *Server) probeHealth(ctx context.Context, now time.Time) {
 			if target := targets[k]; target != "" {
 				state = "ok"
 				err = healthHTTP(c, target)
+				if err == nil && time.Since(start) > healthSlow {
+					err = errors.New("slow")
+				}
 			}
 		}
 		cancel()
@@ -175,6 +191,11 @@ func (s *Server) probeHealth(ctx context.Context, now time.Time) {
 		created, e := s.Store.RecordHealthProbe(p, 3)
 		if e == nil && created {
 			s.notify("Service health: " + k + " failed 3 consecutive probes. /app/health")
+		}
+		// The record is a database write: when the database is what is failing,
+		// it fails too and the alert above never fires. Count those minutes here.
+		if s.healthUnrecorded.miss(k, p.State, e) {
+			s.notify("Service health: " + k + " failed 3 consecutive probes and the hub could not record them (database?). /app/health")
 		}
 	}
 	_ = s.Store.PruneHealth(now.Add(-8 * 24 * time.Hour))
@@ -364,4 +385,33 @@ func healthOverview(probes []store.HealthProbe, now time.Time) (string, map[stri
 
 func healthNotePublic(v string) bool {
 	return !strings.ContainsAny(v, "<>@/\\=") && !strings.Contains(strings.ToLower(v), "token") && !strings.Contains(v, "::") && !healthIPv6.MatchString(v) && !healthAddress.MatchString(v)
+}
+
+// healthUnrecorded counts, per component, consecutive failed probes whose
+// record could not be written, and says once when there are three in a row.
+type healthUnrecorded struct {
+	mu     sync.Mutex
+	fails  map[string]int
+	warned map[string]bool
+}
+
+// miss takes one probe's state and its record's error; true = notify now.
+func (u *healthUnrecorded) miss(k, state string, recErr error) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.fails == nil {
+		u.fails, u.warned = map[string]int{}, map[string]bool{}
+	}
+	if state != "failed" || recErr == nil {
+		if state == "ok" {
+			u.fails[k], u.warned[k] = 0, false
+		}
+		return false
+	}
+	u.fails[k]++
+	if u.fails[k] >= 3 && !u.warned[k] {
+		u.warned[k] = true
+		return true
+	}
+	return false
 }
