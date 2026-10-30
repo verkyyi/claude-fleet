@@ -13,7 +13,7 @@ name: fleet-ack status
 # A pull request may restore a cache its base branch saved: ci.yml's plan restores
 # the newest and `fleet-train-runner.sh pr-pick` takes fleet-ack only on a fresh
 # (≤ 30 min) «up» for a PR from this repo's own branch; anything else, or this
-# workflow not running at all, is ubuntu-latest (BREAK-IT pr-ack-down).
+# workflow not running at all, is ubuntu-24.04 (BREAK-IT pr-ack-down).
 #
 # FLEET_PR_RUNNER unset ⇒ the job is skipped and the gate reads nothing.
 on:
@@ -32,7 +32,7 @@ jobs:
   status:
     name: fleet-ack 在不在
     if: vars.FLEET_PR_RUNNER != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment: fleet-ack-probe
     steps:

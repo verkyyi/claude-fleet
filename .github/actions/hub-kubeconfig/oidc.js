@@ -2,7 +2,7 @@
 // GitHub OIDC → Aliyun STS → ACK short-lived kubeconfig (EPIC #1982 C1, issue #1983).
 //
 // Ported from acme-monorepo's .github/actions/prod-kubeconfig/oidc.js. Three
-// steps, Node's standard library only (ubuntu-latest has node 20; no aliyun CLI):
+// steps, Node's standard library only (ubuntu-24.04 has node 20; no aliyun CLI):
 //   ① ask GitHub for this job's OIDC token (`permissions: id-token: write`); its
 //      sub is `repo:verkyyi/claude-fleet:environment:prod` only for a job in the
 //      prod environment, which admits master only;

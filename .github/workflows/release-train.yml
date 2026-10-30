@@ -42,7 +42,7 @@ name: release train
 #                   — no new image then)
 #       `hub build`  when it does not: hub-deploy.yml phase build, beside the
 #                   tests, on the Linux runner the train picked (fleet-ack's
-#                   buildkitd + the registry's layer cache, else ubuntu-latest):
+#                   buildkitd + the registry's layer cache, else ubuntu-24.04):
 #                   prod-<sha7> labelled TRAIN_SHA, pushed — a red train's image
 #                   of the same sha is reused by the next (fleet-train-prebuild.sh)
 #       `hub / deploy`  once the train is green: phase deploy — no build; the
@@ -108,13 +108,13 @@ name: release train
 #     (bin/fleet-train-runner.sh pick, environment fleet-ack-probe: the runner
 #     app's token, master only) looks for an online fleet-ack runner — there ⇒
 #     the shards run on it and fetch TRAIN_SHA from the cluster's git mirror
-#     (FLEET_TRAIN_GIT_MIRROR) before GitHub; not there ⇒ ubuntu-latest, the summary
+#     (FLEET_TRAIN_GIT_MIRROR) before GitHub; not there ⇒ ubuntu-24.04, the summary
 #     says 「深圳不可用，退回 GitHub」. A shard whose spot runner went away mid-job
 #     (GitHub's «lost communication» / «shutdown signal») is no red: `红灯即停`
 #     waits, `Linux 补跑?` names those shards and `Linux rescue` reruns exactly them
-#     on ubuntu-latest (--shard K/N kept); the train ships when the rescue is green
+#     on ubuntu-24.04 (--shard K/N kept); the train ships when the rescue is green
 #     (BREAK-IT train-ack-reclaimed). The variable empty ⇒ no pick, no rescue: the
-#     Linux half is ubuntu-latest exactly as before (BREAK-IT train-ack-down).
+#     Linux half is ubuntu-24.04 exactly as before (BREAK-IT train-ack-down).
 #
 #   * a red train re-sends itself when its red was only a flake (issue #4913,
 #     BREAK-IT train-red-stalls): `next` (after the ledger, if: always()) judges
@@ -183,7 +183,7 @@ env:
 jobs:
   board:
     name: board
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       train_sha: ${{ steps.board.outputs.train_sha }}
@@ -235,7 +235,7 @@ jobs:
     name: quarantine
     needs: board
     if: needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -287,7 +287,7 @@ jobs:
     if: >-
       !cancelled() && needs.board.result == 'success' &&
       (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -342,11 +342,11 @@ jobs:
     # names a runner set. Its token reads the repo's runner list — the runner app's
     # (secret FLEET_RUNNERS_APP_KEY, var FLEET_RUNNERS_APP_ID) in an environment
     # that admits master only. Red or skipped here never holds the train: Linux
-    # then runs on ubuntu-latest.
+    # then runs on ubuntu-24.04.
     name: Linux 选机器
     needs: board
     if: (needs.board.outputs.skip == 'false' || needs.board.outputs.drill == 'true' || needs.board.outputs.flaky_drill != '') && vars.FLEET_TRAIN_RUNNER != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment: fleet-ack-probe
     outputs:
@@ -381,7 +381,7 @@ jobs:
   linux:
     name: Linux
     needs: [board, quarantine, plan, linux-pick]
-    # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
+    # !cancelled(): a skipped / red linux-pick only means ubuntu-24.04
     # linux_tests 0 (issue #4818): every selected test already passed on its PR
     # (fleet-train-reuse.sh, all REUSED) or nothing related changed — no runner
     # is started for a shard that would run nothing; `train` reads that skip as
@@ -416,7 +416,7 @@ jobs:
     name: Linux 补跑?
     needs: [board, linux]
     if: "!cancelled() && vars.FLEET_TRAIN_RUNNER != '' && needs.linux.result == 'failure'"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -449,7 +449,7 @@ jobs:
     with:
       sha: ${{ needs.board.outputs.train_sha }}
       base: ${{ needs.board.outputs.stable_sha }}
-      runs_on: ubuntu-latest
+      runs_on: ubuntu-24.04
       shards: ${{ needs.linux-rescue-plan.outputs.lost }}
       of: ${{ needs.linux-rescue-plan.outputs.total }}
       budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
@@ -473,7 +473,7 @@ jobs:
     name: 隔离
     needs: [board, quarantine, linux, linux-rescue]
     if: always() && needs.quarantine.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -527,7 +527,7 @@ jobs:
     name: 红灯即停
     needs: [board, plan]
     if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -555,7 +555,7 @@ jobs:
     name: precheck
     needs: board
     if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       statuses: read    # gate 9 (issue #4180)
@@ -592,7 +592,7 @@ jobs:
     # fail-fast is waited for (not judged) so `release`'s --train move finds it done.
     needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, fail-fast, gate, record]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: verdict
@@ -655,7 +655,7 @@ jobs:
     name: hub plan
     needs: board
     if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       deploy: ${{ steps.plan.outputs.deploy }}
@@ -709,7 +709,7 @@ jobs:
     # Its own stage in the ledger (`hub build / build`), apart from the deploy's.
     name: hub build
     needs: [board, hub-plan, linux-pick]
-    # !cancelled(): a skipped / red linux-pick only means ubuntu-latest
+    # !cancelled(): a skipped / red linux-pick only means ubuntu-24.04
     if: "!cancelled() && needs.hub-plan.outputs.deploy == 'true'"
     # GitHub checks EVERY job of the called workflow against this grant at parse
     # time — `deploy` too, though `phase: build` skips it. One scope short and the
@@ -743,7 +743,7 @@ jobs:
     if: >-
       needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true' &&
       (needs.hub-plan.outputs.deploy == 'false' || needs.hub-plan.outputs.node == 'same')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # the signer's public half is computed from the key here; nothing is signed
     environment: release-sign
@@ -787,7 +787,7 @@ jobs:
       needs.train.result == 'success' && needs.hub-plan.result == 'success' &&
       (needs.hub-build.result == 'success' || needs.hub-build.result == 'skipped') &&
       (needs.hub.result == 'success' || needs.hub.result == 'skipped')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # The release signing key lives here and nowhere else (issue #3559): the
     # release-sign environment's RELEASE_SIGN_KEY secret, read only by the
@@ -970,7 +970,7 @@ jobs:
     name: ledger
     needs: [board, quarantine, plan, linux-pick, linux, linux-rescue-plan, linux-rescue, record, fail-fast, gate, train, hub-plan, hub-build, hub, release-stage, release]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -1030,7 +1030,7 @@ jobs:
     name: next
     needs: [board, linux, linux-rescue-plan, linux-rescue, hub-plan, hub, release, ledger]
     if: always() && needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1135,7 +1135,7 @@ jobs:
     name: node tools
     needs: board
     if: needs.board.outputs.skip == 'false' && needs.board.outputs.drill != 'true' && vars.NODE_IMAGE_REPO != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: node-image
     permissions:
@@ -1238,7 +1238,7 @@ jobs:
     if: >-
       always() && needs.release.outputs.moved == 'true' &&
       needs.node-tools.result == 'success'
-    runs-on: ${{ needs.node-tools.outputs.reuse != '' && 'ubuntu-latest' || 'fleet-ack' }}
+    runs-on: ${{ needs.node-tools.outputs.reuse != '' && 'ubuntu-24.04' || 'fleet-ack' }}
     timeout-minutes: 20
     environment: node-image
     permissions:

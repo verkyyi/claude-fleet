@@ -105,7 +105,7 @@ def summary(a):
             "%d(%s)" % (k, "拒收" if why else c) for k, c, why in sorted(unrun))))
         if refused:
             print()
-            print("拒收：跑这些分片的 runner 不收这个 workflow — `%s`。夜跑只排 GitHub 自带的 ubuntu-latest"
+            print("拒收：跑这些分片的 runner 不收这个 workflow — `%s`。夜跑只排 GitHub 自带的 ubuntu-24.04"
                   "（bin/fleet-ci-job-gate.sh 只收列车）" % refused[0][2])
         return 1
     return 0

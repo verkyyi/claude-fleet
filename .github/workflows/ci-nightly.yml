@@ -50,7 +50,7 @@ permissions:
 
 jobs:
   board:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.board.outputs.sha }}
@@ -134,7 +134,7 @@ jobs:
     name: 汇总
     needs: [board, tokenledger, shellcheck, task-acceptance, client-e2e, fleet-hub-mcp, browser-attachment, hub-rolling, hub-deploy-check, cluster-perms, native-claude-worktree, native-managed-hooks, node-join, web-chat-ui, web-console]
     if: "!cancelled() && needs.board.result == 'success'"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read

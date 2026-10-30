@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 jobs:
   chromium:
-    # pinned: ubuntu-latest moved to 26.04, where `playwright install chromium` refuses
+    # pinned: ubuntu-24.04 moved to 26.04, where `playwright install chromium` refuses
     runs-on: ubuntu-24.04
     timeout-minutes: 24
     steps:

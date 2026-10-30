@@ -19,13 +19,13 @@
 #   train-own-runner-silent  our runner said idle but never took the shard: the
 #                       train's watcher reds + cancels it at the deadline (#3145)
 #   train-ack-down      FLEET_TRAIN_RUNNER=fleet-ack but no fleet-ack runner online,
-#                       no token or no answer: the Linux half runs on ubuntu-latest,
+#                       no token or no answer: the Linux half runs on ubuntu-24.04,
 #                       saying 深圳不可用; the variable empty asks nothing (#3864)
 #   selftest-part-id-mismatch  a test that runs 1/N of itself by default declares
 #                       no `# selftest-parts: N`: the runner refuses (exit 2) instead
 #                       of running one slice as the whole test (T525)
 #   nightly-refused-by-runner  the nightly's shards sent to the train's pool, whose
-#                       job gate refused every one: it runs on ubuntu-latest, and a
+#                       job gate refused every one: it runs on ubuntu-24.04, and a
 #                       shard that never ran is said 拒收, not a red test (T517)
 #   train-ack-reclaimed a spot node reclaimed mid-shard: the lost shard is not red,
 #                       fail-fast waits for its rescue; a test's red still cancels (#3864)
@@ -106,7 +106,7 @@
 #                       workflow's or one with no event file never runs a step
 #   pr-ack-down         FLEET_PR_RUNNER=fleet-ack but the cluster's last word is old,
 #                       missing or «down», or the PR is a fork's: its checks run on
-#                       ubuntu-latest, never queued for a day on fleet-ack (#4821)
+#                       ubuntu-24.04, never queued for a day on fleet-ack (#4821)
 # shellcheck disable=SC2034  # CAP / SECS / WHY / WHAT are read by the sourced runner
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
@@ -234,14 +234,14 @@ G
 }
 
 # The release train's Linux half in the Shenzhen cluster (issue #3864, EPIC #3863
-# C1): fleet-ack when asked and up, ubuntu-latest otherwise — the train runs either way.
+# C1): fleet-ack when asked and up, ubuntu-24.04 otherwise — the train runs either way.
 drill_train_ack_down() {
   CAP=30
   local t0 d out wf
   [ -x "$BIN/fleet-train-runner.sh" ] || { WHY="no bin/fleet-train-runner.sh"; return 1; }
   wf="$BIN/../.github/workflows/release-train.yml"
   grep -q "runs_on: \${{ needs.linux-pick.outputs.linux_runs_on || 'ubuntu-24.04' }}" "$wf" \
-    || { WHY="release-train.yml's Linux half does not fall back to ubuntu-latest without a pick"; return 1; }
+    || { WHY="release-train.yml's Linux half does not fall back to ubuntu-24.04 without a pick"; return 1; }
   sed -n '/^  linux-pick:/,/^  linux:/p' "$wf" | grep -q "vars.FLEET_TRAIN_RUNNER != ''" \
     || { WHY="linux-pick runs with FLEET_TRAIN_RUNNER empty"; return 1; }
   # a job after `train` reads train's verdict, never the implicit success(): train
@@ -259,7 +259,7 @@ drill_train_ack_down() {
   pick() { GITHUB_OUTPUT="$d/out" FLEET_TRAIN_GIT_MIRROR=git://mirror/claude-fleet.git bash "$BIN/fleet-train-runner.sh" pick "$@" 2>/dev/null; }
   out=$(FLEET_TRAIN_RUNNER='' pick --runners-file "$d/up.json")
   case "$out" in *'linux_runs_on=ubuntu-24.04'*'linux_where=github'*'linux_mirror='|*'linux_mirror='$'\n'*) ;;
-    *) WHY="the variable empty, the pick was not ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
+    *) WHY="the variable empty, the pick was not ubuntu-24.04: $out"; rm -rf "$d"; return 1 ;; esac
   out=$(FLEET_TRAIN_RUNNER=fleet-ack pick --runners-file "$d/up.json")
   case "$out" in *'linux_runs_on=["fleet-ack"]'*'linux_where=fleet-ack'*'linux_mirror=git://mirror/claude-fleet.git'*) ;;
     *) WHY="a fleet-ack runner online, the pick was not fleet-ack + the mirror: $out"; rm -rf "$d"; return 1 ;; esac
@@ -270,12 +270,12 @@ drill_train_ack_down() {
       notoken) out=$(FLEET_TRAIN_RUNNER=fleet-ack FLEET_TRAIN_RUNNER_TOKEN='' pick --repo o/r) ;;
     esac
     case "$out" in *'linux_runs_on=ubuntu-24.04'*'linux_where=github'*'深圳不可用，退回 GitHub'*) ;;
-      *) WHY="($c) the train did not fall back to ubuntu-latest saying 深圳不可用: $out"; rm -rf "$d"; return 1 ;; esac
+      *) WHY="($c) the train did not fall back to ubuntu-24.04 saying 深圳不可用: $out"; rm -rf "$d"; return 1 ;; esac
     case "$out" in *'linux_mirror=git'*) WHY="($c) a GitHub runner was handed the cluster mirror"; rm -rf "$d"; return 1 ;; esac
   done
   grep -q '^linux_runs_on=' "$d/out" || { WHY="the pick wrote nothing to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="fleet-ack 缩到 0 / 离线 / 没令牌：Linux 退回 ubuntu-latest、摘要写深圳不可用；有在线的才排 fleet-ack + 集群镜像；变量空什么都不问"
+  WHAT="fleet-ack 缩到 0 / 离线 / 没令牌：Linux 退回 ubuntu-24.04、摘要写深圳不可用；有在线的才排 fleet-ack + 集群镜像；变量空什么都不问"
 }
 
 drill_train_ack_reclaimed() {
@@ -333,7 +333,7 @@ G
     bash "$BIN/fleet-train-failfast.sh" --repo o/r --run 77 --every 1 --deadline 5 2>&1); rc=$?
   [ "$rc" = 1 ] || { WHY="without --lost-ok a lost shard was not red: exit $rc: $out"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="抢占回收一台：丢 runner 的那片不算红、等它在 ubuntu-latest 上按原 K/N 补跑，补跑绿列车照发；旁边有真红照旧取消；变量空一切照旧"
+  WHAT="抢占回收一台：丢 runner 的那片不算红、等它在 ubuntu-24.04 上按原 K/N 补跑，补跑绿列车照发；旁边有真红照旧取消；变量空一切照旧"
 }
 
 # The release train's forecast and its cut-short rerun (issue #3241, EPIC #3139 C9).
@@ -1559,7 +1559,7 @@ drill_ci_ack_pr_fork() {
 # while the set is gone waits a day. So fleet-ack-status.yml (schedule, master) asks
 # the list every 10 minutes and leaves its answer in the Actions cache; the gate's
 # plan (fleet-train-runner.sh pr-pick) sends a PR's heavy checks to fleet-ack only on
-# a fresh «up» for THIS repo's own branch — old, missing, down or a fork ⇒ ubuntu-latest.
+# a fresh «up» for THIS repo's own branch — old, missing, down or a fork ⇒ ubuntu-24.04.
 drill_pr_ack_down() {
   CAP=30
   local t0 d out c ci wf st
@@ -1569,8 +1569,8 @@ drill_pr_ack_down() {
   grep -q 'head.repo.fork' "$ci" || { WHY="ci.yml's pick is not told the PR is a fork's"; return 1; }
   grep -q 'fleet-ack-status-' "$ci" && grep -q 'fleet-ack-status-' "$st" 2>/dev/null \
     || { WHY="no fleet-ack-status.yml leaving the cluster's last word where ci.yml reads it"; return 1; }
-  grep -q "runs-on: \${{ startsWith(inputs.runs_on, '\[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}" "$wf" \
-    || { WHY="tokenledger.yml's jobs do not fall back to ubuntu-latest without a pick"; return 1; }
+  grep -q "runs-on: \${{ startsWith(inputs.runs_on, '\[') && fromJSON(inputs.runs_on) || 'ubuntu-24.04' }}" "$wf" \
+    || { WHY="tokenledger.yml's jobs do not fall back to ubuntu-24.04 without a pick"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/pr-ack.XXXXXX"); t0=$(now)
   printf 'ts=%s\nlinux_where=fleet-ack\nlinux_why=fleet-ack: 2 online (0 busy)\n' "$(date +%s)" > "$d/up"
   printf 'ts=%s\nlinux_where=fleet-ack\nlinux_why=fleet-ack: 2 online (0 busy)\n' "$(( $(date +%s) - 7200 ))" > "$d/old"
@@ -1578,7 +1578,7 @@ drill_pr_ack_down() {
   pick() { GITHUB_OUTPUT="$d/out" GITHUB_REPOSITORY=o/r bash "$BIN/fleet-train-runner.sh" pr-pick "$@" 2>/dev/null; }
   out=$(FLEET_PR_RUNNER='' pick --status "$d/up" --head-repo o/r --fork false)
   case "$out" in *'pr_runs_on=ubuntu-24.04'*'pr_where=github'*) ;;
-    *) WHY="the variable empty, the pick was not ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
+    *) WHY="the variable empty, the pick was not ubuntu-24.04: $out"; rm -rf "$d"; return 1 ;; esac
   out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo o/r --fork false)
   case "$out" in *'pr_runs_on=["fleet-ack"]'*'pr_where=fleet-ack'*) ;;
     *) WHY="a fresh «up», this repo's branch: the pick was not fleet-ack: $out"; rm -rf "$d"; return 1 ;; esac
@@ -1591,17 +1591,17 @@ drill_pr_ack_down() {
       flagged) out=$(FLEET_PR_RUNNER=fleet-ack pick --status "$d/up" --head-repo o/r --fork true) ;;
     esac
     case "$out" in *'pr_runs_on=ubuntu-24.04'*'pr_where=github'*) ;;
-      *) WHY="($c) the PR's checks were not sent to ubuntu-latest: $out"; rm -rf "$d"; return 1 ;; esac
+      *) WHY="($c) the PR's checks were not sent to ubuntu-24.04: $out"; rm -rf "$d"; return 1 ;; esac
   done
   grep -q '^pr_runs_on=' "$d/out" || { WHY="the pick wrote nothing to GITHUB_OUTPUT"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="PR 的重检查：集群最近一句是「在」且不超过 30 分钟、本仓库分支 ⇒ fleet-ack；过期 / 没有 / 不在 / fork ⇒ ubuntu-latest；变量空什么都不读"
+  WHAT="PR 的重检查：集群最近一句是「在」且不超过 30 分钟、本仓库分支 ⇒ fleet-ack；过期 / 没有 / 不在 / fork ⇒ ubuntu-24.04；变量空什么都不读"
 }
 
 # The nightly full run sent to a runner that refuses it (T517, EPIC T516 C1): its
 # shards went to the train's fleet-ack pool, whose job gate takes only the merged
 # train — 2026-10-14..19 every shard was refused before a step and the run read as
-# six red nights of tests. Now it runs on ubuntu-latest, and a shard that never ran
+# six red nights of tests. Now it runs on ubuntu-24.04, and a shard that never ran
 # is said (拒收 / 没跑) by bin/fleet-nightly-report.py, never read as a red test.
 drill_nightly_refused_by_runner() {
   CAP=30
@@ -1609,8 +1609,8 @@ drill_nightly_refused_by_runner() {
   wf="$BIN/../.github/workflows/selftests-nightly.yml"
   grep -Eq 'fleet-train-runner\.sh (pick|lost)|vars\.FLEET_TRAIN_RUNNER' "$wf" \
     && { WHY="selftests-nightly.yml still sends its shards to the train's pool"; return 1; }
-  awk '/^  linux:/{o=1; next} o && /^  [a-z]/{o=0} o' "$wf" | grep -q '^      runs_on: ubuntu-latest$' \
-    || { WHY="selftests-nightly.yml's Linux shards do not run on ubuntu-latest"; return 1; }
+  awk '/^  linux:/{o=1; next} o && /^  [a-z]/{o=0} o' "$wf" | grep -q '^      runs_on: ubuntu-24.04$' \
+    || { WHY="selftests-nightly.yml's Linux shards do not run on ubuntu-24.04"; return 1; }
   grep -q 'fleet-nightly-report.py summary' "$wf" && grep -q 'name: selftests-baseline' "$wf" \
     || { WHY="selftests-nightly.yml does not read its shards through fleet-nightly-report.py / keep selftests-baseline"; return 1; }
   d=$(mktemp -d "${TMPDIR:-/tmp}/nightly-refused.XXXXXX"); t0=$(now)

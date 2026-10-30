@@ -50,18 +50,18 @@ set from GitHub).
 | Piece | What |
 |---|---|
 | node pool `fleet-ci` (`fleet-ci-nodepool.example.json`) | spot, 16 cores (several instance types against a stock-out), autoscaled **0–3** — the cluster's cap is 10 nodes and the rest is not ours; label + taint `fleet-ci=true`, so only fleet-ack's pods land there. A runner pod asks 1 vCPU / 2 GiB ⇒ about 14 a node |
-| image `fleet-ci-runner` (`extras/ci-runner/`) | the official ARC runner image (Ubuntu 24.04, passwordless sudo — what the selftests were written against on ubuntu-latest) + what ubuntu-latest carries that they reach for (tmux 3.4, zsh, shellcheck, …; no fzf, as there), Go 1.25 with tokenledger's modules, Node 22, buildctl + the actions a shard uses; its job-started hook is `bin/fleet-ci-job-gate.sh` (only this repo's master push / dispatch / schedule runs of `CI_GATE_WORKFLOWS`, never a pull request — the pod needs `allowPrivilegeEscalation: true` for sudo); tag = `extras/ci-runner/tag.sh`, built and pushed by `.github/workflows/ci-runner-image.yml` on fleet-ack only when the tag is new (role `gha-claudefleet-ci-runner`, environment `ci-runner`) |
+| image `fleet-ci-runner` (`extras/ci-runner/`) | the official ARC runner image (Ubuntu 24.04, passwordless sudo — what the selftests were written against on ubuntu-24.04) + what ubuntu-24.04 carries that they reach for (tmux 3.4, zsh, shellcheck, …; no fzf, as there), Go 1.25 with tokenledger's modules, Node 22, buildctl + the actions a shard uses; its job-started hook is `bin/fleet-ci-job-gate.sh` (only this repo's master push / dispatch / schedule runs of `CI_GATE_WORKFLOWS`, never a pull request — the pod needs `allowPrivilegeEscalation: true` for sudo); tag = `extras/ci-runner/tag.sh`, built and pushed by `.github/workflows/ci-runner-image.yml` on fleet-ack only when the tag is new (role `gha-claudefleet-ci-runner`, environment `ci-runner`) |
 | `fleet-git-mirror` (`fleet-ci.example.yaml`) | a read-only mirror of this repo on the always-on CI node; a shard, the ci-runner image and the node image (#4109) fetch their commit there (repo variable `FLEET_TRAIN_GIT_MIRROR`, e.g. `git://fleet-git-mirror.arc-runners:9418/claude-fleet.git`), GitHub when it does not have it within ~60 s |
 | `fleet-ci-prepull` | the runner image pulled onto each fleet-ci node as it joins |
 | `fleet-ack-night` | minRunners 0 from 01:00 to 08:00 Beijing (the pool then empties to 0 by itself), 2 at 08:00 |
 | environment `fleet-ack-probe` | the train's `Linux 选机器` job: var `FLEET_RUNNERS_APP_ID` + secret `FLEET_RUNNERS_APP_KEY` (the runner app above, master only) — it reads the repo's runner list, nothing else |
 
 Switch: repo variable `FLEET_TRAIN_RUNNER` — unset = the Linux half on
-`ubuntu-latest` exactly as before; `fleet-ack` = the cluster first. No online
+`ubuntu-24.04` exactly as before; `fleet-ack` = the cluster first. No online
 fleet-ack runner (night, the set scaled to 0, the controller down, no token) ⇒
-`ubuntu-latest`, the summary says 「深圳不可用，退回 GitHub」 (BREAK-IT
+`ubuntu-24.04`, the summary says 「深圳不可用，退回 GitHub」 (BREAK-IT
 `train-ack-down`). A shard whose spot node is reclaimed mid-job is rerun on
-`ubuntu-latest` as `Linux rescue / shard K` and the train ships (BREAK-IT
+`ubuntu-24.04` as `Linux rescue / shard K` and the train ships (BREAK-IT
 `train-ack-reclaimed`).
 
 ## This repo's own PRs on fleet-ack (issue #4821)
@@ -70,7 +70,7 @@ The PR gate's heavy checks — tokenledger's lint / `-race` tests / cross-compil
 the selftest shards — run here for a PR whose head is a branch of THIS repo (never
 a fork's) when the repo variable `FLEET_PR_RUNNER=fleet-ack` asks and
 `fleet-ack-status.yml` (every 10 minutes on master, environment `fleet-ack-probe`)
-said «up» within 30 minutes; otherwise `ubuntu-latest` (docs/dev/CI.md, BREAK-IT
+said «up» within 30 minutes; otherwise `ubuntu-24.04` (docs/dev/CI.md, BREAK-IT
 `pr-ack-down`). The scale set must carry `CI_GATE_PR_WORKFLOWS=ci.yml`: the job gate
 then takes a `pull_request` of `ci.yml` only when its event says the head is this
 repo, not a fork, base master, no bot (BREAK-IT `ci-ack-pr-fork`); without it every

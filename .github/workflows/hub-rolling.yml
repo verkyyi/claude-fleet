@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   drill:
-    # pinned: kind cannot import images on ubuntu-latest's 26.04 (task DDBQ)
+    # pinned: kind cannot import images on ubuntu-24.04's 26.04 (task DDBQ)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

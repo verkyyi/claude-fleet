@@ -687,9 +687,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   `--changed <stable>` on Linux only (macOS follows the release — below), then `fleet-stable.sh move --precheck`;
 with the repo variable `FLEET_TRAIN_RUNNER=fleet-ack` its Linux half runs in the
 Shenzhen cluster (issue #3864: `bin/fleet-train-runner.sh pick`, an online fleet-ack
-runner else ubuntu-latest; TRAIN_SHA from the in-cluster git mirror; a shard whose
-spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` /
-`train-ack-reclaimed`, deploy/k8s/runners/README.md); empty = ubuntu-latest, byte for byte;
+runner else ubuntu-24.04; TRAIN_SHA from the in-cluster git mirror; a shard whose
+spot node was reclaimed is rerun on ubuntu-24.04 — BREAK-IT `train-ack-down` /
+`train-ack-reclaimed`, deploy/k8s/runners/README.md); empty = ubuntu-24.04, byte for byte;
   then ONE commit goes out (#3142) — the hub via `hub-deploy.yml`'s own job called
   with `sha=TRAIN_SHA` (built BESIDE the tests since #3867: `hub plan` right after board, `hub build` = phase build on the train's Linux runner — fleet-ack's buildkitd + the registry's layer cache — pushing `prod-<sha7>` labelled TRAIN_SHA; `hub / deploy` = phase deploy, no build, refuses a tag whose digest / revision is not that build's — `bin/fleet-train-prebuild.sh`, BREAK-IT `train-prebuild-wrong-sha`; a train whose hub keeps TRAIN_SHA's node source (no redeploy, or a hub-only one — `hub plan`'s `node=same`, #4818) stages its release meanwhile, `fleet-release-publish.sh --stage`, and `release` only `--commit`s it: check · sign · one POST, a stage lives 30 min; skipped when `bin/fleet-train-hub.sh` finds the hub already
   TRAIN_SHA's Go source and `deploy/k8s/`, and never backwards: a hub on a later or forked commit is left as `hub superseded`, an unreadable `/version` is red — #3319, BREAK-IT `train-hub-backwards`), `fleet-release-publish.sh TRAIN_SHA`,
@@ -730,7 +730,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   merged at once in a clone of its own, the train ships it; `--hub-tag` puts the
   hub back on that image now). **The selection's backstop is a nightly full run**
   (issue #3871): `selftests-nightly.yml` runs the whole Linux suite on stable at
-  06:17 Beijing (GitHub's ubuntu-latest — never the train's pool, whose job gate
+  06:17 Beijing (GitHub's ubuntu-24.04 — never the train's pool, whose job gate
   refuses it, T517 — `fleet-train-plan.sh --full`, no rerun, no quarantine; a shard
   that never ran is said 拒收 by `bin/fleet-nightly-report.py`, and the night's
   numbers are the artifact `selftests-baseline`); a red there is its run's red (the miss tracer left with #4900 —
@@ -777,7 +777,7 @@ spot node was reclaimed is rerun on ubuntu-latest — BREAK-IT `train-ack-down` 
   a test getting slower surfaces on the run that made it slower — not on the run
   that went red.
 - **The gate has a BSD half now — CI is no longer ubuntu-only** (issue #696).
-  Every workflow used to be `runs-on: ubuntu-latest`, while every place the
+  Every workflow used to be `runs-on: ubuntu-24.04`, while every place the
   operator actually runs the gate (a worker pane, the live install) is macOS, so
   a GNU-only idiom was green in CI and broken on the only machine that matters.
   #689 was that: a GNU-only `\|` alternation in a sed BRE, which BSD sed matches

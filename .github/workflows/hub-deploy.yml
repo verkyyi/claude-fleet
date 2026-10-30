@@ -23,7 +23,7 @@ name: hub-deploy
 #     It calls it TWICE (issue #3867, EPIC #3863 C4): `phase: build` the moment
 #     the train boards — the `build` job alone, on the train's Linux runner (the
 #     Shenzhen cluster's fleet-ack and its buildkitd when the train picked it,
-#     else ubuntu-latest), pushes prod-<sha7> labelled with TRAIN_SHA while the
+#     else ubuntu-24.04), pushes prod-<sha7> labelled with TRAIN_SHA while the
 #     tests run (`bin/fleet-train-prebuild.sh look`: an image of that sha already
 #     there is reused) — then `phase: deploy` once they are green, which builds
 #     nothing and deploys only the image that build reported (`verify`: the tag's
@@ -58,7 +58,7 @@ name: hub-deploy
 # Where the hub runs (task PNWW): repo variable FLEET_HUB_TARGET. `ack` (unset =
 # ack) is everything above, byte for byte. `aws-k3s` is the one EC2 box running
 # k3s in us-west-2 (deploy/aws/README.md): the build phase pushes the image to
-# ECR (HUB_PUSH_REPO_AWS) on ubuntu-latest, through GitHub's OIDC token traded
+# ECR (HUB_PUSH_REPO_AWS) on ubuntu-24.04, through GitHub's OIDC token traded
 # for AWS role AWS_DEPLOY_ROLE_ARN; the `deploy` job is skipped and `deploy-aws`
 # runs instead — the same pause gate, the same "never backwards" read of the
 # hub's /version, the same fleet-train-prebuild.sh verify of the digest and
@@ -91,10 +91,10 @@ on:
         required: false
         default: ''
       runs_on:
-        description: "phase build: where it builds — ubuntu-latest, or the train's JSON label list (e.g. [\"fleet-ack\"]: the cluster's buildkitd)"
+        description: "phase build: where it builds — ubuntu-24.04, or the train's JSON label list (e.g. [\"fleet-ack\"]: the cluster's buildkitd)"
         type: string
         required: false
-        default: ubuntu-latest
+        default: ubuntu-24.04
       digest:
         description: "phase deploy: the digest the build phase pushed (or kept) — the deploy refuses any other image"
         type: string
@@ -170,7 +170,7 @@ jobs:
   # releases are off.
   gate:
     if: github.event_name != 'pull_request' && inputs.phase != 'build'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -206,14 +206,14 @@ jobs:
   # console, the website — then the image, labelled with TRAIN_SHA. On the cluster's
   # fleet-ack runner it is the cluster's buildkitd (buildctl, native amd64, the
   # registry's VPC endpoint, its layer cache `<repo>:buildcache` in the registry —
-  # no GitHub cache across the Pacific); on ubuntu-latest buildx with GitHub's
+  # no GitHub cache across the Pacific); on ubuntu-24.04 buildx with GitHub's
   # cache as before. The same sha's image already in the registry (a red train's)
   # is reused. Pushing a tag deploys nothing: the deploy phase does that, after
   # the tests, and only this digest.
   build:
     if: inputs.phase == 'build'
     # FLEET_HUB_TARGET=aws-k3s: ECR is in us-west-2 — GitHub's runner, never the Shenzhen pool
-    runs-on: ${{ vars.FLEET_HUB_TARGET == 'aws-k3s' && 'ubuntu-latest' || startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
+    runs-on: ${{ vars.FLEET_HUB_TARGET == 'aws-k3s' && 'ubuntu-24.04' || startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || inputs.runs_on }}
     environment: prod
     timeout-minutes: 30
     permissions:
@@ -358,8 +358,8 @@ jobs:
           [[ "$d" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for $PUSH_REPO:$TAG"; exit 1; }
           echo "digest=$d" >> "$GITHUB_OUTPUT"
           how=built; [ -z "$REUSED" ] || how='reused (that sha'"'"'s image was there)'
-          where=ubuntu-latest; [ "$ACK" != true ] || where='fleet-ack · buildkitd'
-          [ "$AWS" != true ] || where="ubuntu-latest · ECR · $HUB_PLATFORM"
+          where=ubuntu-24.04; [ "$ACK" != true ] || where='fleet-ack · buildkitd'
+          [ "$AWS" != true ] || where="ubuntu-24.04 · ECR · $HUB_PLATFORM"
           echo "### 入口镜像 \`$TAG\`：$how · $where · \`$d\`" >> "$GITHUB_STEP_SUMMARY"
 
       # FLEET_HUB_TARGET=aws-k3s + HUB_MIRROR_ACR=1 (task J7BN): the mainland
@@ -402,7 +402,7 @@ jobs:
     # FLEET_HUB_TARGET=aws-k3s: `deploy-aws` below instead (unset = this job, as always)
     if: github.event_name != 'pull_request' && inputs.phase != 'build' && needs.gate.outputs.go == 'true' && vars.FLEET_HUB_TARGET != 'aws-k3s'
     needs: [check, gate]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: prod
     timeout-minutes: 45
     permissions:
@@ -1045,7 +1045,7 @@ jobs:
   deploy-aws:
     if: github.event_name != 'pull_request' && inputs.phase != 'build' && needs.gate.outputs.go == 'true' && vars.FLEET_HUB_TARGET == 'aws-k3s'
     needs: [check, gate]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: prod
     timeout-minutes: 45
     permissions:

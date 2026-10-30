@@ -8,7 +8,7 @@
 #
 # pick (the train's `board` job): the Shenzhen cluster's fleet-ack runners when the
 #   repo variable FLEET_TRAIN_RUNNER (--runner) says `fleet-ack` and the set is up,
-#   GitHub's ubuntu-24.04 otherwise (pinned: ubuntu-latest moved to 26.04, where
+#   GitHub's ubuntu-24.04 otherwise (pinned: ubuntu-24.04 moved to 26.04, where
 #   playwright has no chromium and several selftests go red — task DDBQ). Up = a runner of that set is registered and
 #   online right now (GitHub's runner list — ARC keeps minRunners idle ones
 #   registered while the set lives, named <set>-<hash>-runner-<id> with NO label;

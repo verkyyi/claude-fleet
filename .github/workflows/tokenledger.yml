@@ -69,9 +69,9 @@ on:
       # plan, fleet-train-runner.sh pr-pick) — lint, test and cross-compile; the
       # Postgres leg stays on GitHub's (its service container needs Docker)
       runs_on:
-        description: 'runner labels: ubuntu-latest, or a JSON list (["fleet-ack"])'
+        description: 'runner labels: ubuntu-24.04, or a JSON list (["fleet-ack"])'
         type: string
-        default: ubuntu-latest
+        default: ubuntu-24.04
   workflow_dispatch:
 
 defaults:
@@ -104,7 +104,7 @@ jobs:
   # so setup-go and the Actions cache (an ocean away) are skipped there, and
   # the summary's reuse line counts what the image held.
   lint:
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -148,7 +148,7 @@ jobs:
           key: go-${{ runner.os }}-lint-lint-${{ hashFiles('tokenledger/*/go.sum') }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   test:
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix:
@@ -321,7 +321,7 @@ jobs:
   # (bin/go-test-shard.sh), PG_API_SHARDS of them as the plan sized it.
   tokenledger-pg:
     if: github.event_name == 'workflow_dispatch' || inputs.pg_parts != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -505,7 +505,7 @@ jobs:
   # four matrix jobs each waited 2-11 minutes for a runner of its own.
   cross-compile:
     if: github.event_name == 'workflow_dispatch' || inputs.build != ''
-    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-latest' }}
+    runs-on: ${{ startsWith(inputs.runs_on, '[') && fromJSON(inputs.runs_on) || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
