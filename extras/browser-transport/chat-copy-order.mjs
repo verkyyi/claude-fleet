@@ -17,7 +17,7 @@ const browser = await chromium.launch()
 
 // serve: the console with its chat answered by conv() (the home) and copy()
 // (the entry's copy, null = none kept); each may wait on a promise first.
-async function open(context, { conv, copy }) {
+async function open(context, { conv, copy, status = () => 200 }) {
   const page = await context.newPage()
   const seen = { reads: 0, copies: 0 }
   await page.route('**/*', async route => {
@@ -30,7 +30,7 @@ async function open(context, { conv, copy }) {
       const c = await copy()
       return c ? json(c) : route.fulfill({ status: 404, json: { code: 'no_copy', error: 'no copy kept' } })
     }
-    if (path === `${api}/conversation`) { seen.reads++; return json(await conv()) }
+    if (path === `${api}/conversation`) { seen.reads++; return route.fulfill({ status: status(), json: await conv() }) }
     if (path === '/v1/chat/home') return json({ state: 'ok', direct: false })
     if (path === '/v1/me') return json({ person: 'test-person', name: 'Alice', role: 'member' })
     if (path.startsWith('/v1/') || path.startsWith('/api/')) return json({})
@@ -43,9 +43,37 @@ async function open(context, { conv, copy }) {
 const convo = (...lines) => ({ session: 's1', items: lines.flatMap(([u, a]) => [{ t: 'user', text: u }, { t: 'text', d: a }]) })
 
 try {
+  // A cold pod that cannot start webchat is a service failure, not a link
+  // reconnect. Explain it in Chinese, do not run the fast retry loop, and
+  // recover on the next ordinary read without replaying a user message.
+  {
+    const context = await browser.newContext({ locale: 'zh-CN' })
+    try {
+      let broken = true
+      await context.clock.install()
+      const { page, seen } = await open(context, {
+        conv: async () => broken ? { code: 'relay', error: 'the conversation service did not answer' } : convo(['hello', 'recovered']),
+        copy: async () => null,
+        status: () => broken ? 502 : 200,
+      })
+      await page.goto(origin + '/app/chat')
+      await page.getByText('你家的对话服务暂时没有响应，请稍后重试。', { exact: true }).waitFor()
+      assert.equal(await page.getByText('the conversation service did not answer').count(), 0)
+      assert.equal(await page.getByText('正在重连你的家', { exact: false }).count(), 0)
+      const before = seen.reads
+      await context.clock.runFor(20_000)
+      assert.equal(seen.reads, before, 'relay failures must not enter the fast reconnect loop')
+      broken = false
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+      await page.getByText('recovered', { exact: true }).waitFor()
+      assert.equal(await page.getByText('你家的对话服务暂时没有响应，请稍后重试。', { exact: true }).count(), 0)
+      console.log('PASS pod relay: Chinese service error, no fast retry, recovers on ordinary read')
+    } finally { await context.close() }
+  }
+
   // 1. the home answers first, the copy arrives after it: the home's stays
   {
-    const context = await browser.newContext()
+    const context = await browser.newContext({ locale: 'zh-CN' })
     try {
       let release
       const late = new Promise(resolve => { release = resolve })
@@ -67,7 +95,7 @@ try {
   // 2. two browsers of one person: what the first did reaches the second — on
   //    focus at once, and by itself while it stays on screen
   {
-    const context = await browser.newContext()
+    const context = await browser.newContext({ locale: 'zh-CN' })
     try {
       let state = convo(['q1', 'a1'])
       await context.clock.install()

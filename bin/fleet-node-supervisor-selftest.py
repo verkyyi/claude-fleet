@@ -3421,6 +3421,47 @@ os.unlink(idle); os.unlink(s); sys.exit(75)
         self.assertEqual(ent["state"], "enabled")  # U6
         return idle
 
+    def test_pod_ensure(self):
+        """No test-mode root bypass: the pod's own login registers and runs svc."""
+        self.stub_webchat()
+        uid = os.geteuid() or 501
+        ident = (uid, os.getgid(), self.home)
+        env = dict(self.env, FLEET_NODE_TEST="0", FLEET_NODE_PROFILE="user-pod",
+                   FLEET_POD_LOGIN="alice", FLEET_NODE_ENSURE_SECS="3")
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(fns, "MAC", False), \
+                mock.patch.object(fns.os, "geteuid", return_value=uid), \
+                mock.patch.object(fns, "account_ident", return_value=ident):
+            paths = fns.Paths()
+            # Keep the production pod child table. Its machine files are absent,
+            # so only the newly registered service is eligible to start.
+            sup = fns.Supervisor(paths, fns.default_table(paths))
+            sup.ensure_dirs()
+            healthy = fns._sock_healthy
+
+            def tick(sock):
+                sup.tend_children()
+                return healthy(sock)
+
+            try:
+                with mock.patch.object(fns, "_sock_healthy", side_effect=tick):
+                    self.assertEqual(fns.service_ensure(paths, "alice", "webchat", 1), 0)
+                child = sup.procs["svc:alice/webchat"]
+                self.assertIsNone(child.poll())
+                self.assertEqual(set(sup.procs), {"svc:alice/webchat"})
+                self.assertEqual(fns.service_ensure(paths, "alice", "webchat", 1), 0)
+                self.assertEqual(sup.procs["svc:alice/webchat"].pid, child.pid)
+                # An env flag alone grants nothing: target and effective UID
+                # must both identify the pod's own login.
+                self.assertEqual(fns.service_ensure(paths, "bob", "webchat", 0), 1)
+                with mock.patch.object(fns.os, "geteuid", return_value=uid + 1):
+                    self.assertEqual(fns.service_ensure(paths, "alice", "webchat", 0), 1)
+                with mock.patch.dict(os.environ, {"FLEET_NODE_PROFILE": ""}):
+                    self.assertEqual(fns.service_ensure(paths, "alice", "webchat", 0), 1)
+                self.assertFalse(os.path.exists(fns.service_dir(paths, "bob")))
+            finally:
+                for name in list(sup.procs):
+                    sup.stop_one(name)
+
     def running_webchat(self):
         idle = self.registered_webchat()
         self.trace_stage("U running ready (3 tries)")
