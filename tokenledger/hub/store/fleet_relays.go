@@ -84,6 +84,11 @@ func (s *Store) ensureFleetRelays() error {
 			return err
 		}
 	}
+	// DueFleetRelayReceipts filters on the sender; without this every node's
+	// receipt pass read the whole table on the hub's one writer (2026-10-29).
+	if _, err := s.write.Exec(`CREATE INDEX IF NOT EXISTS fleet_relays_receipts ON fleet_relays(from_endpoint, receipt)`); err != nil {
+		return fmt.Errorf("index fleet_relays receipts: %w", err)
+	}
 	return nil
 }
 

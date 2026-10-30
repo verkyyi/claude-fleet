@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -29,6 +31,26 @@ var schemaSQL string
 // enough to keep the page's fan-out (~17 requests, nearly all of them
 // sub-millisecond) from forming a queue of its own.
 const readPoolSize = 4
+
+// pgReadPoolSize is the same bound on Postgres, where it means something else:
+// every query is a network round trip to the database (~8 ms to RDS), not a
+// call into this process, so four connections cap a replica at a few hundred
+// queries a second and every request queues for a connection while the
+// database itself sits idle (2026-10-29: readyz timing out on hub_migrations,
+// /v1/node/self at 12 s median, Postgres showing nothing running).
+// CCQUOTA_DB_READ_POOL overrides it.
+const pgReadPoolSize = 32
+
+// readPoolFor is the read pool's size for dialect d.
+func readPoolFor(d dialect) int {
+	if !d.pg() {
+		return readPoolSize
+	}
+	if n, err := strconv.Atoi(os.Getenv("CCQUOTA_DB_READ_POOL")); err == nil && n > 0 {
+		return n
+	}
+	return pgReadPoolSize
+}
 
 // Store is a handle on the hub's database.
 type Store struct {
@@ -156,7 +178,7 @@ func openStoreApplied(d dialect, src, name string, applied bool) (*Store, error)
 		write.Close()
 		return nil, fmt.Errorf("open %s for reading: %w", name, err)
 	}
-	read.SetMaxOpenConns(readPoolSize)
+	read.SetMaxOpenConns(readPoolFor(d))
 
 	st := &Store{read: read, write: write, d: d, src: src}
 	if applied {

@@ -129,7 +129,14 @@ func (s *Store) ensureFleetAlerts() error {
 	if err := s.addColumn("fleet_alerts", "notify", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return s.addColumn("fleet_alerts", "notified_at", "TEXT")
+	if err := s.addColumn("fleet_alerts", "notified_at", "TEXT"); err != nil {
+		return err
+	}
+	// UnnotifiedFleetAlerts' filter, which the notifier runs on every pass.
+	if _, err := s.write.Exec(`CREATE INDEX IF NOT EXISTS fleet_alerts_unnotified ON fleet_alerts(notify, raised_at)`); err != nil {
+		return fmt.Errorf("index fleet_alerts unnotified: %w", err)
+	}
+	return nil
 }
 
 // RaiseFleetAlert opens (kind, subject) unless an open row exists. raised

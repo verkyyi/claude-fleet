@@ -374,6 +374,8 @@ CREATE TABLE IF NOT EXISTS usage_hourly (
 );
 CREATE INDEX IF NOT EXISTS idx_hourly_account_hour ON usage_hourly(account_uuid, hour);
 CREATE INDEX IF NOT EXISTS idx_hourly_session ON usage_hourly(account_uuid, session_id);
+-- EventUsageSince's unscoped `hour >= ?` (everyone's usage since an hour).
+CREATE INDEX IF NOT EXISTS idx_hourly_hour ON usage_hourly(hour);
 
 CREATE TABLE IF NOT EXISTS rollup_meta (
   key   TEXT PRIMARY KEY,
