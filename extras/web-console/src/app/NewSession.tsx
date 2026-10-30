@@ -40,6 +40,11 @@ import {
 import { useWorkRows } from "./work-rows";
 import { clockOpened } from "./start-clock";
 
+// a cold first start of the conversation service (task GXR5): ask again this
+// many times, this far apart, while the entry answers 502 relay
+const OPEN_RETRIES = 8;
+const OPEN_RETRY_MS = 10_000;
+
 // the model switch's "the agent's own" item (a ToggleGroup value cannot be "")
 const DEFAULT_MODEL = "default";
 
@@ -179,9 +184,19 @@ export default function NewSession() {
     }
     setBusy(true);
     const t0 = Date.now();
-    const r = await fetch("/v1/chat/open", { method: "POST", cache: "no-store",
-      headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: JSON.stringify(openBody(agent, model, say)) }).catch(() => null);
-    const j = r ? await r.json().catch(() => ({})) : {};
+    const open = async () => {
+      const r = await fetch("/v1/chat/open", { method: "POST", cache: "no-store",
+        headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, body: JSON.stringify(openBody(agent, model, say)) }).catch(() => null);
+      return { r, j: r ? await r.json().catch(() => ({})) : {} };
+    };
+    let { r, j } = await open();
+    // a login's first conversation service starts cold (task GXR5): the entry's
+    // 502 relay is «not up yet» — it keeps starting on the machine, so ask again
+    for (let n = 0; n < OPEN_RETRIES && r?.status === 502 && j.code === "relay"; n++) {
+      if (n === 0) toast.info(tr("正在启动你的对话服务，第一次要一会儿…", "Starting your chat service — the first time takes a moment…"));
+      await new Promise((ok) => setTimeout(ok, OPEN_RETRY_MS));
+      ({ r, j } = await open());
+    }
     setBusy(false);
     if (!r?.ok || j.state === "refused") {
       const code = String(j.code || j.reason || "");

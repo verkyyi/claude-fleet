@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -130,5 +132,66 @@ print("alice/webchat registered · ready")
 	c.Close()
 	if _, err := os.Stat(argvFile); err == nil {
 		t.Fatal("ensured a service that answered")
+	}
+}
+
+// task GXR5: a cold start outlived the page's request, and the request's end
+// killed it — every relay after began from nothing. The start now runs on its
+// own clock: a caller that gives up leaves it running, and relays meanwhile
+// for the same login share that one start.
+func TestChatEnsureOutlivesTheRequest(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		t.Skip("no /usr/bin/python3")
+	}
+	dir := t.TempDir()
+	runs := filepath.Join(dir, "runs")
+	sup := filepath.Join(dir, "fleet-node-supervisor.py")
+	os.WriteFile(sup, []byte(`import sys, time
+open("`+runs+`", "a").write("start\n")
+time.sleep(1.5)
+open("`+runs+`", "a").write("done\n")
+print("alice/webchat registered · ready")
+`), 0o644)
+	var mu sync.Mutex
+	up := false
+	dial := func(context.Context) (io.ReadWriteCloser, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !up {
+			return nil, errors.New("connect: no such file or directory")
+		}
+		c1, c2 := net.Pipe()
+		c2.Close()
+		return c1, nil
+	}
+	a := &Agent{cfg: Config{RunAs: &RunAs{Login: "alice"}, ServiceCtl: sup}}
+
+	// the first page gives up after 300 ms
+	short, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := a.chatSockOrEnsure(short, context.Background(), "alice", "r1", dial); err == nil {
+		t.Fatal("a caller that gave up got a socket")
+	}
+	// a second page meanwhile waits on the SAME start
+	errc := make(chan error, 1)
+	go func() {
+		c, err := a.chatSockOrEnsure(context.Background(), context.Background(), "alice", "r2", func(ctx context.Context) (io.ReadWriteCloser, error) {
+			b, _ := os.ReadFile(runs)
+			mu.Lock()
+			up = strings.Contains(string(b), "done")
+			mu.Unlock()
+			return dial(ctx)
+		})
+		if c != nil {
+			c.Close()
+		}
+		errc <- err
+	}()
+	if err := <-errc; err != nil {
+		t.Fatalf("the second page: %v", err)
+	}
+	b, _ := os.ReadFile(runs)
+	if string(b) != "start\ndone\n" {
+		t.Fatalf("supervisor runs = %q; want ONE start that finished although its first caller gave up", b)
 	}
 }

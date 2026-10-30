@@ -7207,6 +7207,14 @@ drill_spare_claim_stale_lease() {
   SECS=$(since "$t0")
 }
 
+drill_chat_cold_start_killed() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestChatEnsureOutlivesTheRequest' \
+    "$ROOT/tokenledger/agent/node_chat_relay_test.go" \
+    '起对话服务不随请求被杀；同一登录只起一份，后来的请求等它' ./agent || return 1
+  SECS=$(since "$t0")
+}
+
 drill_task_continue_historical_outcome() {
   local t0; t0=$(now); CAP=120
   _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \

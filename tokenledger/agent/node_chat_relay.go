@@ -211,12 +211,55 @@ func (a *Agent) chatSockOrEnsure(ctx, dctx context.Context, login, relay string,
 		return nil, err
 	}
 	log.Printf("chat relay %s: %s's conversation socket: %v — starting it (service ensure)", short(relay), login, err)
-	if st, res := runServiceCtl(ctx, argv); st != "succeeded" {
-		return nil, fmt.Errorf("service ensure webchat: %v", res["error"])
+	call := chatEnsureFor(login, argv)
+	select {
+	case <-call.done:
+	case <-ctx.Done():
+		// the page gave up first: the start goes on and the next relay finds it (task GXR5)
+		return nil, fmt.Errorf("service ensure webchat: still starting (%v)", ctx.Err())
+	}
+	if call.st != "succeeded" {
+		return nil, fmt.Errorf("service ensure webchat: %v", call.res["error"])
 	}
 	rctx, cancel := context.WithTimeout(ctx, sshRelayDialTimeout)
 	defer cancel()
 	return dial(rctx)
+}
+
+// chatEnsureCall is one login's start of its conversation service. A cold
+// first start (a login just handed to a new person) took longer than the page
+// waits: the request's end killed the start with it, and every relay after
+// began again from nothing — the person read «did not answer» (task GXR5,
+// production e2e 2026-10-30). Now a start runs on its own clock
+// (serviceEnsureTimeout), detached from the request that asked; relays for the
+// same login meanwhile wait on that one start instead of racing their own.
+type chatEnsureCall struct {
+	done chan struct{}
+	st   string
+	res  map[string]any
+}
+
+var chatEnsures = struct {
+	sync.Mutex
+	m map[string]*chatEnsureCall
+}{m: map[string]*chatEnsureCall{}}
+
+func chatEnsureFor(login string, argv []string) *chatEnsureCall {
+	chatEnsures.Lock()
+	defer chatEnsures.Unlock()
+	if c := chatEnsures.m[login]; c != nil {
+		return c
+	}
+	c := &chatEnsureCall{done: make(chan struct{})}
+	chatEnsures.m[login] = c
+	go func() {
+		c.st, c.res = runServiceCtl(context.Background(), argv)
+		chatEnsures.Lock()
+		delete(chatEnsures.m, login)
+		chatEnsures.Unlock()
+		close(c.done)
+	}()
+	return c
 }
 
 // dialChatSock reaches ctx's login's socket. A plain agent IS the login and
