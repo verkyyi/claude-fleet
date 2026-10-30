@@ -167,6 +167,15 @@ func TestInviteLetsANewcomerIn(t *testing.T) {
 	if got.State(time.Now()) != store.InviteUsed || got.UsedBy != githubPrincipal(ghMallory.ID) {
 		t.Fatalf("invite after use = %+v", got)
 	}
+	// task GXR5: an invited member speaks from their first line — the
+	// subscriptions an approved request gets, written as their own list
+	settings, err := h.srv.Store.FleetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := settings[credUserKey(githubPrincipal(ghMallory.ID))]; !ok || v != `"*"` {
+		t.Fatalf("the invited member's subscription list = %q (set %v); want \"*\"", v, ok)
+	}
 	log := h.audit(t)
 	if !auditHas(log, "invite", "ok", "邀请已使用") || !auditHas(log, "invite", "created", "for anyone") {
 		t.Errorf("audit lacks the invite rows: %+v", log)

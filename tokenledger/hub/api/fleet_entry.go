@@ -356,6 +356,27 @@ func (s *Server) entryEnsureHome(person string, choices []EntryHomeChoice, now t
 	return &h, nil
 }
 
+// chatHomeOf is a person's home for the conversation: their own, else the
+// first one entryEnsureHome gives them (task GXR5). A member who goes
+// straight to the chat never opened 我的连接 — until now the only page that
+// set a first home — and was told 「你还没有家」 on a login that was ready.
+func (s *Server) chatHomeOf(person string) (store.EntryHome, bool, error) {
+	if h, ok, err := s.Store.EntryHomeOf(person); err != nil || ok || person == "" {
+		return h, ok, err
+	}
+	now := time.Now()
+	choices, err := s.entryHomeChoices(person, now)
+	if err != nil || len(choices) == 0 {
+		return store.EntryHome{}, false, err
+	}
+	h, err := s.entryEnsureHome(person, choices, now)
+	if err != nil || h == nil {
+		return store.EntryHome{}, false, err
+	}
+	s.entryEnsureName(person, now, true)
+	return *h, true, nil
+}
+
 // entryViewOf is a person's book as GET EntryKeysPath answers it, and as
 // the keys page draws it (claude-fleet#3069).
 func (s *Server) entryViewOf(c entryCaller, now time.Time) (EntryView, error) {
