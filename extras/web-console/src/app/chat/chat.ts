@@ -423,7 +423,7 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     markFirst("home");
     setNotice("");
     setGate(null);
-    if (hadCopy.current || hadLocal.current) setSync("synced");
+    setSync(hadCopy.current || hadLocal.current ? "synced" : "");
     homeDefault.current = String(j.default || "");
     setBudget(j.budget && typeof j.budget === "object" ? j.budget : { blocked: false });
     setModels(j.models || []);

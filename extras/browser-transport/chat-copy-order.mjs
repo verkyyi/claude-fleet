@@ -66,6 +66,7 @@ try {
       broken = false
       await page.evaluate(() => window.dispatchEvent(new Event('focus')))
       await page.getByText('recovered', { exact: true }).waitFor()
+      assert.equal(await page.getByText('家机器暂时连不上', { exact: true }).count(), 0, 'successful recovery must clear offline status')
       assert.equal(await page.getByText('你家的对话服务暂时没有响应，请稍后重试。', { exact: true }).count(), 0)
       console.log('PASS pod relay: Chinese service error, no fast retry, recovers on ordinary read')
     } finally { await context.close() }
