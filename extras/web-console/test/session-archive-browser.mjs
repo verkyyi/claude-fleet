@@ -85,7 +85,7 @@ try {
     });
     await page.goto(origin+'/app/');
     const list=page.locator('[data-session-list="side"]');
-    const row=list.locator('[data-row="CD34"]');
+    const row=list.locator(`[data-row="${tid}"]`);   // a task row goes by its task_id (rowRef)
     await row.waitFor();
     await list.getByRole('button',{name:/^(归档|Archive)$/}).click();
     const dialog=page.getByRole('alertdialog');
