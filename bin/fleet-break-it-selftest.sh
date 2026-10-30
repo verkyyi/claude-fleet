@@ -7199,6 +7199,14 @@ drill_chat_first_home() {
   SECS=$(since "$t0")
 }
 
+drill_spare_claim_stale_lease() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestCredsKickForThePersonsLogin' \
+    "$ROOT/tokenledger/hub/api/fleet_creds_push_test.go" \
+    '认领备用 / 写新成员名单后，那个登录的节点当场重新租，别的登录不受打扰' ./hub/api || return 1
+  SECS=$(since "$t0")
+}
+
 drill_task_continue_historical_outcome() {
   local t0; t0=$(now); CAP=120
   _drill_go_tests 'TestTaskContinueHistoricalOutcome TestTaskContinueHistoricalOutcomeProofStillRequired TestTaskContinueHistoricalOutcomeDoesNotRelaxOtherStarts' \

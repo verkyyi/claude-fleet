@@ -609,6 +609,8 @@ func (s *Server) claimSpareAt(principal, displayName, actor, host string, now ti
 		return nil
 	}
 	log.Printf("fleet: %s: handed spare login %s on %s", principal, a.Login, host)
+	// the login is the person's now: its node leases as them at once (task GXR5)
+	s.kickCredsLogin(host, a.Login, "spare claimed")
 	return a
 }
 
