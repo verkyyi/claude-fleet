@@ -52,3 +52,24 @@ assert.deepEqual(askOf({ fp: 'f1', questions: [{ question: '先做哪一条？',
   { t: 'ask', rid: 'f1', kind: 'question', questions: [{ question: '先做哪一条？', options: [{ label: '第 3 条（推荐）' }] }] });
 
 console.log('ok talk.mjs');
+
+// 附件 (task GXR5): a line with files lands in the record with 「[附件] name → path」
+// under the words — matched by its words alone, shown as 「📎 name」, drawn the same
+// way while on its way; an attachment's file part carries the ref the upload gave.
+{
+  const { showAttach, attachFree, sentWords, attachedFiles } = await import('../src/app/chat/files.ts');
+  const rec = '看表\n\n[附件] 报表.csv → /h/.config/claude-fleet/webchat/uploads/0123456789abcdef0123456789abcdef/报表.csv\n[附件] a b.pdf → /x/a b.pdf';
+  assert.equal(attachFree(rec), '看表');
+  assert.equal(showAttach(rec), '看表\n\n📎 报表.csv\n📎 a b.pdf');
+  assert.equal(attachFree('[附件] x.txt → /p/x.txt'), '', 'a file alone is a line with no words');
+  assert.equal(showAttach('a → b'), 'a → b', 'words that only look like it stay');
+  const files = [{ ref: '0123456789abcdef0123456789abcdef', name: '报表.csv' }, { ref: '0123456789abcdef0123456789abcdee', name: 'a b.pdf' }];
+  assert.equal(sentWords('看表', files), showAttach(rec), 'on its way it is drawn as it will land');
+  assert.equal(sentWords('看表'), '看表');
+  assert.equal(userLines([{ t: 'user', text: rec }], '看表'), 1, 'the record carries the line: matched by its words');
+  assert.deepEqual(attachedFiles({ attachments: [
+    { name: '报表.csv', content: [{ type: 'file', data: files[0].ref, filename: '报表.csv', mimeType: 'text/csv' }] },
+    { name: 'p.png', content: [{ type: 'image', image: 'data:image/png;base64,x' }] },
+    { name: 'bad', content: [{ type: 'file', data: 'data:;base64,xx', mimeType: 'x' }] },
+  ] }), [files[0]], 'only an uploaded file part is a file');
+}

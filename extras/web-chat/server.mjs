@@ -50,7 +50,7 @@
 //     own projects dir, the cwd rehomed, and the conversation goes on there.
 import http from "node:http";
 import { gzipSync } from "node:zlib";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fsp, readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync, realpathSync, renameSync, unlinkSync,
   statSync, copyFileSync, readdirSync } from "node:fs";
@@ -61,7 +61,8 @@ import net from "node:net";
 import { COOKIE, CODE_TTL_MS, COOKIE_TTL_S, newSecret, sha, sameSecret, parseCookies,
   hostAllowed, redact, agentEnv, parseMint, toolSummary, MODELS, DEFAULT_MODEL, modelAllowed,
   budgetRefusal, personName, PERMISSIONS, cleanBrowser, parseClient, contextLine, contextBlock, contextDetails,
-  CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType, WEB_NOTE_V, webNoteBlock, NOTE_RE } from "./lib.mjs";
+  CTX_RE, imageBlockBytes, imageSize, MEDIA_REF_RE, IMAGE_EXT_MIME, linkTargets, fileDenied, linkedType, WEB_NOTE_V, webNoteBlock, NOTE_RE,
+  UPLOAD_REF_RE, uploadName, attachLines } from "./lib.mjs";
 import { codexSide } from "./codex.mjs";
 import { studioHandlers } from "./studio.mjs";
 import { sdkExecutionGuard } from "./execution.mjs";
@@ -1407,6 +1408,71 @@ function askEvent(rid, a) {
     : { t: "ask", rid, ...id, kind: "permission", tool: a.name, summary: toolSummary(a.name, a.input) };
 }
 
+// ---- files the person sends (task GXR5) -------------------------------------------
+// POST /api/upload: the bytes as the body, the name in X-Fleet-File-Name — kept
+// once as uploads/<sha256[:32]>/<name> (0600 in 0700 dirs) → {ref, name, size}.
+// A line then carries files [{ref, name}] (FILES_PER_TURN at most) and the agent
+// is handed each path as 「[附件] name → path」 (lib attachLines), Read opens it.
+const UPLOADS = join(STATE, "uploads");
+const UPLOAD_MAX = Number(E.FLEET_WEBCHAT_UPLOAD_MAX || 20 * 1024 * 1024);
+const FILES_PER_TURN = 5;
+async function upload(req, res, person) {
+  const name = uploadName(req.headers["x-fleet-file-name"]);
+  if (!name) return send(res, 400, { error: "文件名不对", code: "bad_name" });
+  const said = Number(req.headers["content-length"] || 0);
+  const big = () => send(res, 413, { error: `文件太大：一个最多 ${Math.round(UPLOAD_MAX / 1048576)} MB`, code: "too_large" });
+  if (said > UPLOAD_MAX) return big();
+  try { mkdirSync(UPLOADS, { recursive: true, mode: 0o700 }); } catch { /* the write below says */ }
+  const tmp = join(UPLOADS, `.part-${randomBytes(8).toString("hex")}`);
+  const h = createHash("sha256");
+  let n = 0;
+  let fh;
+  try {
+    fh = await fsp.open(tmp, "w", 0o600);
+    for await (const c of req) {
+      n += c.length;
+      if (n > UPLOAD_MAX) { await fh.close(); fh = null; await fsp.rm(tmp, { force: true }); req.resume(); return big(); }
+      h.update(c);
+      await fh.write(c);
+    }
+    await fh.close(); fh = null;
+  } catch (e) {
+    if (fh) await fh.close().catch(() => {});
+    await fsp.rm(tmp, { force: true });
+    log("upload_failed", { person, msg: String(e?.message || e).slice(0, 200) });
+    return res.writableEnded ? undefined : send(res, 500, { error: "没存下来，再试一次", code: "write" });
+  }
+  if (!n) { await fsp.rm(tmp, { force: true }); return send(res, 400, { error: "是个空文件", code: "empty" }); }
+  const ref = h.digest("hex").slice(0, 32);
+  const dir = join(UPLOADS, ref);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (existsSync(join(dir, name))) await fsp.rm(tmp, { force: true });
+    else renameSync(tmp, join(dir, name));
+  } catch (e) {
+    await fsp.rm(tmp, { force: true });
+    log("upload_failed", { person, msg: String(e?.message || e).slice(0, 200) });
+    return send(res, 500, { error: "没存下来，再试一次", code: "write" });
+  }
+  log("upload", { person, size: n });
+  return send(res, 200, { ref, name, size: n });
+}
+// a line's files: [{name, path}] of ones uploaded here, or the refusal's words
+function lineFiles(list) {
+  if (list == null) return { files: [] };
+  if (!Array.isArray(list)) return { error: "files is a list" };
+  if (list.length > FILES_PER_TURN) return { error: `一条消息最多 ${FILES_PER_TURN} 个文件` };
+  const files = [];
+  for (const f of list) {
+    const name = uploadName(f?.name);
+    const ref = String(f?.ref || "");
+    const path = join(UPLOADS, ref, name);
+    if (!name || !UPLOAD_REF_RE.test(ref) || !existsSync(path)) return { error: "文件不在了，请重新上传" };
+    files.push({ name, path });
+  }
+  return { files };
+}
+
 // a turn's request: its words, the person's pictures (task T773 ③: a few, of a
 // type the page shows, each a real image) — or the refusal already sent
 async function turnBody(req, res) {
@@ -1422,10 +1488,14 @@ async function turnBody(req, res) {
     if (!img || !imageSize(img.buf, img.ext).w) { send(res, 400, { error: "不是能看的图片（png / jpeg / gif / webp）" }); return null; }
     images.push(b);
   }
-  if (!text && !images.length) { send(res, 400, { error: "empty" }); return null; }
+  const lf = lineFiles(body.files);
+  if (lf.error) { send(res, 400, { error: lf.error, code: "bad_files" }); return null; }
+  if (!text && !images.length && !lf.files.length) { send(res, 400, { error: "empty" }); return null; }
+  // the agent reads them where they were kept: their paths go with the words
+  const said = lf.files.length ? [text, attachLines(lf.files)].filter(Boolean).join("\n\n") : text;
   // the page's own origin: the one a 活页 embed link is minted for (task T773 ④)
   if (typeof body.origin === "string" && ORIGIN_RE.test(body.origin)) pageOrigin = body.origin;
-  return { body, text, images };
+  return { body, text: said, images };
 }
 
 async function turn(req, res, person) {
@@ -2022,6 +2092,8 @@ async function handle(req, res) {
   if (p === "/api/giveback" && req.method === "POST") return handover(req, res, person, "give");
   // the session gate (task HHV0): say · open · answer · stop by fid
   if (p === "/api/say" && req.method === "POST") return gateSay(req, res, u, person);
+  // a file the person sends with a line (task GXR5): kept here, named by ref
+  if (p === "/api/upload" && req.method === "POST") return upload(req, res, person);
   if (p === "/api/open" && req.method === "POST") return gateOpen(req, res, person);
   // Unlike a new JSON field on /api/open, an old resident cannot silently
   // ignore this contract: it returns 404 without spawning an ordinary web.

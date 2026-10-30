@@ -305,6 +305,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.handleChatView(w, r)
 		return
 	}
+	// 附件 (task GXR5): a file, streamed to the login a line is for
+	if name == chatUploadRoute {
+		s.handleChatUpload(w, r)
+		return
+	}
 	// 会话合一 (task PQ41): the old conversation routes have moved
 	if chatMovedRoutes[name] && s.chatUnified() {
 		s.chatMoved(w, r, name)

@@ -752,6 +752,23 @@ durable 任务沿 `fleet_transfer_durable.py` 已验证的单一归属路径：�
 给 Agent 的是内容块 `[image…, text]`（暖会话直接推，冷路径包成一条消息的输入流）。图随后按「图片」一节落 media、挂在人那
 一行上。
 
+### 发文件给 Agent（GXR5）
+
+图以外的文件（PDF、Office、表格、代码、压缩包……）不进一句话的请求：输入框「＋」选了文件，发送时 assistant-ui 的
+`CompositeAttachmentAdapter` 把图交给 `SimpleImageAttachmentAdapter`（照上一节），其余交给 `UploadAdapter`
+（`extras/web-console/src/app/chat/files.ts`）——**先单独上传**，`POST /v1/chat/upload?worker=<id>`（会话所在的登录；
+旧的家对话用 `?target=personal`），请求体就是文件字节，名字放 `X-Fleet-File-Name`（URI 编码）。入口
+（`tokenledger/hub/api/chat_upload.go`）照 say 的规矩认人认会话，流式转给那个登录的 `/api/upload`：单个 ≤ 20 MB
+（`chatUploadMax`，Content-Length 超了不拨号就 413），每人同时 3 个、每分钟 30 个，自己一条队，不占 turn / say 的位；
+中转仍是那个登录 1 MiB/s 的限速，20 MB 约 20 秒。服务（`server.mjs` `upload`）边收边算 sha256，存成
+`<state>/uploads/<sha256 前 32 位>/<名字>`（0600，目录 0700）回 `{ref, name, size}`；名字只取一段（`lib.mjs`
+`uploadName`：去路径、控制字符、开头的点，≤ 120 字），从不当路径用。
+
+随后这句话带 `files:[{ref, name}]`（say / open / turn 都认，最多 5 个，入口对 say 先查一遍）。服务找不到那份文件或名字不对
+就 400「文件不在了，请重新上传」；找到了就在话后面加一行一个 `[附件] 名字 → 绝对路径`（`attachLines`），会话门、Codex、
+SDK 拿到的都是同一段字，Agent 用 Read 打开（PDF 也能读）。页面把记录里这些行画成「📎 名字」（`showAttach`），自己那句
+等记录时按去掉这些行的字对（`attachFree`）。`fleet-webchat-selftest.sh` 的 Y、`TestChatUpload`、`test/talk.mjs` 钉住。
+
 ### Agent 做的网页：发到活页，对话里一张卡片（T773 ④）
 
 对话服务给 Agent 两个进程内工具（`fleet_chat` 服务）：`page_target({file})` 答这一页该放哪——活页文件夹「WebChat 产物」

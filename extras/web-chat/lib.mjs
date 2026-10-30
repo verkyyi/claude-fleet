@@ -291,6 +291,28 @@ export function imageSize(buf, ext) {
   return {};
 }
 
+// ---- files the person sends (task GXR5) -----------------------------------------
+// A file arrives by itself (POST /api/upload, its name in X-Fleet-File-Name,
+// URI-encoded) and is kept as uploads/<sha256[:32]>/<name>; a line then names
+// it by {ref, name} and the agent is handed its path. The name is the person's
+// words, never a path: one segment, no control characters, no leading dot.
+export const UPLOAD_REF_RE = /^[0-9a-f]{32}$/;
+export function uploadName(raw) {
+  let s = String(raw ?? "");
+  try { s = decodeURIComponent(s); } catch { return ""; }
+  s = s.split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f]/g, "").trim().replace(/^\.+/, "");
+  if (!s) return "";
+  if (s.length > 120) {
+    const dot = s.lastIndexOf(".");
+    const ext = dot > 0 && s.length - dot <= 16 ? s.slice(dot) : "";
+    s = s.slice(0, 120 - ext.length) + ext;
+  }
+  return s;
+}
+// the words a line carries for its files: one 「[附件] name → path」 a file
+export const ATTACH_RE = /^\[附件\] (.+?) → (\S.*)$/;
+export const attachLines = (files) => files.map((f) => `[附件] ${f.name} → ${f.path}`).join("\n");
+
 // ---- the home's files a reply links to (task T773 ②) ---------------------------------
 // A reply's Markdown link / image target that names a file on this machine:
 // an absolute path, ~/…, file://…, or one relative to the session's directory —
