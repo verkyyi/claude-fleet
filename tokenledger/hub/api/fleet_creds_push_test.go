@@ -91,3 +91,36 @@ func leasesAccount(l NodeCredentialsResponse, account string) bool {
 	}
 	return false
 }
+
+// task GXR5: a claimed spare / a new member's list changes what ONE login may
+// lease — that login's node hears TypeCreds at once (not on its 15-minute
+// recheck), and nobody else's does.
+func TestCredsKickForThePersonsLogin(t *testing.T) {
+	h, tok, _ := newVaultHarness(t)
+	other := h.enroll(t, "old")
+	a := teamNode(t, h, tok, control.CapRead, control.CapCreds)
+	b := teamNode(t, h, other, control.CapRead, control.CapCreds)
+	beat(t, a, control.Proto, control.Heartbeat{Hostname: "mac-c", OSUser: "alice", Credsep: control.CredsepSeparated})
+	beat(t, b, control.Proto, control.Heartbeat{Hostname: "host-b", OSUser: "bob", Credsep: control.CredsepSeparated})
+	// whoever holds alice on mac-c (the harness enrolled her there)
+	rows, err := h.srv.Store.ActiveAccountsOn("mac-c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := ""
+	for _, r := range rows {
+		if r.Login == "alice" {
+			pid = r.PrincipalID
+		}
+	}
+	if pid == "" {
+		t.Fatalf("no one holds alice on mac-c: %+v", rows)
+	}
+	h.srv.kickCredsFor(pid, "member allowlist")
+	nextCreds(t, a, "member allowlist", "the person's login")
+	h.srv.kickCredsLogin("mac-c", "alice", "spare claimed")
+	nextCreds(t, a, "spare claimed", "a claimed spare")
+	silent(t, b, "another login")
+	h.srv.kickCredsFor("p:nobody", "member allowlist") // no login: nothing, no panic
+	silent(t, a, "a person with no login")
+}

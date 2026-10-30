@@ -125,4 +125,5 @@ func (s *Server) memberCredDefault(pid, why, by string, now time.Time) {
 	}
 	s.settingAudit(by, key, "", value, now)
 	s.sessCred.drop("")
+	s.kickCredsFor(pid, "member allowlist") // their logins lease now, not on the 15-minute recheck
 }

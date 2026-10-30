@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
@@ -40,4 +41,49 @@ func (s *Server) BroadcastCreds(why string) {
 			_ = s.SendNodeWrite(wctx, id, msg)
 		}(id, c)
 	})
+}
+
+// kickCredsFor wakes the lease of every login principal holds, on whichever
+// replica holds its link (task GXR5). A spare's node leased while the spare sat
+// idle and was denied everything; claiming it for a person, or writing that
+// person's list, changed what the login may lease — and the node only heard on
+// its 15-minute recheck, so a new member's first line got the proxy's 403
+// 「this login holds no claude account」. Now it leases at once.
+func (s *Server) kickCredsFor(principal, why string) {
+	if s.Store == nil || principal == "" {
+		return
+	}
+	accts, err := s.Store.FleetAccounts(principal)
+	if err != nil {
+		log.Printf("fleet: wake the leases of %s: %v", principal, err)
+		return
+	}
+	for _, a := range accts {
+		if a.Hostname != "" && a.Login != "" {
+			s.kickCredsLogin(a.Hostname, a.Login, why)
+		}
+	}
+}
+
+// kickCredsLogin sends TypeCreds to login's own link on host: this replica's,
+// else another's. No link, or one without CapCreds ⇒ its own recheck, as before.
+func (s *Server) kickCredsLogin(host, login, why string) {
+	msg, err := control.New(control.TypeCreds, control.Creds{Why: why})
+	if err != nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if id, _, err := s.loginRelayNode(host, login, func(c *nodeConn) bool { return c.canCreds }, "NO_CREDS", "a credential push"); err == nil {
+			_ = s.SendNodeWrite(ctx, id, msg)
+			return
+		}
+		if peer, ok := s.peerLoginLink(host, login, control.CapCreds); ok {
+			if msg.Proto == 0 {
+				msg.Proto = control.Proto
+			}
+			_ = s.forwardSend(ctx, peer, msg)
+		}
+	}()
 }
