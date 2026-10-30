@@ -1164,12 +1164,20 @@ class Cleaner:
         or the FLEET_TASK_CLOSED_CMD seam (same contract)."""
         return self.record(task)[0]
 
-    @staticmethod
-    def record(task):
+    def record(self, task):
         """(rc, asked, parked) of one read of <task>'s record: rc as task_closed;
         asked / parked — its 「问过你」 / 「停放」 hold words (E101: the `asked: 1` /
         `parked: 1` lines fleet_task_control.py closed prints; a seam printing none
-        reads as neither)."""
+        reads as neither). Read once per pass: one window asks it up to three times
+        (work_over, the hold words, task_session) and each read is a python + a
+        task-record.sh fork chain; this process is one pass, so nothing goes stale."""
+        cache = self.__dict__.setdefault("_records", {})
+        if task not in cache:
+            cache[task] = self._read_record(task)
+        return cache[task]
+
+    @staticmethod
+    def _read_record(task):
         cmd = os.environ.get("FLEET_TASK_CLOSED_CMD")
         argv = [cmd, task] if cmd else ["python3", str(BIN / "fleet_task_control.py"), "closed", "--task", task]
         try:

@@ -137,6 +137,22 @@ def paint(screen, words, failed=False, pos=None, waking=False):
     sys.stdout.flush()
 
 
+def env_secs(name, default):
+    try:
+        return max(.25, float(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+def dir_stamp(path):
+    """The directory's mtime (ns), None when it is missing: moves on every file
+    created, renamed or removed in it."""
+    try:
+        return os.stat(path).st_mtime_ns if path else None
+    except OSError:
+        return None
+
+
 def waking_mark(pane, on):
     """@park_waking while a sentence is on its way (the top line's 「接回中…」)."""
     import fleet_session_gate as gate
@@ -162,6 +178,16 @@ def editor(screen, draft, failed):
     pane = os.environ['TMUX_PANE']
     old = termios.tcgetattr(0)
     last_poll = 0
+    # The wake poll forks a tmux client: every .25 s that was 4 forks a second per
+    # parked window, idle or not (47 parked windows ≈ 190 forks/s on one mini). A
+    # wake always writes its seed + .meta into the draft's own fid directory before
+    # it stamps @park_wake (gate.wake_request), so the directory's mtime — a stat,
+    # no fork — says when to look: fast for a few seconds after it moves (the stamp
+    # lands just after the write), otherwise one slow poll as the safety net.
+    watch = draft.parent if draft else None
+    slow = env_secs('FLEET_PARK_WAKE_POLL_SECS', 5)
+    seen = dir_stamp(watch)
+    hot_until = time.monotonic() + 3  # a wake stamped just before the page started
     # Zero is a valid monotonic origin (macOS Python 3.9), not a prior input.
     last_presence = None
     size = None
@@ -184,7 +210,13 @@ def editor(screen, draft, failed):
             # Looking at the window is deliberately no wake. An external seed
             # can wake only with an empty editor: a draft must never be submitted
             # behind the person's back or swallowed by a peer's message.
-            if not words and time.monotonic() - last_poll >= .25:
+            if not words:
+                now = time.monotonic()
+                stamp = dir_stamp(watch)
+                if stamp != seen:
+                    seen = stamp
+                    hot_until = now + 3
+            if not words and time.monotonic() - last_poll >= (.25 if time.monotonic() < hot_until else slow):
                 last_poll = time.monotonic()
                 wake = gate.tmux('', 'display-message', '-p', '-t', pane, '#{@park_wake}')
                 if wake and wake.strip():
