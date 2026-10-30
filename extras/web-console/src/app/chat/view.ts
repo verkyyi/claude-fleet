@@ -13,13 +13,14 @@ import { retryDelay } from "@/shared/terminal-retry";
 // layers as the chat (task KSQG, local.ts): this browser's record < the entry's
 // copy (?cached=1) < the session's machine, which always replaces the others.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { SimpleImageAttachmentAdapter, useExternalStoreRuntime, type AppendMessage, type ExternalThreadQueueAdapter,
+import { CompositeAttachmentAdapter, SimpleImageAttachmentAdapter, useExternalStoreRuntime, type AppendMessage, type ExternalThreadQueueAdapter,
   type RespondToToolApprovalOptions, type ThreadMessageLike } from "@assistant-ui/react";
 import { meOnce } from "@/shared/api";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { toMessages, type Item, type Msg } from "./chat";
 import { attachedPics, MAX_PICS, packPics } from "./pics";
+import { attachedFiles, MAX_FILES, UploadAdapter, type SentFile } from "./files";
 import { afterSay, askOf, bubbles, replying, settle, userLines, type Pending, type Queued, type ViewAsk } from "./talk";
 import { browserCache, mayCache, mayShow, type Layer } from "./local";
 import { clockReplied, clockShown, replied, sendClock } from "../start-clock";
@@ -221,9 +222,9 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
   }, [waiting, queue]);
 
   // same: a line not known to have gone is said again under its own id (the door never takes one twice)
-  const sayLine = useCallback(async (text: string, pics: string[], replace?: string, same?: string) => {
+  const sayLine = useCallback(async (text: string, pics: string[], files: SentFile[], replace?: string, same?: string) => {
     const id = same || crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-    const p: Pending = { id, text, pics, at: Date.now(), base: userLines(itemsNow.current as { t: string; text?: string }[], text), state: "sending" };
+    const p: Pending = { id, text, pics, ...(files.length ? { files } : {}), at: Date.now(), base: userLines(itemsNow.current as { t: string; text?: string }[], text), state: "sending" };
     setNote("");
     setPending((ps) => [...ps.filter((x) => x.id !== replace), p]);
     let images: { media_type: string; data: string }[] = [];
@@ -234,7 +235,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     }
     const r = await fetch(`/v1/chat/say?worker=${encodeURIComponent(worker)}`, {
       method: "POST", headers: { "X-Fleet-Webchat": "1", "Content-Type": "application/json" }, cache: "no-store",
-      body: JSON.stringify({ id, text, ...(images.length ? { images } : {}) }),
+      body: JSON.stringify({ id, text, ...(images.length ? { images } : {}), ...(files.length ? { files } : {}) }),
     }).catch(() => null);
     const j = r ? await r.json().catch(() => ({})) : {};
     const said = r?.ok ? { ok: true, delivery: String(j.delivery || ""), state: String(j.state || "sent"), reason: j.reason ? String(j.reason) : undefined }
@@ -244,14 +245,16 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
   const onSay = useCallback(async (m: AppendMessage) => {
     const text = m.content.map((c) => (c.type === "text" ? c.text : "")).join("").trim();
     const pics = attachedPics(m);
-    if (!text && !pics.length) return;
+    const files = attachedFiles(m);
+    if (!text && !pics.length && !files.length) return;
     if (pics.length > MAX_PICS) setNote(tr(`一次最多发 ${MAX_PICS} 张图，只发了前 ${MAX_PICS} 张。`, `At most ${MAX_PICS} pictures a message; the first ${MAX_PICS} went.`));
-    await sayLine(text, pics.slice(0, MAX_PICS));
+    if (files.length > MAX_FILES) setNote(tr(`一次最多发 ${MAX_FILES} 个文件，只发了前 ${MAX_FILES} 个。`, `At most ${MAX_FILES} files a message; the first ${MAX_FILES} went.`));
+    await sayLine(text, pics.slice(0, MAX_PICS), files.slice(0, MAX_FILES));
   }, [sayLine]);
   // 重试: the same words again; 算了: let it go
   const retry = useCallback((id: string) => {
     const p = pending.find((x) => x.id === id);
-    if (p) void sayLine(p.text, p.pics, id, p.returned ? undefined : p.id);
+    if (p) void sayLine(p.text, p.pics, p.files || [], id, p.returned ? undefined : p.id);
   }, [pending, sayLine]);
   // a line the door gave back is acked once: it is the page's now
   const acked = useRef(new Set<string>());
@@ -303,7 +306,9 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     enqueue: (m) => { void sayRef.current(m); }, steer: (m) => { void sayRef.current(m); },
     move: () => {}, edit: () => {}, remove: () => {},
   } : undefined), [canTalk]);
-  const attach = useMemo(() => new SimpleImageAttachmentAdapter(), []);
+  // pictures as pictures; any other file uploaded to the session's login (files.ts)
+  const attach = useMemo(() => new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(),
+    new UploadAdapter(() => `worker=${encodeURIComponent(worker)}`)]), [worker]);
 
   // the page before what is shown (?before=), drawn above it — assistant-ui's own
   // 「更早的消息」 (the runtime runs one at a time and says it is loading)

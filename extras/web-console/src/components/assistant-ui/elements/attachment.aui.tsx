@@ -276,12 +276,12 @@ export const ComposerAddAttachment: FC = () => {
   return (
     <ComposerPrimitive.AddAttachment asChild>
       <TooltipIconButton
-        tooltip={tr("发图片", "Add a picture")}
+        tooltip={tr("发图片或文件", "Add a picture or file")}
         side="bottom"
         variant="ghost"
         size="icon"
         className="aui-composer-add-attachment text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 dark:border-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full active:scale-[0.96] motion-reduce:transition-none"
-        aria-label={tr("发图片", "Add a picture")}
+        aria-label={tr("发图片或文件", "Add a picture or file")}
       >
         <PlusIcon className="aui-attachment-add-icon size-4" />
       </TooltipIconButton>

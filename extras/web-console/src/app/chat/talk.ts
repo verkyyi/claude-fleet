@@ -16,6 +16,7 @@
 // answer) is retried under the same id — the door never takes one twice.
 // Pure: test/talk.mjs runs it.
 import { tr } from "../../shared/i18n.ts"; // .ts: the test runs this file as it is
+import { attachFree, sentWords, type SentFile } from "./files.ts";
 
 export type Queued = { delivery: string; text: string; why?: string };
 export type ViewAsk = { fp: string; kind?: "question" | "permission"; tool?: string; summary?: string;
@@ -30,6 +31,7 @@ export const WAKE_MS = 20_000;
 //   did, waking it); queued — waiting (this turn, a terminal draft); failed — not taken.
 export type Pending = {
   id: string; text: string; pics: string[]; at: number;
+  files?: SentFile[];           // uploaded, named by ref (files.ts)
   base: number;                 // the record's user lines with these words when it was said
   state: "sending" | "sent" | "queued" | "failed";
   delivery?: string; why?: string; sentAt?: number;
@@ -42,7 +44,8 @@ export const RETURNED = new Set(["expired", "session_changed", "wake_timeout", "
 const waitingIn = (queue: Queued[] | undefined) => (queue || []).filter((q) => !RETURNED.has(q.why || ""));
 
 type Line = { t: string; text?: string };
-export const userLines = (items: Line[], text: string) => items.filter((i) => i.t === "user" && (i.text || "").trim() === text.trim()).length;
+// (a line with files carries 「[附件] …」 lines under the words in the record: left out)
+export const userLines = (items: Line[], text: string) => items.filter((i) => i.t === "user" && attachFree(i.text || "") === text.trim()).length;
 
 // What the page shows of what it said, now: a line the record carries is
 // dropped; one out of the session's queue is sent (its clock starts then); a
@@ -109,7 +112,7 @@ export function bubbles(pending: Pending[], queue: Queued[] | undefined): Bubble
   const why = new Map(waitingIn(queue).map((q) => [q.delivery, q.why || ""]));
   const out: Bubble[] = pending.filter((p) => !p.returned).map((p) => {
     const w = p.delivery && why.has(p.delivery) ? why.get(p.delivery) : p.why;
-    return { id: p.id, text: p.text, pics: p.pics, ...(p.state === "queued" && !waking(w) ? { wait: waitWords(w) } : {}) };
+    return { id: p.id, text: sentWords(p.text, p.files), pics: p.pics, ...(p.state === "queued" && !waking(w) ? { wait: waitWords(w) } : {}) };
   });
   for (const q of waitingIn(queue)) if (!mine.has(q.delivery)) out.push({ id: `q-${q.delivery}`, text: q.text, pics: [], ...(waking(q.why) ? {} : { wait: waitWords(q.why) }) });
   return out;

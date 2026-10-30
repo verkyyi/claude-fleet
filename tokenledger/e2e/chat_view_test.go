@@ -351,6 +351,8 @@ func TestChatSayToSession(t *testing.T) {
 		{"the personal terminal", "POST", "target=personal", `{"text":"x"}`, alice, page, http.StatusBadRequest, "bad_target"},
 		{"nothing to say", "POST", "worker=" + wid, `{"text":"  "}`, alice, page, http.StatusBadRequest, "empty"},
 		{"five pictures", "POST", "worker=" + wid, five, alice, page, http.StatusBadRequest, "too_many_images"},
+		{"six files", "POST", "worker=" + wid, `{"text":"x","files":[{},{},{},{},{},{}]}`, alice, page, http.StatusBadRequest, "too_many_files"},
+		{"files not a list", "POST", "worker=" + wid, `{"text":"x","files":"a"}`, alice, page, http.StatusBadRequest, "bad_body"},
 		{"not JSON", "POST", "worker=" + wid, `hi`, alice, page, http.StatusBadRequest, "bad_body"},
 		{"the operator's door", "POST", "worker=" + wid, `{"text":"x"}`, nil, map[string]string{"Authorization": "Bearer " + viewerToken, "X-Fleet-Webchat": "1"}, http.StatusForbidden, "operator"},
 	}
@@ -494,5 +496,84 @@ func TestChatViewClosedIdentityIsolation(t *testing.T) {
 	var operations int
 	if err = h.Srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_operations`).Scan(&operations); err != nil || operations != 0 {
 		t.Fatalf("history launched operations=%d err=%v", operations, err)
+	}
+}
+
+// 附件 (task GXR5): POST /v1/chat/upload?worker=<id> | ?target=personal streams
+// the file to that login's /api/upload with its name; a line then names it.
+// Too big, no name, not from the page, another person's session never reach it.
+func TestChatUpload(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	enablePeople(t, h, pCarol)
+	const fuid, fid = "66666666-6666-4666-8666-666666666666", "77777777-7777-4777-8777-777777777777"
+	wid := fuid + "/" + fid
+	ws, _ := json.Marshal([]map[string]any{{"key": "issue-1", "state": "done", "worker_id": wid}})
+	if _, err := h.Srv.Store.RecordFleetSnapshot("ep_chat-entry", host, login, "mach-"+host, []store.FleetReport{{
+		FleetID: fuid, Name: "fleet", Repo: "o/r", Checkout: "/c", WorkerCount: 1, WorkersJSON: string(ws)}}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	setChatHome(t, h, pAlice, host, login)
+	setChatHome(t, h, pCarol, "elsewhere", "carol")
+	alice := personCookie(pAlice, "alice")
+	page := map[string]string{"X-Fleet-Webchat": "1", "X-Fleet-File-Name": "%E6%8A%A5%E5%91%8A.pdf"}
+	// past a turn's 1 MB: a file does not ride in a turn
+	body := strings.Repeat("x", 1536<<10)
+	for _, q := range []string{"worker=" + wid, "target=personal"} {
+		resp := chatDo(t, h, "POST", "/v1/chat/upload?"+q, alice, page, body)
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK || !strings.Contains(string(b), `"size":1572864`) || !strings.Contains(string(b), `"name":"%E6%8A%A5%E5%91%8A.pdf"`) {
+			t.Fatalf("upload %s: %d %s", q, resp.StatusCode, b)
+		}
+	}
+	n := 0
+	for _, s := range svc.seen() {
+		if strings.Contains(s, "/api/upload") {
+			if !strings.Contains(s, "person="+pAlice) || strings.Contains(s, "cookie=ccq") {
+				t.Errorf("the service saw %q", s)
+			}
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("uploads at the service: %d, want 2", n)
+	}
+	noName := map[string]string{"X-Fleet-Webchat": "1"}
+	cases := []struct {
+		name, method, query, body string
+		cookie                    *http.Cookie
+		hdr                       map[string]string
+		status                    int
+		code                      string
+	}{
+		{"a GET", "GET", "worker=" + wid, "", alice, page, http.StatusMethodNotAllowed, ""},
+		{"not from the page", "POST", "worker=" + wid, "x", alice, map[string]string{"X-Fleet-File-Name": "a.txt"}, http.StatusForbidden, "forbidden"},
+		{"signed out", "POST", "worker=" + wid, "x", nil, page, http.StatusUnauthorized, ""},
+		{"no name", "POST", "worker=" + wid, "x", alice, noName, http.StatusBadRequest, "bad_name"},
+		{"another person's session", "POST", "worker=" + wid, "x", personCookie(pCarol, "carol"), page, http.StatusNotFound, "not_yours"},
+		{"no target", "POST", "", "x", alice, page, http.StatusBadRequest, "bad_target"},
+		{"too big", "POST", "worker=" + wid, strings.Repeat("x", 20<<20+1), alice, page, http.StatusRequestEntityTooLarge, "too_large"},
+	}
+	for _, c := range cases {
+		resp := chatDo(t, h, c.method, "/v1/chat/upload?"+c.query, c.cookie, c.hdr, c.body)
+		if resp.StatusCode != c.status {
+			t.Errorf("%s: %d; want %d", c.name, resp.StatusCode, c.status)
+			continue
+		}
+		if c.code != "" {
+			if got := chatCode(t, resp); got != c.code {
+				t.Errorf("%s: code %q; want %q", c.name, got, c.code)
+			}
+		}
+	}
+	if m := len(svc.seen()); m == 0 {
+		t.Fatal("nothing seen")
+	}
+	for _, s := range svc.seen() {
+		if strings.Contains(s, "/api/upload") {
+			n--
+		}
+	}
+	if n != 0 {
+		t.Fatalf("a refused upload reached the service")
 	}
 }

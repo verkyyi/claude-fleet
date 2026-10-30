@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +97,11 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 				state = "refused"
 			}
 			io.WriteString(w, `{"delivery":"d1","state":"`+state+`","got":`+strconvQuote(string(body))+`}`)
+		case "/api/upload":
+			// 附件 (task GXR5): the bytes counted, the name as the hub passed it
+			n, _ := io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"ref":"0123456789abcdef0123456789abcdef","size":`+strconv.FormatInt(n, 10)+`,"name":`+strconvQuote(r.Header.Get("X-Fleet-File-Name"))+`}`)
 		case "/api/stop", "/api/answer", "/api/ack":
 			body, _ := io.ReadAll(r.Body)
 			w.Header().Set("Content-Type", "application/json")

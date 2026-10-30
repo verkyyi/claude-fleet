@@ -31,7 +31,7 @@ import (
 //	     their own active logins, else 404 not_yours)
 //	hub ──dialChatRelay──▶ that login's /api/say|answer|stop {"fid": <window>, …}
 //
-// say:    {text, images: [≤4 {media_type, data}]} → {delivery, state: sent |
+// say:    {text, images: [≤4 {media_type, data}], files: [≤5 {ref, name}] (chat_upload.go)} → {delivery, state: sent |
 //         queued | refused, reason?}
 // answer: the question's fingerprint and the option's own words
 // stop:   nothing — the session's current turn is stopped (Esc)
@@ -160,7 +160,16 @@ func (s *Server) handleChatWorker(w http.ResponseWriter, r *http.Request, name s
 				s.chatRefuse(w, person, name, http.StatusBadRequest, "too_many_images", "一条消息最多 4 张图 · at most 4 pictures")
 				return
 			}
-			if strings.TrimSpace(text) == "" && len(pics) == 0 {
+			files, _ := in["files"].([]any)
+			if in["files"] != nil && files == nil {
+				s.chatRefuse(w, person, name, http.StatusBadRequest, "bad_body", "files is a list")
+				return
+			}
+			if len(files) > chatSayFiles {
+				s.chatRefuse(w, person, name, http.StatusBadRequest, "too_many_files", "一条消息最多 5 个文件 · at most 5 files")
+				return
+			}
+			if strings.TrimSpace(text) == "" && len(pics) == 0 && len(files) == 0 {
 				s.chatRefuse(w, person, name, http.StatusBadRequest, "empty", "nothing to say")
 				return
 			}

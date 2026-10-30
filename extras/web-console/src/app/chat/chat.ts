@@ -11,6 +11,7 @@ import {
   type AppendMessage,
   type RespondToToolApprovalOptions,
   type ThreadMessageLike,
+  CompositeAttachmentAdapter,
   SimpleImageAttachmentAdapter,
 } from "@assistant-ui/react";
 import { tr } from "@/shared/i18n";
@@ -18,6 +19,7 @@ import { attachedPics, MAX_PICS, packPics, type SentPic } from "./pics";
 import { linkFiles, picSrc, type Pic as MediaPic } from "./media";
 import { cachedCopy } from "./copy";
 import { browserCache, mayCache, mayShow, trim, type Layer } from "./local";
+import { attachedFiles, MAX_FILES, sentWords, showAttach, UploadAdapter } from "./files";
 import { meOnce } from "@/shared/api";
 import { viewAs } from "@/shared/viewAs";
 
@@ -142,7 +144,7 @@ export function toMessages(items: Item[], asks: Ask[], answered: Map<string, Ans
         cur = null;
         out.push({ id: `u${i}`, role: "user", content: [
           ...(it.images || []).filter((g) => picSrc(g, undefined, worker)).map((g) => ({ type: "image", image: picSrc(g, undefined, worker) }) as Part),
-          ...(it.text || !it.images?.length ? [{ type: "text", text: it.text } as Part] : []),
+          ...(it.text || !it.images?.length ? [{ type: "text", text: showAttach(it.text) } as Part] : []),
         ] });
         break;
       case "text": {
@@ -489,7 +491,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
   const onNew = useCallback(async (message: AppendMessage) => {
     const text = message.content.map((p) => (p.type === "text" ? p.text : "")).join("").trim();
     const shown = attachedPics(message);
-    if (!text && !shown.length) return;
+    const files = attachedFiles(message).slice(0, MAX_FILES);
+    if (!text && !shown.length && !files.length) return;
     if (shown.length > MAX_PICS) setNotice(tr(`一次最多发 ${MAX_PICS} 张图，只发了前 ${MAX_PICS} 张。`, `At most ${MAX_PICS} pictures a message; the first ${MAX_PICS} went.`));
     let images: SentPic[] = [];
     try { images = await packPics(shown.slice(0, MAX_PICS), text); } catch {
@@ -502,14 +505,14 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     const gen = convGen.current;
     setLoaded(true);
     setInterrupted(null);
-    setItems((xs) => [...xs, { t: "user", text, ...(images.length ? { images: images.map((g) => ({ thumb: `data:${g.media_type};base64,${g.data}` })) } : {}) }]);
+    setItems((xs) => [...xs, { t: "user", text: sentWords(text, files), ...(images.length ? { images: images.map((g) => ({ thumb: `data:${g.media_type};base64,${g.data}` })) } : {}) }]);
     setAsks([]);
     setBusy(true);
     let lost = false;
     let replied = false;
     let completed = false;
     try {
-      const r = await chatFetch(at(`${API}/turn`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}), origin: location.origin }) });
+      const r = await chatFetch(at(`${API}/turn`, provider), { method: "POST", headers: H, signal: transport.current.signal, body: JSON.stringify({ text, model, ...(images.length ? { images } : {}), ...(files.length ? { files } : {}), origin: location.origin }) });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (SITE && GATES.has(String(j.code || ""))) setGate({ code: String(j.code), msg: String(j.error || "") });
@@ -642,7 +645,8 @@ export function useFleetChat({ blockedBy = null, onTurnEnd, onReply, provider = 
     onCancel,
     onRespondToToolApproval,
     // pictures to send (task T773 ③): the composer's 发图片 and a pasted one
-    adapters: { attachments: new SimpleImageAttachmentAdapter() },
+    // pictures as pictures; any other file uploaded to the home (files.ts)
+    adapters: { attachments: new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(), new UploadAdapter(() => "target=personal")]) },
   });
 
   return { runtime, models, model, setModel, resume, notice, gate, budget: stop, reload: load, busy, sync, owner, handed, takeOver, taking,

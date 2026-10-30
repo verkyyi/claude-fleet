@@ -80,7 +80,8 @@
 //      give-back by the window; done twice is 200 already
 //   Y  the session gate (task HHV0): /api/say hands the words to bin/fleet_session_gate.py on
 //      stdin (pictures as media/ files), stop / answer with the body's fid are the gate's, a
-//      session not here is 404 with a code, /api/open opens a no-repo origin-web session with the
+//      session not here is 404 with a code, a file (task GXR5) is uploaded by itself and
+//      named on a line as 「[附件] name → path」, /api/open opens a no-repo origin-web session with the
 //      words as its first turn, the view's state line says can_talk + the queue (no holder)
 //   --only=socket|budget|context|home|idle|trial|view|handover|gate|media|links|send|pages|local (comma list) runs those parts only — the drills' road.
 import { spawn, spawnSync } from "node:child_process";
@@ -978,6 +979,29 @@ exit 2
   ok(r.status === 200 && c.argv.includes("--image") && existsSync(c.argv[c.argv.indexOf("--image") + 1]), `Y a picture is kept in media/ and named to the gate (${JSON.stringify(c.argv)})`);
   r = await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "x", images: [1, 2, 3, 4, 5].map(() => ({ media_type: "image/png", data: PNG })) } });
   ok(r.status === 400, "Y a fifth picture is refused on the spot");
+  // a file (task GXR5): uploaded by itself, kept by its bytes' hash under its own name,
+  // then named by {ref, name} on a line — the gate is handed its path with the words
+  const up = (body, name, headers = PAGE) => sreq("/api/upload", { method: "POST", body,
+    headers: { ...headers, "Content-Type": "application/octet-stream", "X-Fleet-File-Name": encodeURIComponent(name) } });
+  ok((await up("x", "a.txt", { "Content-Type": "application/json" })).status === 403, "Y an upload not from the page is 403");
+  r = await up("季度,收入\n1,2\n", "../../报表.csv");
+  j = JSON.parse(r.body);
+  ok(r.status === 200 && /^[0-9a-f]{32}$/.test(j.ref) && j.name === "报表.csv" && j.size > 0, `Y upload: kept by hash, the name one segment (${r.body})`);
+  ok((await up("", "empty.txt")).status === 400, "Y upload: an empty file is 400");
+  ok((await up("x", "")).status === 400, "Y upload: no name is 400");
+  r = await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "看表", files: [{ ref: j.ref, name: j.name }] } });
+  c = calls().at(-1);
+  const att = /\[附件\] 报表\.csv → (\S+)$/m.exec(c.stdin || "");
+  ok(r.status === 200 && c.stdin.startsWith("看表\n\n") && att && existsSync(att[1]) && readFileSync(att[1], "utf8").startsWith("季度"),
+    `Y say with a file: the words, then 「[附件] name → path」 to the kept bytes (${JSON.stringify(c.stdin)})`);
+  r = await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "", files: [{ ref: j.ref, name: j.name }] } });
+  ok(r.status === 200 && /^\[附件\] 报表\.csv → /.test(calls().at(-1).stdin), "Y a file alone is a line");
+  ok((await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "x", files: [{ ref: "0".repeat(32), name: "nope.pdf" }] } })).status === 400,
+    "Y a file never uploaded is refused");
+  ok((await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "x", files: [{ ref: j.ref, name: "../../../etc/passwd" }] } })).status === 400,
+    "Y a file's name is never a path");
+  ok((await sreq("/api/say", { method: "POST", headers: PAGE, body: { fid: FID, text: "x", files: Array(6).fill({ ref: j.ref, name: j.name }) } })).status === 400,
+    "Y a sixth file is refused on the spot");
   // stop / answer with the fid in the body (the entry writes it there) are the gate's
   r = await sreq("/api/stop", { method: "POST", headers: PAGE, body: { fid: FID } });
   ok(r.status === 200 && JSON.parse(r.body).how === "escape" && calls().at(-1).argv.join(" ") === `stop --fid ${FID}`, `Y stop by the body's fid (${r.body})`);
