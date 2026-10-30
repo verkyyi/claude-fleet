@@ -1543,7 +1543,8 @@ loop() {
     [ "$first" = 1 ] || [ "$nowt" -lt "$end" ] || { EXIT_WHY=lifetime; break; }
     first=0
     # backing off (BACKOFF above): wait out the not-before, inside this life only
-    if [ "$BACKOFF_MAX" -gt 0 ] && { read -r _bf _bu < "$BACKOFFF"; } 2>/dev/null; then
+    # ${…:-0}: a harness that lifts loop() alone (watch-schedule selftest) has no backoff
+    if [ "${BACKOFF_MAX:-0}" -gt 0 ] && { read -r _bf _bu < "$BACKOFFF"; } 2>/dev/null; then
       case "$_bu" in ''|*[!0-9]*) _bu=0 ;; esac
       while [ "$(date +%s)" -lt "$_bu" ]; do
         [ "$_bu" -lt "$end" ] || { EXIT_WHY=backoff; break 2; }
@@ -1565,7 +1566,7 @@ loop() {
     ms_now; ROUNDS_N=$(( ROUNDS_N + 1 ))
     if [ "$rcw" != 0 ]; then rcw=fail; elif [ "$LAST_FETCH" = 3 ]; then rcw=304; else rcw=200; fi
     hlog "round rc=$rcw ms=$(( MS - ms0 )) watched=$wseen"
-    backoff_note "$rcw"
+    if [ "${BACKOFF_MAX:-0}" -gt 0 ]; then backoff_note "$rcw"; fi
     # The node's nudge and the hub's publication are asynchronous. One bounded
     # follow-up after a local event catches a heartbeat racing the first fetch;
     # it does not keep an unseen list on a timer thereafter.
