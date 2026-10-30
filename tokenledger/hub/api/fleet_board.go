@@ -110,13 +110,13 @@ type BoardRow struct {
 	// and whether the web may talk to it now (a live session on a machine not
 	// lost, not ended: a terminal one too, by default). A record with no session
 	// has neither.
-	Origin     string        `json:"origin,omitempty"`
-	CanTalk    bool          `json:"can_talk"`
-	History    *BoardHistory `json:"history,omitempty"`
+	Origin  string        `json:"origin,omitempty"`
+	CanTalk bool          `json:"can_talk"`
+	History *BoardHistory `json:"history,omitempty"`
 	// Who opened it (task DDBQ), the list's group: agent (a session's task /
 	// spawn tool), schedule (a scheduled run), api (a bearer caller of
 	// worker_start). Empty = a person's (⌘P, the web, the CLI) — the main list.
-	Source     string        `json:"source,omitempty"`
+	Source     string `json:"source,omitempty"`
 	parentTask string
 	taskVia    string
 	taskAgent  bool
