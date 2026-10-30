@@ -116,7 +116,7 @@ type BoardRow struct {
 	// Who opened it (task DDBQ), the list's group: agent (a session's task /
 	// spawn tool), schedule (a scheduled run), api (a bearer caller of
 	// worker_start). Empty = a person's (⌘P, the web, the CLI) — the main list.
-	Source     string `json:"source,omitempty"`
+	Source     string        `json:"source,omitempty"`
 	parentTask string
 	taskVia    string
 	taskAgent  bool
