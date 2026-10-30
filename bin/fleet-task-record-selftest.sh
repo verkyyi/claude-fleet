@@ -203,7 +203,7 @@ bash "$R" get 'K5;x' >/dev/null 2>&1; [ "$?" = 2 ] && ok "C get: not a reference
 out=$(printf '为什么一直转\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo o/r --spawn 2>&1); rc=$?
 [ "$rc" = 0 ] && [ "$out" = T5 ] \
   && ok "D a repo task: T<n> only — no issue filed, no URL (issue #4897)" || st_miss "D repo: rc=$rc [$out]"
-grep -Eq '^dash-raw-session\.sh --repo o/r --task T5 --name 修风扇 --reap merged (--as fleet-worker )?--prompt-file=' "$WORK/calls" \
+grep -Eq '^dash-raw-session\.sh --repo o/r --task T5 --name 修风扇 --reap merged --source agent (--as fleet-worker )?--prompt-file=' "$WORK/calls" \
   && grep -qx '修风扇' "$WORK/calls" && grep -qx '为什么一直转' "$WORK/calls" \
   && ok "D …its session opens in a repo worktree bound to T5 (reap merged), title + words its first turn" \
   || st_miss "D repo spawner argv: $(cat "$WORK/calls")"
@@ -219,7 +219,7 @@ out=$(printf 'x\n' | bash "$R" dispatch --title '修风扇' --body-file - --repo
   && ok "D --draft is gone (issue #4898): usage, nothing opened" || st_miss "D draft: rc=$rc $(cat "$WORK/calls" 2>&1)"
 rm -f "$WORK/calls"
 out=$(printf '风扇为什么一直转\n' | bash "$R" dispatch --title '看看风扇' --body-file - --spawn --reap done:2h 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$out" = T5 ] && grep -q '^dash-raw-session.sh --no-repo --task T5 --name 看看风扇 --reap done:2h --prompt-file=' "$WORK/calls" \
+[ "$rc" = 0 ] && [ "$out" = T5 ] && grep -q '^dash-raw-session.sh --no-repo --task T5 --name 看看风扇 --reap done:2h --source agent --prompt-file=' "$WORK/calls" \
   && grep -qx '风扇为什么一直转' "$WORK/calls" && ok "D a no-repo task opens a no-repo session with --task, the words its first turn" \
   || st_miss "D no-repo: rc=$rc [$out] $(cat "$WORK/calls" 2>&1)"
 rm -f "$WORK/calls"
@@ -229,7 +229,7 @@ printf 'x\n' | bash "$R" dispatch --title r --body-file - >/dev/null 2>&1; rc=$?
 # --- G: a blank new session (T652, EPIC T651 C1) ------------------------------------
 rm -f "$WORK/calls"; : > "$CURL_LOG"
 out=$(bash "$R" dispatch --title '新会话' --repo o/r --spawn --blank --agent codex 2>&1); rc=$?
-[ "$rc" = 0 ] && [ "$out" = T5 ] && grep -Eq '^dash-raw-session\.sh --repo o/r --task T5 --name 新会话 --reap merged (--as fleet-worker )?--agent codex --placeholder$' "$WORK/calls" \
+[ "$rc" = 0 ] && [ "$out" = T5 ] && grep -Eq '^dash-raw-session\.sh --repo o/r --task T5 --name 新会话 --reap merged --source agent (--as fleet-worker )?--agent codex --placeholder$' "$WORK/calls" \
   && ! grep -q -- '--prompt-file' "$WORK/calls" \
   && ok "G --blank: the record, its session on the placeholder name — no first turn" || st_miss "G blank: rc=$rc [$out] $(cat "$WORK/calls" 2>&1)"
 tok1=$(grep -o '"token": "[^"]*"' "$CURL_LOG" | head -1)
@@ -241,7 +241,7 @@ tok2=$(grep -o '"token": "[^"]*"' "$CURL_LOG" | head -1)
 # a DeepSeek session (task J7BN): the model rides the record and the spawner, as Claude
 rm -f "$WORK/calls"; : > "$CURL_LOG"
 out=$(bash "$R" dispatch --title '新会话' --spawn --blank --model DeepSeek 2>&1); rc=$?
-[ "$rc" = 0 ] && grep -q '^dash-raw-session.sh --no-repo --task T5 --name 新会话 --agent claude --model deepseek --placeholder$' "$WORK/calls" \
+[ "$rc" = 0 ] && grep -q '^dash-raw-session.sh --no-repo --task T5 --name 新会话 --source agent --agent claude --model deepseek --placeholder$' "$WORK/calls" \
   && grep -q '"model": "deepseek"' "$CURL_LOG" \
   && ok "G --model: the record keeps it, the spawner opens on it as Claude" || st_miss "G model: rc=$rc [$out] $(cat "$WORK/calls" 2>&1)"
 rm -f "$WORK/calls"
