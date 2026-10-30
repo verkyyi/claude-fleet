@@ -155,11 +155,11 @@ spec:
         command:
         - /home/runner/run.sh
         # extras/ci-runner (fleet-ci-runner:<tag.sh>, built by ci-runner-image.yml):
-        # the official ARC runner (Ubuntu 24.04) + what ubuntu-latest carries for the
+        # the official ARC runner (Ubuntu 24.04) + what ubuntu-24.04 carries for the
         # selftests; buildctl for `node image`
         image: registry.example.com/acme/fleet-ci-runner:ci-TAG
         # a CPU REQUEST and no CPU limit (issue #3864): with cpu.max set the fleet
-        # reads the pod's cgroup as its machine (#3542), unlike ubuntu-latest's VM,
+        # reads the pod's cgroup as its machine (#3542), unlike ubuntu-24.04's VM,
         # and the load-gated selftests read another machine; spare cores are lent
         resources:
           limits:
@@ -169,7 +169,7 @@ spec:
             cpu: '1'
             ephemeral-storage: 2Gi
             memory: 2Gi
-        # the image's passwordless sudo, as on ubuntu-latest (root-only selftests);
+        # the image's passwordless sudo, as on ubuntu-24.04 (root-only selftests);
         # its job gate (ACTIONS_RUNNER_HOOK_JOB_STARTED) refuses any job but this
         # repo's master push / dispatch / schedule runs of the workflows below, and
         # (claude-fleet#4821) the PR gate ci.yml on a pull request from THIS repo's

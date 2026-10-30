@@ -57,7 +57,7 @@ jobs:
   board:
     name: board
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.lane.outputs.sha }}
@@ -112,7 +112,7 @@ jobs:
     name: plan
     needs: board
     if: needs.board.outputs.skip == 'false'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       macos_shards: ${{ steps.plan.outputs.macos_shards }}
@@ -170,7 +170,7 @@ jobs:
     name: macOS 排队
     needs: board
     if: needs.board.outputs.skip == 'false'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read
@@ -190,7 +190,7 @@ jobs:
     name: follow
     needs: [board, macos, macos-wait]
     if: always() && needs.board.outputs.skip == 'false'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read

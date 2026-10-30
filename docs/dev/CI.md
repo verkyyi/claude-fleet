@@ -9,7 +9,7 @@
 | 开 PR（`.github/workflows/ci.yml`） | 这次改动碰得到的检查：相关的 shell 自测、改到的那几块 Go（块内只测受影响的包）、相关的端到端 | `bin/ci-plan.sh all`，结果在 run 的 `ci-plan` 产物里 | 通过——由「CI 结论」统一判 |
 | 合并后的列车（`release-train.yml`） | PR 上没证明过的自测（`bin/fleet-train-reuse.sh` 复用 PR 的绿），再发布 | `run-selftests.sh --changed <stable> --proven` | 复用的算过，没复用的照跑 |
 | 发布后 15 分钟（`release-watch.yml`，列车 `next` 挪了 stable 就派，自己一条道） | `bin/fleet-release-watch.py`：读入口 `/v1/fleet/release/health`（金丝雀 `fleet.release_canary` 拦住、机器回滚这一版、入口 5xx）并探 `/healthz`；出问题 ⇒ `fleet-release-rollback.sh <stable> --since <上一版>` 整版回退 + 通知（#4915，BREAK-IT `release-bad-spreads`） | 不挑 | — |
-| 每晚（北京 06:17） | 全部：Linux 全量自测（`selftests-nightly.yml`，stable，GitHub 自带的 ubuntu-latest；当晚的数存成 artifact `selftests-baseline`）、Mac 全量（`selftests-macos.yml`）；`ci-nightly.yml`（master）把 `ci.yml` 能调的每一项都整项跑一遍——Go 四块 `-race -count=1`（不读测试缓存）+ Postgres 全部分片、task-acceptance / client-e2e（Linux + macOS）/ fleet-hub-mcp / browser-attachment / hub-rolling / shellcheck 全树 …（不含 oss-scan：它只看 PR 的 diff） | 不挑，全跑 | 没有跳过；红了就是那次运行红（GitHub 的失败通知 + 运行摘要），不开单（#4900） |
+| 每晚（北京 06:17） | 全部：Linux 全量自测（`selftests-nightly.yml`，stable，GitHub 自带的 ubuntu-24.04；当晚的数存成 artifact `selftests-baseline`）、Mac 全量（`selftests-macos.yml`）；`ci-nightly.yml`（master）把 `ci.yml` 能调的每一项都整项跑一遍——Go 四块 `-race -count=1`（不读测试缓存）+ Postgres 全部分片、task-acceptance / client-e2e（Linux + macOS）/ fleet-hub-mcp / browser-attachment / hub-rolling / shellcheck 全树 …（不含 oss-scan：它只看 PR 的 diff） | 不挑，全跑 | 没有跳过；红了就是那次运行红（GitHub 的失败通知 + 运行摘要），不开单（#4900） |
 
 拿不准就跑：base 解析不了、git 或 `go list` 出错、`tokenledger/` 下认不出的路径、改了 `bin/ci-plan.sh` 或 `ci.yml` 本身——一律全跑（EPIC #4810 共同约定 7）。
 
@@ -94,10 +94,10 @@ pkgs agent: github.com/verkyyi/claude-fleet/tokenledger/agent/cli
 ### 本仓库自己的 PR 上深圳集群（#4821，EPIC #4810 C18）
 
 - **跑哪些**：tokenledger 的 lint、`-race` 测试各片、交叉编译，和自测分片。Postgres 腿留在 GitHub（服务容器要 Docker，runner pod 里没有）。
-- **谁上**：只有 head 是本仓库分支的 PR（不是 fork）；fork 的、机器人的永远在 `ubuntu-latest`。`ci.yml` 的 plan 里 `bin/fleet-train-runner.sh pr-pick` 决定，输出 `runs_on` 传给两个被调用的工作流；摘要写为什么。
-- **集群在不在**：PR 读不到 runner 列表（runner 应用的密钥只给 master 的环境 `fleet-ack-probe`），所以 `fleet-ack-status.yml` 每 10 分钟在 master 上跑列车同一个 `pick`，把答案（`ts=` + pick 的几行）存进 Actions 缓存 `fleet-ack-status-<run>`；plan 恢复最新那份，30 分钟内说「在」才上 fleet-ack，否则 `ubuntu-latest`（BREAK-IT `pr-ack-down`）。
+- **谁上**：只有 head 是本仓库分支的 PR（不是 fork）；fork 的、机器人的永远在 `ubuntu-24.04`。`ci.yml` 的 plan 里 `bin/fleet-train-runner.sh pr-pick` 决定，输出 `runs_on` 传给两个被调用的工作流；摘要写为什么。
+- **集群在不在**：PR 读不到 runner 列表（runner 应用的密钥只给 master 的环境 `fleet-ack-probe`），所以 `fleet-ack-status.yml` 每 10 分钟在 master 上跑列车同一个 `pick`，把答案（`ts=` + pick 的几行）存进 Actions 缓存 `fleet-ack-status-<run>`；plan 恢复最新那份，30 分钟内说「在」才上 fleet-ack，否则 `ubuntu-24.04`（BREAK-IT `pr-ack-down`）。
 - **机器那头**：任务开始钩子 `bin/fleet-ci-job-gate.sh` 设了 `CI_GATE_PR_WORKFLOWS=ci.yml` 才收 PR，且从事件文件核对 head 是本仓库、非 fork、base master、作者非 `[bot]`（BREAK-IT `ci-ack-pr-fork`）。镜像就是常驻的 Go 缓存：Go、模块和 `-race` 的编译产物都烤在 `fleet-ci-runner` 里，fleet-ack 上不跑 `setup-go`、不读写 Actions 缓存。
-- **开关**：仓库变量 `FLEET_PR_RUNNER=fleet-ack`；空 ⇒ 什么都不读、全在 `ubuntu-latest`，和以前一字不差。打开前先把伸缩组换到带新钩子的镜像、加上 `CI_GATE_PR_WORKFLOWS`（`deploy/k8s/runners/README.md`），否则 PR 的 job 会被旧钩子拒掉。
+- **开关**：仓库变量 `FLEET_PR_RUNNER=fleet-ack`；空 ⇒ 什么都不读、全在 `ubuntu-24.04`，和以前一字不差。打开前先把伸缩组换到带新钩子的镜像、加上 `CI_GATE_PR_WORKFLOWS`（`deploy/k8s/runners/README.md`），否则 PR 的 job 会被旧钩子拒掉。
 
 ## 怎么加一个新检查
 

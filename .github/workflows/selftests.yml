@@ -40,17 +40,17 @@ on:
       # issue #4821: this repo's own PR on the Shenzhen cluster (ci.yml's plan,
       # fleet-train-runner.sh pr-pick) — the shards only; the plan stays on GitHub's
       runs_on:
-        description: 'runner labels: ubuntu-latest, or a JSON list (["fleet-ack"])'
+        description: 'runner labels: ubuntu-24.04, or a JSON list (["fleet-ack"])'
         type: string
-        default: ubuntu-latest
+        default: ubuntu-24.04
   # The full suite on a runner set of our own, by hand (issue #3864): e.g. runs_on
   # ["fleet-ack"] + the cluster mirror, before the release train is pointed there.
   workflow_dispatch:
     inputs:
       runs_on:
-        description: 'runner labels: ubuntu-latest, or a JSON list (["fleet-ack"])'
+        description: 'runner labels: ubuntu-24.04, or a JSON list (["fleet-ack"])'
         type: string
-        default: ubuntu-latest
+        default: ubuntu-24.04
       mirror:
         description: 'a git URL holding the commit (the cluster mirror), or empty'
         type: string
@@ -94,7 +94,7 @@ jobs:
     # green here that the train's change does not touch from this tree is not run
     # again. A dispatch keeps its own width and records nothing.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       shards: ${{ steps.plan.outputs.pr_shards }}
@@ -197,7 +197,7 @@ jobs:
   # is counted, a red does not stop the rest, and the summary says N/M per test.
   repeat:
     if: github.event_name == 'workflow_dispatch' && inputs.repeat != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -239,7 +239,7 @@ jobs:
 
   repeat-go:
     if: github.event_name == 'workflow_dispatch' && inputs.go_run != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       GOWORK: 'off'

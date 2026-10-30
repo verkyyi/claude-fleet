@@ -18,7 +18,7 @@ name: CI
 #               cluster's fleet-ack when the repo variable FLEET_PR_RUNNER names it
 #               and the cluster said «up» within 30 minutes (fleet-ack-status.yml's
 #               cache; bin/fleet-train-runner.sh pr-pick — issue #4821); a fork's PR,
-#               a stale or «down» word, or no variable ⇒ ubuntu-latest as before.
+#               a stale or «down» word, or no variable ⇒ ubuntu-24.04 as before.
 #               The plan job's `runs_on` output; the Postgres leg stays on GitHub
 #               (its service container needs Docker, which the runner pod has not).
 #   CI 结论     needs every job above, runs always: the plan must succeed, a check
@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       selftests: ${{ steps.plan.outputs.selftests }}
@@ -219,7 +219,7 @@ jobs:
     name: CI 结论
     if: always()
     needs: [plan, selftests, shellcheck, tokenledger, task-acceptance, client-e2e, fleet-hub-mcp, browser-attachment, hub-rolling, hub-deploy-check, cluster-perms, native-claude-worktree, native-managed-hooks, node-join, oss-scan, web-chat-ui, web-console]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: every selected check green, every other skipped

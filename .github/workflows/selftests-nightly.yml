@@ -13,7 +13,7 @@ name: selftests nightly
 #     and the window: since = the first-parent commit a day before it (stable as
 #     the previous night saw it).
 #   * the Linux shards run the FULL suite (no base) on that commit through the one
-#     shared matrix (selftests-shards.yml) on GitHub's own ubuntu-latest, as wide
+#     shared matrix (selftests-shards.yml) on GitHub's own ubuntu-24.04, as wide
 #     as bin/fleet-train-plan.sh --full prices it — never the train's Shenzhen
 #     pool: its job gate (bin/fleet-ci-job-gate.sh) takes only the merged train and
 #     refused every nightly shard 2026-10-14..19 (T517, BREAK-IT
@@ -64,7 +64,7 @@ permissions:
 jobs:
   board:
     name: board
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       sha: ${{ steps.board.outputs.sha }}
@@ -98,7 +98,7 @@ jobs:
     # --full) for GitHub's runners: 12..20 shards.
     name: plan
     needs: board
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       linux_shards: ${{ steps.plan.outputs.linux_shards }}
@@ -129,7 +129,7 @@ jobs:
       # GitHub's own runners, never the train's pool: fleet-ack's job gate
       # (bin/fleet-ci-job-gate.sh) takes only the merged train and refused every
       # nightly shard 2026-10-14..19 (BREAK-IT nightly-refused-by-runner).
-      runs_on: ubuntu-latest
+      runs_on: ubuntu-24.04
       shards: ${{ needs.plan.outputs.linux_shards }}
       budget_secs: ${{ needs.plan.outputs.linux_budget_secs }}
       step_minutes: ${{ needs.plan.outputs.linux_step_minutes }}
@@ -142,7 +142,7 @@ jobs:
     name: 汇总
     needs: [board, plan, linux]
     if: "!cancelled() && needs.board.result == 'success'"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read

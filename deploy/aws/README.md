@@ -179,7 +179,7 @@ lane). Unset or `ack` = the ACK road, byte for byte.
 | Stage | aws-k3s |
 |---|---|
 | every stage's hub (`FLEET_HUB_URL` in release-train.yml) | `FLEET_HUB_URL_AWS`, else `https://core.tokenman.io` |
-| `hub build` (hub-deploy.yml phase build) | ubuntu-latest, buildx, `HUB_AWS_PLATFORM` (default `linux/amd64`), pushed to `HUB_PUSH_REPO_AWS:prod-<sha7>` labelled `org.opencontainers.image.revision=<TRAIN_SHA>`; ECR login through GitHub's OIDC token → `AWS_DEPLOY_ROLE_ARN` |
+| `hub build` (hub-deploy.yml phase build) | ubuntu-24.04, buildx, `HUB_AWS_PLATFORM` (default `linux/amd64`), pushed to `HUB_PUSH_REPO_AWS:prod-<sha7>` labelled `org.opencontainers.image.revision=<TRAIN_SHA>`; ECR login through GitHub's OIDC token → `AWS_DEPLOY_ROLE_ARN` |
 | `hub` (phase deploy) | job `deploy-aws` (`deploy` is skipped): the pause gate · `fleet-train-hub.sh` (only forward) · `fleet-train-prebuild.sh verify` on ECR (the tag still the build's digest, revision `TRAIN_SHA`) · the image pinned `<repo>:<tag>@<digest>` · `bin/fleet-hub-aws-deploy.sh deploy` · `release.sh health` on `HUB_URLS_AWS` (else `FLEET_HUB_URL_AWS`, else `https://core.tokenman.io`) · on a red health check `fleet-hub-aws-deploy.sh rollback` |
 | the hand road (Actions → hub-deploy → Run workflow) | the same job; `tag=prod-<sha7>` deploys an image already in ECR (the rollback) |
 

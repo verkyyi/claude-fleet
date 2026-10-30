@@ -2318,7 +2318,7 @@ done
             self.assertIn(want, tb)
         wf = (BIN.parent / '.github/workflows/release-train.yml').read_text()
         # the cluster builds it; a reused image (#4818, the same key as stable's) is only tagged
-        self.assertIn("runs-on: ${{ needs.node-tools.outputs.reuse != '' && 'ubuntu-latest' || 'fleet-ack' }}", wf)
+        self.assertIn("runs-on: ${{ needs.node-tools.outputs.reuse != '' && 'ubuntu-24.04' || 'fleet-ack' }}", wf)
         self.assertIn('extras/managed-node/train-build.sh', wf)
         self.assertIn("--ignore-check 'node tools' --ignore-check 'node image'", wf)
         self.assertIn('role: gha-claudefleet-node-image', wf)

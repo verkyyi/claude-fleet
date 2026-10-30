@@ -26,10 +26,10 @@ on:
         required: false
         default: ''
       runs_on:
-        description: 'the runner label (ubuntu-latest, macos-latest, …), or a JSON list of labels (["self-hosted","macOS","fleet-ci"] — our own Macs, issue #3145)'
+        description: 'the runner label (ubuntu-24.04, macos-latest, …), or a JSON list of labels (["self-hosted","macOS","fleet-ci"] — our own Macs, issue #3145)'
         type: string
         required: false
-        default: ubuntu-latest
+        default: ubuntu-24.04
       shards:
         description: 'the matrix, a JSON list 1..N (N = strategy.job-total)'
         type: string

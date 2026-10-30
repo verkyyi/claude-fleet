@@ -1,12 +1,12 @@
 # fleet-ci-runner — the release train's Linux test runner in the Shenzhen cluster
 # (issue #3864, EPIC #3863 C1): the fleet-ack ARC scale set's image.
 #
-# The shards ran on GitHub's ubuntu-latest until now, and the selftests were written
+# The shards ran on GitHub's ubuntu-24.04 until now, and the selftests were written
 # against it: Ubuntu 24.04, tmux 3.4, Python 3.12, passwordless sudo, NO fzf (the
 # fzf checks skip there). So the base is the official ARC runner image — Ubuntu
 # 24.04 (noble), the actions runner as uid 1001 `runner` with passwordless sudo —
-# and on top only what ubuntu-latest carries that a selftest reaches for (zsh,
-# shellcheck, ssh-keygen, lsof, sqlite3, gawk — ubuntu-latest's awk —, …), Go (its
+# and on top only what ubuntu-24.04 carries that a selftest reaches for (zsh,
+# shellcheck, ssh-keygen, lsof, sqlite3, gawk — ubuntu-24.04's awk —, …), Go (its
 # module and build caches pre-filled for tokenledger/), Node 22, gh, buildctl (the train's `node image` job builds on the
 # cluster's buildkitd from the same set) and the actions a shard uses. A first
 # image on Debian 12 (tmux 3.3a, fzf 0.38, no sudo) went red on 19 selftests in a
@@ -37,7 +37,7 @@ ARG GOPROXY=https://goproxy.cn,https://mirrors.aliyun.com/goproxy/,direct
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Ubuntu's own packages, from the in-region mirror — what ubuntu-latest has that
+# Ubuntu's own packages, from the in-region mirror — what ubuntu-24.04 has that
 # the selftests use. fzf deliberately absent (as there).
 RUN set -eux; \
     for f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
@@ -73,7 +73,7 @@ COPY --from=buildkit /usr/bin/buildctl /usr/local/bin/buildctl
 
 # The base image leaves /home/runner mode 0777 (actions/runner images/Dockerfile).
 # A private preview's node helper refuses any world- or group-writable ancestor of
-# ~/.fleet-preview, so every preview e2e on this runner answered 502; ubuntu-latest's
+# ~/.fleet-preview, so every preview e2e on this runner answered 502; ubuntu-24.04's
 # home is 0755. The runner owns its home and is the only one writing there.
 RUN chmod 0755 /home/runner
 

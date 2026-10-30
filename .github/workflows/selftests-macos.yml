@@ -4,7 +4,7 @@ name: selftests (macOS)
 #
 # WHY THIS EXISTS
 # ---------------
-# Until this file landed, every workflow in the repo was `runs-on: ubuntu-latest`,
+# Until this file landed, every workflow in the repo was `runs-on: ubuntu-24.04`,
 # so NO CI ran on a BSD toolchain — while every place the operator actually runs
 # the gate (a worker pane, the live install) is macOS. That gap is structural, not
 # incidental: a GNU-only idiom is green in CI and broken on the only machine that
