@@ -328,7 +328,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
       onKeyDownCapture={() => { setFocused(true); clearTimeout(keyTimer.current); keyTimer.current = window.setTimeout(() => setFocused(false), 1200); }} onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false); }}>
       <SearchBox />
       <button type="button" aria-pressed={showArchived} onClick={() => { previous.current = undefined; setShowArchived(!showArchived); }} className="text-muted-foreground px-4 py-2 text-sm">{showArchived ? tr("返回会话", "Back to sessions") : tr(`已归档 · ${archivedCount}`, `Archived · ${archivedCount}`)}</button>
-      {showArchived ? <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档只隐藏会话，不会停止运行。取消归档即可恢复显示。", "Archiving hides sessions without stopping them. Unarchive to show them again.")}</p> : null}
+      {showArchived ? <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档会停止会话并从列表隐藏；还在运行的会先问你。取消归档即可恢复显示。", "Archiving stops a session and hides it; a running one asks first. Unarchive to show it again.")}</p> : null}
       {body}
       {variant === "page" ? <PressSheet r={pressed} onClose={() => setPressed(null)} /> : null}
     </div>

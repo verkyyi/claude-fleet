@@ -4748,9 +4748,23 @@ def archive_action(r, answer, fleet):
     return sh("fleet-hub-write.sh", "session_archive", json.dumps({"id": r["board"], "archived": not r.get("archived", False)}))
 
 
+def archive_stops(r):
+    """Archive = stop + hide (task DDBQ): archiving a session that can be stopped
+    stops it first; unarchiving only shows it again. A row whose machine is out of
+    reach cannot be stopped from here: it is archived as it is."""
+    return not r.get("archived") and not r.get("lost") and ACTION["stop"]["when"](r)
+
+
+def archive_ask(r):
+    """Ask first only while it is still doing something; an idle one just goes."""
+    return "key" if archive_stops(r) and task_status(r) != "quiet" else None
+
+
 ACTIONS = [
     {"id": "archive", "label": lambda r: (("Unarchive" if r.get("archived") else "Archive") if ui_lang() == "en" else ("取消归档" if r.get("archived") else "归档")),
-     "when": lambda r: bool(r.get("board")), "local": archive_action, "far": archive_action, "ask": None, "slow": True, "thread": True},
+     "when": lambda r: bool(r.get("board")), "local": archive_action, "far": archive_action, "ask": archive_ask,
+     "prompt": lambda r: ("Still running — stop and archive? y / n" if ui_lang() == "en" else "会话还在运行，归档会停止它。确定？ y / n"),
+     "keys": "yYnN", "yes": True, "slow": True, "thread": True},
     {"id": "continue", "label": lambda r: "Continue task" if ui_lang() == "en" else "继续任务",
      "when": lambda r: bool(controlled_stop_task(r)) and bool(r.get("cancel_request")) and not r.get("running") and not pending_start_task(r),
      "local": lambda r, a, f: "taskcontinue", "far": lambda r, a, f: "taskcontinue", "ask": "choice",
@@ -4997,6 +5011,19 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
     if a["id"] == "archive":
+        # Archive = stop + hide (task DDBQ): stop first; a stop that fails archives nothing.
+        if archive_stops(r):
+            result = stop_task(r, ui_lang(), bin_dir=act_bin())
+            if result is None:
+                cmd = far('stop')(r, ans, fleet) if r.get('far') else sh('fleet-worker-stop.sh', fleet, 'fid:' + r['fid'])
+                try:
+                    q = subprocess.run(cmd, env=act_env(fleet), capture_output=True, text=True,
+                                       stdin=subprocess.DEVNULL, timeout=60)
+                    result = (q.returncode, one_line(((q.stderr.strip() or q.stdout.strip()).splitlines() or [""])[-1], 120))
+                except (OSError, subprocess.TimeoutExpired):
+                    result = (1, "")
+            if result[0] != 0:
+                return result[0], say("view_act_failed_fmt", label, result[1]), False
         # A Hub preference works even when the session's node is offline.
         # Wait off the UI thread: success means saved, not merely spawned.
         try:
@@ -5197,8 +5224,8 @@ def cli_act(qo, vid, target, aid, text=None, yes=False, client=""):
     if all(x is not a for x, _ in menu_of(r)):
         print("%s: not for this row" % aid, file=sys.stderr)
         return 2
-    if a.get("yes"):
-        # a y / n confirm (回收): --yes is the y
+    if a.get("yes") and act_ask(a, r):
+        # a y / n confirm (回收; 归档 of a running session): --yes is the y
         if not yes and (text or "").lower() != "y":
             print("%s: not confirmed (--yes)" % aid, file=sys.stderr)
             return 3

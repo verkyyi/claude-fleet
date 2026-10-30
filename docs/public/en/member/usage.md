@@ -261,4 +261,4 @@ CLI example: `fleet task add daily --at 07:00 --prompt "/daily-brief" --agent cl
 
 In the Web session list, choose Archive beside a session. Open Archived to find it and choose Unarchive. In Terminal, select a session and press Tab → Archive; expand Archived to unarchive it from the same menu.
 
-You can also use `fleet archive <session>`, `fleet ls --archived`, and `fleet unarchive <session>`. Archiving syncs across both interfaces and only changes visibility. It does not stop execution or delete history; running sessions still use capacity, and new replies do not unarchive them.
+You can also use `fleet archive <session>`, `fleet ls --archived`, and `fleet unarchive <session>`. Archiving syncs across both interfaces. **Archiving stops the session first**, then hides it: while it is still running (working, asking, a Loop, a pending start) you are asked to confirm; an idle one is archived at once (`--yes` skips the question on the command line). A session whose machine is out of reach cannot be stopped and is only archived. History is kept, you can unarchive and continue it, and new replies do not unarchive it.

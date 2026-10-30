@@ -354,6 +354,44 @@ class SessionArchive(unittest.TestCase):
                 run.assert_called_once()
                 self.assertEqual(refresh.called,rc==0)
 
+    def test_archive_stops_first_and_asks_only_while_running(self):
+        # Archive = stop + hide (task DDBQ).
+        import subprocess
+        idle = row("@1", board="fid-i", fid="fid-i", state="idle")
+        busy = row("@2", board="fid-b", fid="fid-b", state="working", running=True)
+        gone = row("id:fid-g", board="fid-g", gone=True, sec="gone", state="done")
+        with patch.object(v, "live", side_effect=lambda r: not r.get("gone")):
+            self.assertTrue(v.archive_stops(idle))
+            self.assertIsNone(v.archive_ask(idle), "an idle one just goes")
+            self.assertEqual(v.archive_ask(busy), "key", "a running one asks first")
+            self.assertFalse(v.archive_stops(dict(busy, archived=True)), "unarchive stops nothing")
+            self.assertFalse(v.archive_stops(gone))
+            saved = subprocess.CompletedProcess([], 0, "", "")
+            calls = []
+            with patch.object(v, "stop_task", side_effect=lambda r, *a, **k: calls.append("stop") or (0, "ok")), \
+                    patch.object(v.subprocess, "run", side_effect=lambda *a, **k: calls.append("archive") or saved), \
+                    patch.object(v, "act_env", return_value={}), patch.object(v, "hub_reread"), \
+                    patch.object(v, "say", side_effect=lambda key, *args: key):
+                self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["archive"], idle, "", wait=False)[0], 0)
+                self.assertEqual(calls, ["stop", "archive"], "stop first, then archive")
+                calls.clear()
+            with patch.object(v, "stop_task", return_value=(1, "refused")), \
+                    patch.object(v.subprocess, "run", side_effect=lambda *a, **k: calls.append("archive") or saved), \
+                    patch.object(v, "act_env", return_value={}), patch.object(v, "say", side_effect=lambda key, *args: key):
+                self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["archive"], idle, "", wait=False)[0], 1)
+                self.assertEqual(calls, [], "a stop that fails archives nothing")
+        live_row = dict(key="@3", name="w3", state="working", running=True, board="fid-c", archived=False)
+        with patch.object(cli, "rows", return_value=[live_row]), patch.object(cli, "one", return_value=(live_row, 0)), \
+                patch.object(cli, "stop_row", return_value=0) as stop, patch.object(cli, "hub_write", return_value=(True, "ok")) as write, \
+                patch.object(cli, "hub_freshen"), contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+            with patch.object(cli, "ask", return_value="n"):
+                self.assertEqual(cli.cmd_archive(["w3"]), 1)
+                stop.assert_not_called(); write.assert_not_called()
+            with patch.object(cli, "ask", return_value=None):
+                self.assertEqual(cli.cmd_archive(["w3"]), 2, "no terminal: --yes")
+            self.assertEqual(cli.cmd_archive(["--yes", "w3"]), 0)
+            stop.assert_called_once(); write.assert_called_once_with("session_archive", {"id": "fid-c", "archived": True})
+
     def test_cli_archives_are_explicit_and_use_stable_identity(self):
         board = {"rows": [{"id":"fid-a", "code":"AB12", "title":"Old archive", "group":"gone", "archived":True, "state":"exited"}]}
         with patch.object(v, "board_read", return_value=board):
