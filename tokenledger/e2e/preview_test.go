@@ -32,6 +32,7 @@ func TestPreviewHTTPStreamAndWebSocket(t *testing.T)        { previewRelayTest(t
 func TestPreviewReplicaHTTPStreamAndWebSocket(t *testing.T) { previewRelayTest(t, true, "") }
 func TestPreviewExpiryClosesWebSocket(t *testing.T)         { previewRelayTest(t, false, "expiry") }
 func TestPreviewRegistrationEndToEnd(t *testing.T)          { previewRelayTest(t, true, "registration") }
+func TestPreviewSlowLoginAndOtherHubSession(t *testing.T)   { previewRelayTest(t, false, "login") }
 func previewRelayTest(t *testing.T, replicas bool, mode string) {
 	if os.Geteuid() < 500 {
 		t.Skip("ordinary user required; root runs the separate two-UID test")
@@ -154,6 +155,9 @@ func previewRelayTest(t *testing.T, replicas bool, mode string) {
 	h.Srv.FleetPublicURL = "https://hub.test"
 	browserHub.PreviewDomain = h.Srv.PreviewDomain
 	browserHub.FleetPublicURL = h.Srv.FleetPublicURL
+	if mode == "login" {
+		browserHub.PublicHosts = map[string]string{"other.test": "https://other.test"}
+	}
 	// Existing admin/node HTTP routes: the legacy fixture is denied, then the
 	// operator approves the exact account/endpoint, and the worker registers.
 	request := func(server *api.Server, path, body, bearer, assertion string) *httptest.ResponseRecorder {
@@ -274,7 +278,23 @@ func previewRelayTest(t *testing.T, replicas bool, mode string) {
 	first.Body.Close()
 	state := cookie(first, "__Host-fleet-preview-state")
 	session := personCookie(pAlice, "alice")
-	auth := do("GET", first.Header.Get("Location"), "", session)
+	authorize := first.Header.Get("Location")
+	if mode == "login" {
+		if state.MaxAge != 600 {
+			t.Fatal("state cookie cannot survive slow sign-in", state.MaxAge)
+		}
+		if _, err := h.Srv.Store.DB().Exec(`UPDATE fleet_preview_auth SET expires=expires-181`); err != nil {
+			t.Fatal(err)
+		}
+		// The browser has a session only on the other configured Hub origin.
+		probe := do("GET", authorize, "")
+		probe.Body.Close()
+		authorize = probe.Header.Get("Location")
+		if probe.StatusCode != 302 || !strings.HasPrefix(authorize, "https://other.test/preview/authorize?") {
+			t.Fatal("other Hub session not checked", probe.StatusCode, authorize)
+		}
+	}
+	auth := do("GET", authorize, "", session)
 	auth.Body.Close()
 	if auth.StatusCode != 302 {
 		t.Fatal("authorize", auth.StatusCode)

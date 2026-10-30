@@ -202,7 +202,10 @@ The hub keeps a copy of your conversation in China (your words, the replies' tex
 
 When enabled by the deployment, the Task details show your running HTTP/API/WebSocket
 applications under Live previews, including SSE and hot reload (HMR).
-Opening a preview requires sign-in and the Task owner's identity. Disconnected nodes
+Only the Task owner can open a preview. An existing login on another configured
+console origin is used automatically. Sign-in allows ten minutes for scanning or
+consent; an expired authorization restarts. The preview login lasts up to two hours,
+subject to the original console session's expiry and revocation. Disconnected nodes
 show Offline. The default lease is two hours; renew or close it in Task details.
 Closing disconnects active streams without stopping the application.
 

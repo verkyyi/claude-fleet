@@ -166,3 +166,43 @@ func TestPreviewIdentityAndGeneration(t *testing.T) {
 		})
 	}
 }
+
+func TestPreviewAuthExpiry(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	p := previewFixture(t, s)
+	now := time.Now()
+	if err := s.CreatePreview(p, 3, now); err != nil {
+		t.Fatal(err)
+	}
+	session := PreviewSession{Owner: p.Owner, SID: "sid", Issued: now.Unix(), Expires: now.Add(time.Hour).Unix()}
+	for _, tc := range []struct {
+		age   time.Duration
+		valid bool
+	}{
+		{3*time.Minute + time.Second, true},
+		{9 * time.Minute, true},
+		{10 * time.Minute, false},
+	} {
+		state := tc.age.String()
+		if err := s.BeginPreviewAuth(state, p.ID, "callback", now); err != nil {
+			t.Fatal(err)
+		}
+		at := now.Add(tc.age)
+		err := s.TicketPreview(state, p.ID, "callback", "ticket", session, at)
+		if (err == nil) != tc.valid {
+			t.Fatalf("at %s: %v", tc.age, err)
+		}
+		if tc.valid {
+			if err := s.ExchangePreview(state, p.ID, "callback", "ticket", state, at); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ExchangePreview(state, p.ID, "callback", "ticket", state+"replay", at); err == nil {
+				t.Fatal("replayed ticket accepted")
+			}
+		}
+	}
+}

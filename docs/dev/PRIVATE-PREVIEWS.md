@@ -120,6 +120,13 @@ Uvicorn 0.39 会主动把新建 socket 设成 0666，覆盖 umask；因此需要
 
 Hub 共享数据库保存租约、一次性 state/ticket、预览会话及并发名额；随机预览 ID 为
 128 bit / 32 hex（单 DNS label），认证随机值为 256 bit / 64 hex，只存哈希。
+登录 state 与浏览器 cookie 同为 10 分钟（与登录返回地址一致）。登录耗时过长、state 已用
+或已清理时，已验证所有者会回到预览重新发起授权，不复用旧票据。未登录的授权请求会
+依次检查 `CCQUOTA_PUBLIC_HOSTS` 配置的其他 HTTPS 入口；发现已有会话就直接授权，
+全部未登录才到登录入口登录一次；启用了门户跳转时，返回地址保存在门户域名上
+（微信仍使用原微信登录入口）。会话 cookie 不跨域共享，预览域仍检查原浏览器 state。
+预览会话最长保留 2 小时，并受原 Hub 会话到期与撤销约束；有效期内再次打开不用登录。
+
 票据短效、一次性且绑定 owner、preview、state、精确 callback；后续每次请求和 WS
 握手都检查身份，长连接周期复核。Hub session 撤销、trial 到期、账号 generation、
 node token rotation 均失效。任一副本处理页面或 relay 都读相同授权；relay 表仅存传输句柄。

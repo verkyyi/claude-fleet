@@ -191,12 +191,16 @@ type PreviewSession struct {
 	Issued, Expires int64
 }
 
+// PreviewAuthTTL covers interactive sign-in, including a slow QR scan.
+// Keep the browser state cookie on the same lifetime.
+const PreviewAuthTTL = 10 * time.Minute
+
 func (s *Store) BeginPreviewAuth(state, id, callback string, now time.Time) error {
 	// Remove only expired material; session/connection reads check expiry too.
 	if _, e := s.write.Exec(`DELETE FROM fleet_preview_auth WHERE expires<=?`, now.Unix()); e != nil {
 		return e
 	}
-	_, e := s.write.Exec(`INSERT INTO fleet_preview_auth (state_hash,preview,callback,expires) VALUES (?,?,?,?)`, state, id, callback, now.Add(2*time.Minute).Unix())
+	_, e := s.write.Exec(`INSERT INTO fleet_preview_auth (state_hash,preview,callback,expires) VALUES (?,?,?,?)`, state, id, callback, now.Add(PreviewAuthTTL).Unix())
 	return e
 }
 func (s *Store) TicketPreview(state, id, callback, ticket string, a PreviewSession, now time.Time) error {
