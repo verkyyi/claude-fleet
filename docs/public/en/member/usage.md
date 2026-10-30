@@ -27,7 +27,7 @@ Everything starts from one key. The tables below are generated from tokenman's k
 
 **The status line carries the brand, the session's name and the quota; messages get a row of their own.** The 看台's status line, at the bottom, shows tokenman's name (its o in clay) and the session's name 「tokenman · fix cache」 on its left, whatever its state — the session's state, number and question are the ⌘P panel's; on its right the change number (PR), the context left and the quota. It turns grey while the machine is out of reach or on the relay. Whatever tokenman has to tell you — a session asking you, stuck or done, an alert, a result nobody took, a passing notice (e.g. 「暂停开新：内存紧张」) — goes on a row **under** it, there only while something is unseen: the newest on the left, 「✦ 3 · ⌘P」 on the right. Every message goes by itself: an error (red ✖) and a result nobody took (yellow ✓) stay 30 seconds (or until you have seen them), a warning (yellow ▲) 6 seconds, a note (grey ∙) 3. Folded, it stays in ⌘P's ✦ Messages until you have seen it. Click the row, or open ⌘P's first row **✦ Messages** (or type 消息 / message in ⌘P), for all of them, grouped: ↵ reads one, g goes to its session, r marks it read, f hands a result nobody took to the orchestrator. Another home shows the same messages and count. `fleet notices` on your computer's command line prints them too.
 
-The panel looks roughly like this (sample data). ↑↓ follows the visible order. Needs attention has its own entry; PIN keeps pinned sessions above ordinary tasks. Ordinary and earlier conversations each sort by their latest turn activity, newest first. A new reply moves an older conversation up within its section. PIN keeps its pinned order; status refreshes alone do not reorder rows.
+The panel looks roughly like this (sample data). ↑↓ follows the visible order. PIN keeps pinned sessions on top; every other session is in one list, newest update first — a new reply, or a session starting to ask you (`!`), counts as an update and moves it up; status refreshes alone do not reorder rows. A session asking you is never folded. The session ID is internal: the row does not show it, the Tab page does.
 
 ```text
   › Search sessions
@@ -35,11 +35,11 @@ The panel looks roughly like this (sample data). ↑↓ follows the visible orde
   + New session
   $ Shell
 ─ PIN
-  ↻ K3F9     Codex   Fix export timeout          web-app
-  ⟳ A7P4     Claude  Check service availability  ops
-  ! B8D2     Claude  Login page redesign         web-app
-  ◷ C9W1     Codex   Add API tests               api
-    D2R6     Claude  Upgrade dependencies        web-app
+  ↻ Codex   Fix export timeout          web-app
+  ⟳ Claude  Check service availability  ops
+  ! Claude  Login page redesign         web-app
+  ◷ Codex   Add API tests               api
+    Claude  Upgrade dependencies        web-app
   ▸ More sessions
   ⇄ Language / 语言
   ⏏ Quit tokenman (sessions keep running)
@@ -62,7 +62,7 @@ The repository and agent chosen in the box are stored privately on this machine 
 
 The title counts open sessions and shows matched/total while searching. Folding and pinning do not change the total. Finished sessions whose window is still open count; folded-away ones do not. `+?` marks an unconfirmed remote count. Selection changes the background while status glyphs and name columns stay fixed. Ctrl+T still pins or unpins. The footer contains shortcuts, the optional legend and brief feedback.
 
-The list initially shows **10 sessions**, including the current session and PIN. Ordinary sessions fold after **24 hours without Turn activity while not executing**. Current and pinned sessions remain visible; explicit pins may exceed the limit. “Needs attention (N)” previews up to 3 sessions; expand it to see the rest. “More sessions (N)” includes the running count: → expands, ← collapses, and Enter toggles it. Search includes folded sessions. Folding only changes presentation: it never stops, parks or deletes a session; background resource policies operate independently.
+The list initially shows **10 sessions**, including the current session and PIN. Ordinary sessions fold after **24 hours without Turn activity while not executing**. Current and pinned sessions remain visible; explicit pins may exceed the limit. Sessions asking you or failed stay in time order, outside the limit, and never fold. “More sessions (N)” includes the running count: → expands, ← collapses, and Enter toggles it. Search includes folded sessions. Folding only changes presentation: it never stops, parks or deletes a session; background resource policies operate independently.
 
 In the web app, **Settings → Session list** offers 5 / 10 / 15 visible sessions and 12 hours / 24 hours / 3 days / Off. These preferences follow your account to web and terminal. You can also run `fleet config session-list 10 24`; the second number is hours, with `0` disabling age folding. New Turn activity competes for visible places again. Reordering pauses during interaction, and refreshing never closes an expanded More section.
 

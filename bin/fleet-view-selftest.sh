@@ -183,11 +183,12 @@ done
 # section — the panel's own ⚡ row (issue #3327) sits once, under the sessions
 # issue #3179: no (machine, login) grouping, a state is a glyph (the word only on the lit row)
 # the first rows are ✦ 消息 (T701) · + 新会话 · $ 命令行 (T762, T774, T923), the sessions' first
-# group 等你 right under them
+# rows right under them, in time order
 grep -A1 '│  › ' "$W/popup.txt" | tail -1 | grep -q '✦ 消息' || st_fail "B: the first line is not ✦ 消息: $(head -4 "$W/popup.txt")"
 grep -A2 '│  › ' "$W/popup.txt" | tail -1 | grep -q '  + 新会话' || st_fail "B: the second line is not + 新会话: $(head -5 "$W/popup.txt")"
 grep -A3 '│  › ' "$W/popup.txt" | tail -1 | grep -q '  \$ 命令行' || st_fail "B: the third line is not $ 命令行: $(head -6 "$W/popup.txt")"
-grep -A4 '│  › ' "$W/popup.txt" | tail -1 | grep -q '待处理 · 1' || st_fail "B: the line under the commands is not 等你: $(head -7 "$W/popup.txt")"
+# one order (task DDBQ): no 待处理 group lifts the asking row — it keeps its time place
+grep -q '待处理' "$W/popup.txt" && st_fail "B: a 待处理 group is still drawn: $(grep -n '待处理' "$W/popup.txt")"
 [ "$(grep -c '+ 新会话' "$W/popup.txt")" = 1 ] && ! grep -q '⚡' "$W/popup.txt" || st_fail "B: the + 新会话 row not once: $(grep -n '新会话' "$W/popup.txt")"
 grep -q '新任务[：…]' "$W/popup.txt" && st_fail "B: 「新任务」 on an empty panel: $(grep -n '新任务' "$W/popup.txt")"
 for bad in 'merged' 'done:2h' '⇢' '编排' '停放' '待你动手' '（这台）' '─ mac-a' '─ nodeA' '在问你'; do
@@ -196,7 +197,7 @@ done
 for bad in '─ 等你' '─ 在干活' '─ 待派发' '⌫ 现在收起' '要不要继续合并？'; do
   grep -qF "$bad" "$W/popup.txt" && st_fail "B: legacy group/action/question still drawn: $bad"
 done
-# plan B (T493): glyph · ID · Agent · short name · repo
+# plan B (T493): glyph · Agent · short name · repo (no ID column — DDBQ)
 grep -qE '! +Claude +Beta 要你拍板' "$W/popup.txt" || st_fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
 # Highlight changes background only; text and glyph columns stay fixed (#4416).
 grep -q '▶' "$W/popup.txt" && st_fail "B: selection inserted a marker"

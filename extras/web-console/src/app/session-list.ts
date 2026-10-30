@@ -34,7 +34,10 @@ export function listPreferences(value?: Partial<SessionListPreferences> | null):
 export const needsAttention = (r: Row) => listStatus(r).kind === "ask" ||
   (!listStatus(r).unknown && r.group !== "gone" &&
     ((r.live?.state || r.board?.state) === "failed" || r.board?.why_tone === "red" || r.board?.tag === "failed" || r.board?.tag === "refused"));
-export type CompactGroups = ListGroups & { attention: Row[]; attentionVisible: number };
+export type CompactGroups = ListGroups;
+// One order: PIN, then everything by recent activity (task DDBQ). A row that
+// needs the person is not lifted into a group of its own — entering needs is
+// itself activity — but it is never folded into More either.
 export function compactRows(rows: Row[], options: { current?: string; preferences?: Partial<SessionListPreferences>;
   now?: number; previous?: CompactGroups; interacting?: boolean } = {}): CompactGroups {
   const { current = "", now = Date.now(), previous, interacting = false } = options;
@@ -44,25 +47,22 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   const pin = base.pin;
   const recent = [...base.open, ...base.gone].sort((a, b) =>
     (b.board?.activity_at ? b.board.activity_at * 1000 : b.at) - (a.board?.activity_at ? a.board.activity_at * 1000 : a.at) || a.id.localeCompare(b.id));
-  const attention = recent.filter((r) => needsAttention(r) && !isCurrent(r));
-  const selected = recent.filter(isCurrent);
-  const room = Math.max(0, prefs.max_visible - pin.length - selected.length);
-  const attentionVisible = Math.min(3, room, attention.length);
-  const remaining = Math.max(0, room - attentionVisible);
-  const candidates = recent.filter((r) => !isCurrent(r) && !needsAttention(r));
+  const kept = recent.filter((r) => isCurrent(r) || needsAttention(r));
+  let room = Math.max(0, prefs.max_visible - pin.length - kept.length);
   const old = new Set(base.gone.map((r) => r.id));
-  const eligible = candidates.filter((r) => {
-    if (old.has(r.id)) return false;
+  const visible = new Set(kept.map((r) => r.id));
+  for (const r of recent) {
+    if (visible.has(r.id) || old.has(r.id) || room <= 0) continue;
     const at = r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
     const status = listStatus(r);
-    return !prefs.idle_hours || !at || status.kind === "work" || status.kind === "pending" || now - at < prefs.idle_hours * 3600000;
-  });
-  const visible = new Set([...selected, ...eligible.slice(0, remaining)].map((r) => r.id));
-  const next: CompactGroups = { pin, attention, attentionVisible,
-    open: recent.filter((r) => visible.has(r.id)), gone: candidates.filter((r) => !visible.has(r.id)) };
+    if (!prefs.idle_hours || !at || status.kind === "work" || status.kind === "pending" || now - at < prefs.idle_hours * 3600000) {
+      visible.add(r.id); room--;
+    }
+  }
+  const next: CompactGroups = { pin, open: recent.filter((r) => visible.has(r.id)), gone: recent.filter((r) => !visible.has(r.id)) };
   // Keep row positions and membership while someone is pointing or navigating.
   // Refresh facts by identity, including removals; new rows wait in More.
-  if (interacting && previous && (!current || [...previous.pin, ...previous.open, ...previous.attention.slice(0, previous.attentionVisible)].some(isCurrent))) {
+  if (interacting && previous && (!current || [...previous.pin, ...previous.open].some(isCurrent))) {
     const byID = new Map(rows.map((r) => [r.id, r]));
     const used = new Set<string>();
     const refresh = (before: Row[]) => before.flatMap((r) => {
@@ -70,8 +70,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
       if (!fresh) return [];
       used.add(r.id); return [fresh];
     });
-    const stable = { pin: refresh(previous.pin), attention: refresh(previous.attention),
-      open: refresh(previous.open), gone: refresh(previous.gone), attentionVisible: previous.attentionVisible };
+    const stable = { pin: refresh(previous.pin), open: refresh(previous.open), gone: refresh(previous.gone) };
     stable.gone.push(...rows.filter((r) => !used.has(r.id)));
     return stable;
   }

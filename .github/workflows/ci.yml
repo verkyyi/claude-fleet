@@ -141,7 +141,7 @@ jobs:
     if: needs.plan.outputs.selftests == 'true'
     uses: ./.github/workflows/selftests.yml
     with:
-      runs_on: ${{ needs.plan.outputs.runs_on || 'ubuntu-latest' }}
+      runs_on: ${{ needs.plan.outputs.runs_on || 'ubuntu-24.04' }}
   shellcheck:
     needs: plan
     if: needs.plan.outputs.shellcheck == 'true'
@@ -161,7 +161,7 @@ jobs:
       pkgs_agent: ${{ needs.plan.outputs.go_pkgs_agent }}
       pkgs_hub: ${{ needs.plan.outputs.go_pkgs_hub }}
       pkgs_e2e: ${{ needs.plan.outputs.go_pkgs_e2e }}
-      runs_on: ${{ needs.plan.outputs.runs_on || 'ubuntu-latest' }}
+      runs_on: ${{ needs.plan.outputs.runs_on || 'ubuntu-24.04' }}
   task-acceptance:
     needs: plan
     if: needs.plan.outputs.task_acceptance == 'true'

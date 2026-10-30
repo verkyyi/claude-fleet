@@ -10,7 +10,7 @@
 #      its heading's (a pinned or no-repo row: blank)
 #   C  the six glyphs + lost (one cell each, no emoji form), exited ⇒ ◌ folded
 #      into 已收起 (T688: ↵ its recovery page), an old `sleeping` ⇒ ∙ (☾ went with T548); the legend lists all seven
-#   D  paint: glyph(1) · ID(8, bold) · Agent(7) · name · repo(13); the repo column
+#   D  paint: glyph(1) · Agent(7) · name · repo(13) — no ID column; the repo column
 #      is kept blank; only ! and ✗ are coloured (red + bold); 未知 is dim; a long
 #      name is cut at its punctuation; no tag, issue or PR on the row
 #   E  search: an issue number (4539 or #4539) finds its row exactly, never by a
@@ -128,11 +128,12 @@ for e, segs in zip(shown, lines):
         continue
     assert qo.cells(text) == W, (qo.cells(text), text)
     assert segs[1][0] == fv.TASK_GLYPHS[fv.task_status(e)], segs
-    assert segs[3][0] == (e["id"] or "").ljust(8) + " " and "bold" in segs[3][1], segs[3]
+    # the session ID is internal: the Tab detail shows it, never the row (task DDBQ)
+    assert e["id"] not in text or not e["id"], (e["id"], text)
     agent = (e["agent"] or "").capitalize() or "未知"
-    assert segs[4][0] == agent.ljust(7 - (qo.cells(agent) - len(agent))) + " ", segs[4]
-    assert ("dim" in segs[4][1]) == (not e["agent"]) or e.get("lost"), segs[4]
-    repo = segs[6][0]
+    assert segs[3][0] == agent.ljust(7 - (qo.cells(agent) - len(agent))) + " ", segs[3]
+    assert ("dim" in segs[3][1]) == (not e["agent"]) or e.get("lost"), segs[3]
+    repo = segs[5][0]
     assert qo.cells(repo) == 15 and repo.startswith(" ") and repo.endswith(" "), repr(repo)
     red = any(st.startswith("c") for st in segs[1][1])
     assert red == (fv.task_status(e) == "needs") and (not red or "bold" in segs[1][1]), segs[1]
@@ -148,7 +149,7 @@ lit = lines[at]
 assert all("lit" in st for _, st in lit), lit
 long = dict(by["@2"], text="很长的标题第一段，" + "后面还有非常非常长的说明文字" * 6)
 segs = fv.row_segs(long, W, qo.cells, qo.clip)
-name = segs[5][0].rstrip()
+name = segs[4][0].rstrip()
 assert name == "很长的标题第一段…" or name.endswith("…"), name
 cut = fv.clip_name("前一半的文字比较长，后一半" + "很长" * 30, 34, qo.cells, qo.clip)
 assert cut == "前一半的文字比较长…", cut
@@ -172,5 +173,5 @@ PY
 st_ok_all "A  short names: 来自 X：…, T<n> prefix → ID, 修 #N：/ brackets / paths dropped"
 st_ok_all "B  columns: ID blank without a window ID (T<n> an alias), Agent (here: Claude; far: 未知), the row's own repo"
 st_ok_all "C  legacy observations retained; single-slot legend: needs / pending / running / Loop"
-st_ok_all "D  paint: one status slot · ID · Agent · title · repo; only needs red; cut at punctuation"
+st_ok_all "D  paint: one status slot · Agent · title · repo (no ID); only needs red; cut at punctuation"
 st_ok_all "E  search: issue number exact (4539 ≠ 45390), match_why; ID searched; note_of red on 会坏"

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, searchRows, seenMark } from '../src/app/session-list.ts';
+import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, searchRows, seenMark } from '../src/app/session-list.ts';
 
 const tr2 = (w) => (w ? w.join('|') : '');
 const F = '5b1e0000-0000-4000-8000-00000000f001';
@@ -210,11 +210,11 @@ for (const c of policyCases) {
     board: { ...r, running: r.state === 'working', lost: r.state === 'unknown' },
     live: r.group === 'gone' ? undefined : { state: r.state } }));
   const groups = compactRows(input, { current: c.current, preferences: c.preferences, now: c.now * 1000 });
-  assert.deepEqual([...groups.attention.slice(0, groups.attentionVisible), ...groups.pin, ...groups.open].map(r => r.id), c.visible, c.name);
+  assert.deepEqual([...groups.pin, ...groups.open].map(r => r.id), c.visible, c.name);
   assert.deepEqual(groups.gone.map(r => r.id), c.more, c.name);
-  assert.deepEqual(groups.attention.map(r => r.id), c.attention, c.name);
-  assert.equal(new Set([...groups.pin, ...groups.open, ...groups.attention, ...groups.gone].map(r => r.id)).size, input.length);
-  assert.equal(searchRows([...groups.pin, ...groups.open, ...groups.attention, ...groups.gone], '').length, input.length);
+  assert.deepEqual([...groups.pin, ...groups.open].filter(needsAttention).map(r => r.id), c.attention, c.name);
+  assert.equal(new Set([...groups.pin, ...groups.open, ...groups.gone].map(r => r.id)).size, input.length);
+  assert.equal(searchRows([...groups.pin, ...groups.open, ...groups.gone], '').length, input.length);
 }
 const freshRows = Array.from({length:12}, (_,i) => R({id:`fresh${i}`, code:`fresh${i}`, at:now-i*1000}));
 const initial = compactRows(freshRows, {now});
