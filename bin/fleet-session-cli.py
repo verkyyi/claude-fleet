@@ -15,7 +15,7 @@
                                          登录 · 名称 · 类型 · 状态 · 上次 · 下次 ·
                                          最近日志, a failed one red (fleet-services.py,
                                          issue #2526)
-    fleet archive <会话>                 归档：只隐藏列表，会话继续运行
+    fleet archive [--yes] <会话>         归档：停止会话并从列表隐藏；还在运行的先问（--yes 不问）
     fleet unarchive <会话>               取消归档；fleet ls --archived 查看归档
     fleet show <会话>                    one session, every field
     fleet open <会话>                    the client onto it (as ↵ on its ⌘P line)
@@ -683,7 +683,19 @@ def cmd_ls(args):
     return 0
 
 
+def archive_stops(row):
+    """Archive = stop + hide (task DDBQ): a session still open is stopped first."""
+    return not row.get("archived") and not row.get("ended") and (row.get("state") or "") not in ("", "exited", "gone", "unknown", "landed")
+
+
+def archive_busy(row):
+    """…and asked about first only while it is still doing something."""
+    return bool(row.get("running")) or row.get("state") in ("working", "needs", "blocked", "looping", "starting")
+
+
 def cmd_archive(args, archived=True):
+    yes = "--yes" in args or "-y" in args
+    args = [a for a in args if a not in ("--yes", "-y")]
     if len(args) != 1:
         return usage()
     row, rc = one(rows(), args[0])
@@ -693,10 +705,21 @@ def cmd_archive(args, archived=True):
     if not fid:
         say("入口尚未确认此会话的身份，请稍后重试")
         return 1
+    if archived and archive_stops(row):
+        if archive_busy(row) and not yes:
+            got = ask("「%s」还在运行，归档会停止它。确定？[y/N] " % (row.get("name") or args[0]))
+            if got is None:
+                say("不在终端里：确认请加 --yes")
+                return 2
+            if got.strip().lower() not in ("y", "yes"):
+                return 1
+        if stop_row(row):
+            say("没能停止，未归档")
+            return 1
     ok, why = hub_write("session_archive", {"id": fid, "archived": archived})
     if ok and not os.environ.get("FLEET_SESSION_CLI_ROWS"):
         hub_freshen(force=True)
-    say(("已归档；未改变运行状态" if archived else "已取消归档") if ok else why)
+    say(("已归档" if archived else "已取消归档") if ok else why)
     return 0 if ok else 1
 
 

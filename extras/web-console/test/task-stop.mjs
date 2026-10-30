@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { canStopRow, requestRowStop, stopTaskRef } from '../src/app/task-stop.ts';
+import { archivePlan } from '../src/app/archive.ts';
 const fid='11111111-1111-4111-8111-111111111111';
 const reply={stop_requested:true, execution_exit_confirmed:false,
   operation:{operation_id:fid, action:'worker_stop',status:'succeeded'}};
@@ -60,4 +61,12 @@ assert.equal(canStopRow({board:{task:'T42'}}),false);
 transport=io({read:async()=>({task:{id:'T42'}})});
 assert.equal((await requestRowStop(live,transport)).ok,false);
 assert.equal(transport.calls.length,0);
+// Archive stops it too (task DDBQ): asks only while it is doing something.
+const now = Date.now();
+assert.deepEqual(archivePlan({id:'a',at:now,board:{id:'a',state:'idle'},live:{id:'fleet/a',state:'idle'}}),{stop:true,confirm:false},'idle: stop, no question');
+assert.deepEqual(archivePlan({id:'b',at:now,board:{id:'b',state:'working',running:true},live:{id:'fleet/b',state:'working'}}),{stop:true,confirm:true},'running: ask first');
+assert.deepEqual(archivePlan({id:'c',at:now,board:{id:'c',state:'needs'},live:{id:'fleet/c',state:'needs'}}),{stop:true,confirm:true},'asking: ask first');
+assert.deepEqual(archivePlan({id:'d',at:now,group:'gone',board:{id:'d',state:'done'}}),{stop:false,confirm:false},'ended: archive only');
+assert.deepEqual(archivePlan({id:'f',at:now,board:{id:'f',state:'working',lost:true},live:{id:'fleet/f',state:'working'}}),{stop:false,confirm:false},'out of reach: archive only');
+assert.deepEqual(archivePlan({id:'e',at:now,board:{id:'e',archived:true},live:{id:'fleet/e',state:'working'}}),{stop:false,confirm:false},'unarchive stops nothing');
 console.log('PASS Task stop: controlled offline, legacy classification, refusal, identity, pending, and proof scope');
