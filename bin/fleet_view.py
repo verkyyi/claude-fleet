@@ -2357,6 +2357,7 @@ def board_apply(board, groups, shut, gone, here, me):
             e["agent_basis"] = r.get("agent_basis") or ""
             e["agent_words"] = r.get("agent_words")
         e["activity_at"] = r.get("activity_at") or r.get("at") or 0
+        e["source"] = r.get("source") if r.get("source") in SOURCES else ""
         e["list_preferences"] = board.get("session_list")
         e["attention_error"] = r.get("why_tone") == "red" or r.get("tag") in ("failed", "refused")
         e["board_context"] = board_words({"words": r.get("context") or ["", ""]})
@@ -2730,6 +2731,16 @@ def list_preferences(value=None):
             "idle_hours": value.get("idle_hours") if type(value.get("idle_hours")) is int and value["idle_hours"] in (0, 12, 24, 72) else 24}
 
 
+SOURCES = ("agent", "schedule", "api")
+
+
+def source_label(k):
+    """A source group's heading (task DDBQ) — the web's words, session-list.ts sourceLabel."""
+    en = ui_lang() == "en"
+    return {"agent": "From sessions" if en else "会话派出的", "schedule": "Scheduled" if en else "定时任务",
+            "api": "Via API" if en else "API 派发"}[k]
+
+
 def needs_attention(e):
     return task_status(e) == "needs" or (not e.get("lost") and not e.get("gone") and
            (e.get("state") == "failed" or e.get("attention_error")))
@@ -2744,9 +2755,13 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
                              next((e.get("list_preferences") for e in rows if e.get("list_preferences")), None))
     now = time.time() if now is None else now
     pin = [e for e in rows if e.get("group") == "pin"]
-    recent = [e for e in rows if e.get("group") != "pin"]
+    # who opened it (task DDBQ): a session's tool, a schedule or an API caller —
+    # each its own folded group, newest first; a person's is the main list
+    sourced = {k: [e for e in rows if e.get("group") != "pin" and e.get("source") == k] for k in SOURCES}
+    recent = [e for e in rows if e.get("group") != "pin" and e.get("source") not in SOURCES]
+    newest = lambda e: (-int(e.get("activity_at") or 0), e.get("fid") or e["target"])
     if any(e.get("activity_at") for e in recent):
-        recent.sort(key=lambda e: (-int(e.get("activity_at") or 0), e.get("fid") or e["target"]))
+        recent.sort(key=newest)
     # One order (task DDBQ): no group lifts a row that needs the person —
     # entering needs is itself activity — but such a row is never folded.
     protected = {e["target"] for e in recent if e["target"] in (current, selected) or needs_attention(e)}
@@ -2768,6 +2783,20 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     if pin:
         out += [{"kind": "hdr", "group": "pin", "text": "PIN"}] + pin
     out += ordinary
+    for k in SOURCES:
+        group = sorted(sourced[k], key=newest)
+        if not group:
+            continue
+        asking = sum(bool(needs_attention(e)) for e in group)
+        label = source_label(k) + " · %d" % len(group)
+        if asking:
+            label += (" · %d asking" if ui_lang() == "en" else " · %d 个在问你") % asking
+        out.append({"kind": "sec", "sec": "src-" + k, "text": label, "n": len(group), "alert": bool(asking)})
+        for e in group:
+            e.pop("sec", None)
+            if e["target"] not in (current, selected):
+                e["sec"] = "src-" + k   # folded with its heading; the one open now stays shown
+            out.append(e)
     older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:
         running = sum(task_status(e) == "work" for e in history)
@@ -2933,7 +2962,7 @@ def paint(shown, at, width, cells, clip):
             # a row the cursor stops on (T762): indented like one; only a ─ heading
             # starts at the left edge
             lines.append([(fill(row_lead("▸" if e.get("closed", True) else "▾") + e["text"], width, cells, clip),
-                           ("lit",) if lit else ())])
+                           (("lit",) if lit else ()) + (("c1", "bold") if e.get("alert") and color_on() else ()))])
             continue
         if e["kind"] == "cmd":
             icon = cmd_icons().get(e.get("icon") or e.get("cmd") or "")

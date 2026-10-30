@@ -34,7 +34,19 @@ export function listPreferences(value?: Partial<SessionListPreferences> | null):
 export const needsAttention = (r: Row) => listStatus(r).kind === "ask" ||
   (!listStatus(r).unknown && r.group !== "gone" &&
     ((r.live?.state || r.board?.state) === "failed" || r.board?.why_tone === "red" || r.board?.tag === "failed" || r.board?.tag === "refused"));
-export type CompactGroups = ListGroups;
+// Who opened a session (task DDBQ, the hub's board.source): a person's is the
+// main list; one a session's tool, a schedule or an API caller opened has its
+// own folded group, newest first, whatever its state. PIN keeps whatever was pinned.
+export type RowSource = "agent" | "schedule" | "api";
+export const ROW_SOURCES: RowSource[] = ["agent", "schedule", "api"];
+export const rowSource = (r: Row): RowSource | "" => {
+  const s = r.board?.source;
+  return s === "agent" || s === "schedule" || s === "api" ? s : "";
+};
+export const sourceLabel = (s: RowSource) => s === "agent" ? tr("会话派出的", "From sessions")
+  : s === "schedule" ? tr("定时任务", "Scheduled") : tr("API 派发", "Via API");
+export type SourceGroups = Record<RowSource, Row[]>;
+export type CompactGroups = ListGroups & { sources: SourceGroups };
 // One order: PIN, then everything by recent activity (task DDBQ). A row that
 // needs the person is not lifted into a group of its own — entering needs is
 // itself activity — but it is never folded into More either.
@@ -42,7 +54,11 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   now?: number; previous?: CompactGroups; interacting?: boolean } = {}): CompactGroups {
   const { current = "", now = Date.now(), previous, interacting = false } = options;
   const prefs = listPreferences(options.preferences);
-  const base = listRows(rows, previous);
+  const at = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+  const grouped = (s: RowSource) => rows.filter((r) => r.group !== "pin" && rowSource(r) === s)
+    .sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
+  const sources = { agent: grouped("agent"), schedule: grouped("schedule"), api: grouped("api") };
+  const base = listRows(rows.filter((r) => r.group === "pin" || !rowSource(r)), previous);
   const isCurrent = (r: Row) => rowRef(r) === current;
   const pin = base.pin;
   const recent = [...base.open, ...base.gone].sort((a, b) =>
@@ -59,7 +75,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
       visible.add(r.id); room--;
     }
   }
-  const next: CompactGroups = { pin, open: recent.filter((r) => visible.has(r.id)), gone: recent.filter((r) => !visible.has(r.id)) };
+  const next: CompactGroups = { pin, open: recent.filter((r) => visible.has(r.id)), gone: recent.filter((r) => !visible.has(r.id)), sources };
   // Keep row positions and membership while someone is pointing or navigating.
   // Refresh facts by identity, including removals; new rows wait in More.
   if (interacting && previous && (!current || [...previous.pin, ...previous.open].some(isCurrent))) {
@@ -70,8 +86,12 @@ export function compactRows(rows: Row[], options: { current?: string; preference
       if (!fresh) return [];
       used.add(r.id); return [fresh];
     });
-    const stable = { pin: refresh(previous.pin), open: refresh(previous.open), gone: refresh(previous.gone) };
-    stable.gone.push(...rows.filter((r) => !used.has(r.id)));
+    const stable = { pin: refresh(previous.pin), open: refresh(previous.open), gone: refresh(previous.gone),
+      sources: { agent: refresh(previous.sources.agent), schedule: refresh(previous.sources.schedule), api: refresh(previous.sources.api) } };
+    for (const r of rows.filter((r) => !used.has(r.id))) {
+      const src = r.group === "pin" ? "" : rowSource(r);
+      (src ? stable.sources[src] : stable.gone).push(r);
+    }
     return stable;
   }
   return next;

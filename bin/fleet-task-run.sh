@@ -94,7 +94,7 @@ else
     claude|codex) agent_args=(--agent "$FLEET_TASK_AGENT") ;;
     *) say "invalid task agent"; exit 10 ;;
   esac
-  out=$("$SPAWN" --no-repo --origin hub --reap-origin probe --reap "$REAP" --print --name "$W" --prompt "$P" ${agent_args[@]+"${agent_args[@]}"} "$SESS" 2>&1)
+  out=$("$SPAWN" --no-repo --origin hub --source schedule --reap-origin probe --reap "$REAP" --print --name "$W" --prompt "$P" ${agent_args[@]+"${agent_args[@]}"} "$SESS" 2>&1)
   rc=$?
   [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  spawn: /'
   [ "$rc" = 0 ] || { say "the session did not open (spawner exit $rc)"; exit 11; }

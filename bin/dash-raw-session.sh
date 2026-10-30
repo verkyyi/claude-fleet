@@ -134,7 +134,7 @@ set_agent() {   # a row of the adapter table (bin/fleet_agent_adapter.py beside 
   AGENT=$1
 }
 RAW_ARGV=("$@")   # as called: a prestart that did not hold starts this run again (T992)
-PRESTART_DIR=""; NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""; MODEL_ARG=""
+PRESTART_DIR=""; NAME=""; PROMPT=""; DRAFT=""; TARGET_SESS=""; BG=0; PIN=0; ORIGIN=""; SOURCE=""; AGENT=""; REPO_ARG=""; NOREPO=0; SEL=""; NODE_ARG=""; ORIGIN_WID=""; PRINT_WIN=0; REAP=""; TEST_ID=0; TASK_REF=""; AS_ARG=""; RESUME_SID=""; SEED_FILE=""; WT_ARG=""; PREV_ID=""; REOPEN_FID=""; ID_TASK=""; ID_PARENT=""; PLACEHOLDER=0; REAP_ORIGIN=""; MODEL_ARG=""
 CX_HOME=""; STRICT_RESUME=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -206,6 +206,11 @@ while [ "$#" -gt 0 ]; do
     --reap=*)      REAP="${1#--reap=}"; shift ;;
     # Legacy origin words remain accepted; only explicit probe selects a test
     # default. Web also stamps its transport provenance, not a retention role.
+    # --source <agent|schedule|api> (task DDBQ): who opened it, for the list's
+    # groups (@session_source). None = a person's (⌘P, web, the CLI), unless
+    # --origin names a session — then a session's tool opened it (agent).
+    --source)      SOURCE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
+    --source=*)    SOURCE="${1#--source=}"; shift ;;
     --reap-origin)   REAP_ORIGIN="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
     --reap-origin=*) REAP_ORIGIN="${1#--reap-origin=}"; shift ;;
     # --test-identity (issue #2505): a session the TEST identity's client placed
@@ -356,6 +361,9 @@ if [ -n "$DISPATCH" ]; then
 fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+case "$SOURCE" in ''|person|agent|schedule|api) ;;
+  *) printf 'dash-raw-session: --source takes person|agent|schedule|api\n' >&2; exit 2 ;;
+esac
 case "$REAP_ORIGIN" in ''|person|dispatched|member|driver|orchestrator|decide|probe|web) ;;
   *) printf 'dash-raw-session: --reap-origin takes person|dispatched|member|driver|orchestrator|decide|probe\n' >&2; exit 2 ;;
 esac
@@ -722,6 +730,7 @@ if [ "$BG" = 1 ]; then
   # canonical (checked above): no quote or space can be in it
   [ -n "$REAP" ] && owarg="$owarg --reap=$REAP"
   [ -n "$REAP_ORIGIN" ] && owarg="$owarg --reap-origin=$REAP_ORIGIN"   # a word, checked above
+  [ -n "$SOURCE" ] && owarg="$owarg --source=$SOURCE"   # a word, checked above
   [ "$TEST_ID" = 1 ] && owarg="$owarg --test-identity"
   [ "$PLACEHOLDER" = 1 ] && owarg="$owarg --placeholder"
   [ -n "$TASK_REF" ] && owarg="$owarg --task=$TASK_REF"   # T<n>, checked above
@@ -1395,6 +1404,9 @@ fi
 [ -n "$REAP_ORIGIN" ] && stamp_option @reap_origin "$REAP_ORIGIN" 2>/dev/null
 # Web is transport provenance, not a retention privilege.
 [ "$REAP_ORIGIN" = web ] && stamp_option @session_origin web 2>/dev/null
+# Who opened it (task DDBQ): a person's session carries nothing.
+[ -n "$SOURCE" ] || case "$ORIGIN" in ''|hub) ;; *) SOURCE=agent ;; esac
+case "$SOURCE" in agent|schedule|api) stamp_option @session_source "$SOURCE" 2>/dev/null ;; esac
 # A no-repo session opened with no words (⌘N, a plain `fleet` whose last session is
 # gone — issue #4000): its first turn is tracked (`@prompted`, set-claude-state.sh's
 # `working`), so one nobody ever typed into is closed after its grace

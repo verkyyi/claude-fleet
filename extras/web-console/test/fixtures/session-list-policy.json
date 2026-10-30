@@ -93,7 +93,12 @@
       "s09"
     ],
     "attention": [],
-    "now": 1800000000
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   },
   {
     "name": "24 hour boundary and running exception",
@@ -132,7 +137,12 @@
       "unknown"
     ],
     "attention": [],
-    "now": 1800000000
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   },
   {
     "name": "attention keeps time order and is never folded",
@@ -205,7 +215,12 @@
       "a3",
       "a4"
     ],
-    "now": 1800000000
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   },
   {
     "name": "attention past the cap still shows",
@@ -276,7 +291,12 @@
       "a4",
       "a5"
     ],
-    "now": 1800000000
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   },
   {
     "name": "disabled age filter",
@@ -297,7 +317,12 @@
     ],
     "more": [],
     "attention": [],
-    "now": 1800000000
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   },
   {
     "name": "unknown activity is retained",
@@ -314,7 +339,12 @@
     ],
     "more": [],
     "attention": [],
-    "now": 1800000000
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   },
   {
     "name": "selected history stays visible",
@@ -339,7 +369,12 @@
     ],
     "more": [],
     "attention": [],
-    "now": 1800000000
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   },
   {
     "name": "many pins are explicit exceptions",
@@ -432,6 +467,120 @@
     ],
     "more": [
       "other"
+    ],
+    "attention": [],
+    "now": 1800000000,
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
+  },
+  {
+    "name": "sources group apart, newest first, asking counted",
+    "rows": [
+      {
+        "id": "mine",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1800000000
+      },
+      {
+        "id": "bot-old",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999000,
+        "source": "agent"
+      },
+      {
+        "id": "bot-new",
+        "group": "queue",
+        "state": "needs",
+        "activity_at": 1799999990,
+        "source": "agent"
+      },
+      {
+        "id": "nightly",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999500,
+        "source": "schedule"
+      },
+      {
+        "id": "script",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999400,
+        "source": "api"
+      },
+      {
+        "id": "pinned-bot",
+        "group": "pin",
+        "state": "idle",
+        "activity_at": 1799990000,
+        "source": "agent"
+      },
+      {
+        "id": "mine-old",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999300
+      }
+    ],
+    "visible": [
+      "pinned-bot",
+      "mine",
+      "mine-old"
+    ],
+    "more": [],
+    "sources": {
+      "agent": [
+        "bot-new",
+        "bot-old"
+      ],
+      "schedule": [
+        "nightly"
+      ],
+      "api": [
+        "script"
+      ]
+    },
+    "attention": [
+      "bot-new"
+    ],
+    "now": 1800000000
+  },
+  {
+    "name": "the session open now stays shown in its group",
+    "rows": [
+      {
+        "id": "mine",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1800000000
+      },
+      {
+        "id": "bot",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999000,
+        "source": "agent"
+      }
+    ],
+    "current": "bot",
+    "visible": [
+      "mine"
+    ],
+    "more": [],
+    "sources": {
+      "agent": [
+        "bot"
+      ],
+      "schedule": [],
+      "api": []
+    },
+    "shown_in_group": [
+      "bot"
     ],
     "attention": [],
     "now": 1800000000

@@ -212,9 +212,11 @@ for (const c of policyCases) {
   const groups = compactRows(input, { current: c.current, preferences: c.preferences, now: c.now * 1000 });
   assert.deepEqual([...groups.pin, ...groups.open].map(r => r.id), c.visible, c.name);
   assert.deepEqual(groups.gone.map(r => r.id), c.more, c.name);
-  assert.deepEqual([...groups.pin, ...groups.open].filter(needsAttention).map(r => r.id), c.attention, c.name);
-  assert.equal(new Set([...groups.pin, ...groups.open, ...groups.gone].map(r => r.id)).size, input.length);
-  assert.equal(searchRows([...groups.pin, ...groups.open, ...groups.gone], '').length, input.length);
+  const sourced = [...groups.sources.agent, ...groups.sources.schedule, ...groups.sources.api];
+  for (const k of ['agent', 'schedule', 'api']) assert.deepEqual(groups.sources[k].map(r => r.id), c.sources[k], `${c.name}: ${k}`);
+  assert.deepEqual([...groups.pin, ...groups.open, ...sourced].filter(needsAttention).map(r => r.id), c.attention, c.name);
+  assert.equal(new Set([...groups.pin, ...groups.open, ...groups.gone, ...sourced].map(r => r.id)).size, input.length);
+  assert.equal(searchRows([...groups.pin, ...groups.open, ...groups.gone, ...sourced], '').length, input.length);
 }
 const freshRows = Array.from({length:12}, (_,i) => R({id:`fresh${i}`, code:`fresh${i}`, at:now-i*1000}));
 const initial = compactRows(freshRows, {now});
