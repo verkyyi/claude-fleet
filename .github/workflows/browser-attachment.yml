@@ -46,6 +46,8 @@ jobs:
         run: node extras/web-console/test/task-continue-browser.mjs
       - name: Studio restores live worker addresses and refreshes the same catalog
         run: node extras/web-console/test/studio-session-browser.mjs
+      - name: Bubble Cloud workbench — config, bench, scripts, desktop only (APVZ)
+        run: node extras/web-console/test/bubble-cloud-browser.mjs
       - name: A late transcript cannot erase a new chat turn
         run: node chat-history.mjs
         working-directory: extras/browser-transport

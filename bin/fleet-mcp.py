@@ -1244,6 +1244,29 @@ def studio_call(op, args):
         raise ToolFault(str(exc))
 
 
+def bc_call(op, args):
+    """The Bubble Cloud workbench's store and image service (bin/fleet_bc_studio.py, task APVZ)."""
+    import fleet_bc_studio as bc
+    try:
+        out = bc.call(op, args)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ToolFault(str(exc))
+    # The agent works with ids and local file paths, never the thumbnails' bytes.
+    for k in ("assets", "renders", "images"):
+        for e in out.get(k, []) if isinstance(out, dict) else []:
+            e.pop("thumb", None)
+    if isinstance(out, dict):
+        out.pop("thumb", None)
+    return out
+
+
+def tool_bc_config(args):
+    out = bc_call("read", {"proposal": args.get("proposal", "")})
+    if args.get("client"):
+        out["client"] = next((c for c in out["config"]["clients"] if c.get("id") == args["client"]), None)
+    return out
+
+
 def tool_where(args):
     return script([str(BIN / "fleet-client-where.sh")] + (["--json"] if args.get("json") else []), STATUS_TIMEOUT_S)
 
@@ -1402,9 +1425,31 @@ TOOLS = {
         "description": "LivePage studio: project real space results into the canvas. After push --hold / publish_file(hold:true), call preview_version(embed_origin from page_target, embed_renewable:true); pass embed.renewal.key/expires_at as embed_renewal_key/embed_renewal_expires (server-only), then show_page with status hold and the exact version_id. After a confirmed publish, read back and use ready. Analytics and leads must come from real reads, with period/source; unknown is unknown. Report each right-panel result using action_id, action_state (succeeded/failed/unknown) and action_message after read-back. This tool itself never publishes.",
         "inputSchema": {"type": "object", "properties": {
             **{k: {"type": "string"} for k in ("proposal_id", "title", "url", "version_id", "version", "visibility", "embed_url", "embed_expires", "embed_renewal_key", "embed_renewal_expires", "action_id", "action_state", "action_message", "note", "analytics", "leads", "qr_url")},
+            "scripts": {"type": "string", "description": "Bubble Cloud decks: this version's per-slide speaker scripts as a JSON list of {slide, title, text}, shown in the workbench's script panel."},
             "related": {"type": "boolean", "description": "Only for explicitly requested companion pages, e.g. three language editions. Each gets its own preview and publication confirmation."},
             "status": {"type": "string", "enum": ["hold", "review", "ready", "failed"]}},
             "required": ["proposal_id", "title"], "additionalProperties": False}}),
+    "bc_config": (tool_bc_config, {
+        "description": "Bubble Cloud workbench: the company profile, client cards and templates the person keeps in the workbench, plus every reference asset (venue photos, Bubble Cloud's portfolio) and this proposal's renderings with local file paths, scores and which one is picked per slide. Company facts come only from here.",
+        "inputSchema": {"type": "object", "properties": {
+            "proposal": {"type": "string", "description": "The LivePage proposal_id (or the studio key before the first version): limits renderings to this proposal."},
+            "client": {"type": "string", "description": "A client card id: also returns that card as `client`."}},
+            "additionalProperties": False}}),
+    "bc_image": (lambda a: bc_call("generate", a), {
+        "description": "Bubble Cloud workbench: make renderings through the quote server (models gemini = edit real photos, default; gpt = new illustrations / covers; seedream = cheap variations). refs are asset or rendering ids from bc_config (venue photo first). Waits until done (up to a few minutes) and returns each image's id, local path and cost. A proposal over its spending cap is refused until the person confirms; never pass override without that. Results appear in the workbench's image bench at once.",
+        "inputSchema": {"type": "object", "properties": {
+            "proposal": {"type": "string"}, "slide": {"type": "string", "description": "Which slide it is for, e.g. \"4\" or \"cover\"."},
+            "models": {"type": "array", "items": {"type": "string", "enum": ["gemini", "gpt", "seedream"]}},
+            "n": {"type": "integer", "minimum": 1, "maximum": 4, "description": "Images per model."},
+            "prompt": {"type": "string", "description": "Venue / props / palette / lighting / camera, plus: No people, no text, no logos or brand marks."},
+            "refs": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+            "parent": {"type": "string", "description": "A rendering id this one revises (kept in the version tree; used as the first reference)."},
+            "override": {"type": "boolean"}},
+            "required": ["proposal", "prompt"], "additionalProperties": False}}),
+    "bc_judge": (lambda a: bc_call("judge", a), {
+        "description": "Bubble Cloud workbench: score one finished rendering (venue kept, props buildable, palette, artifacts, photoreal; 0-10 each, score = mean) and store it on the image.",
+        "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "brief": {"type": "string"},
+            "palette": {"type": "array", "items": {"type": "string"}}}, "required": ["id"], "additionalProperties": False}}),
     "studio_projects": (lambda a: studio_call("projects", a), {
         "description": "Show the actual list_proposals results in this person's studio project picker. Fetch every page first; report read errors instead of inventing projects. This only updates the display, never space.",
         "inputSchema": {"type": "object", "properties": {"projects": {"type": "array", "items": {

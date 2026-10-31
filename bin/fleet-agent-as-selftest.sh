@@ -165,8 +165,9 @@ eq "E: no --as ⇒ nothing added for Codex" "$(env -u TMUX -u TMUX_PANE FLEET_FA
 # --- F ship -------------------------------------------------------------------------
 export CLAUDE_CONFIG_DIR="$WORK/cc" FLEET_CONF_DIR="$WORK/conf2"
 out=$(AD ship); n=$(ls "$WORK/cc/agents" 2>/dev/null | wc -l | tr -d ' ')
-[ "$n" = 2 ] && [ ! -e "$WORK/cc/agents/epic-driver.md" ] && cmp -s "$WORK/cc/agents/fleet-worker.md" "$ROOT/conf/agent-defaults/claude/agents/fleet-worker.md" \
+[ "$n" = 3 ] && [ ! -e "$WORK/cc/agents/epic-driver.md" ] && cmp -s "$WORK/cc/agents/fleet-worker.md" "$ROOT/conf/agent-defaults/claude/agents/fleet-worker.md" \
   && cmp -s "$WORK/cc/agents/livepage-studio.md" "$ROOT/conf/agent-defaults/claude/agents/livepage-studio.md" \
+  && cmp -s "$WORK/cc/agents/bubble-cloud-deck.md" "$ROOT/conf/agent-defaults/claude/agents/bubble-cloud-deck.md" \
   && st_ok "F: ship writes the core's agent files ($n)" || st_miss "F: first ship [$out]"
 eq "F: studio resolves outside a repo for Claude" "$(kv livepage-studio --dir "$HOME" | field file)" "$HOME/.claude/agents/livepage-studio.md"
 eq "F: studio resolves outside a repo for Codex" "$(kv livepage-studio --dir "$HOME" --agent codex | field file)" "$HOME/.claude/agents/livepage-studio.md"

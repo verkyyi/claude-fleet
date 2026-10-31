@@ -68,6 +68,20 @@ def session(state, fid, proposal=''):
     raise ValueError('this session has no studio binding; reopen from the studio')
 
 
+def scripts(value, prior=None):
+    """A deck's per-slide speaker scripts, as the agent reports them: [{slide, title, text}]."""
+    if value in (None, ''):
+        return prior or []
+    try:
+        items = json.loads(value) if isinstance(value, str) else value
+    except ValueError:
+        raise ValueError('scripts must be a JSON list of {slide, title, text}')
+    if not isinstance(items, list):
+        raise ValueError('scripts must be a JSON list of {slide, title, text}')
+    return [{'slide': text(x.get('slide'), 40), 'title': text(x.get('title'), 120), 'text': text(x.get('text'), 3000)}
+            for x in items[:60] if isinstance(x, dict)]
+
+
 def public(value):
     if isinstance(value, dict):
         return {k: public(v) for k, v in value.items() if k != '_renewal'}
@@ -92,6 +106,10 @@ def operate(state, op, a):
             state['sessions'][key] = {'key': key, 'fid': fid, 'agent': a['agent'],
                                       'proposal_id': a.get('proposal_id', ''), 'versions': [],
                                       'embed_origin': a['embed_origin'], 'actions': []}
+            # The Bubble Cloud workbench (task APVZ): the same projection, its client card and template.
+            if a.get('profile') == 'bubble-cloud':
+                state['sessions'][key].update(profile='bubble-cloud', client=text(a.get('client'), 40),
+                                              template=text(a.get('template'), 40))
         return state['sessions'][key]
     s = session(state, a['fid'], a.get('proposal_id', '') if op in ('action', 'renewal', 'renewed', 'renewal_failed', 'delivery', 'claim') else '')
     if op == 'target':
@@ -178,6 +196,7 @@ def operate(state, op, a):
                  'status': status, 'embed': https(a.get('embed_url', prior.get('embed'))),
                  'embed_exp': text(a.get('embed_expires', prior.get('embed_exp')), 60),
                  'note': text(a.get('note', prior.get('note'))), 'at': prior.get('at', time.time()),
+                 'scripts': scripts(a.get('scripts'), prior.get('scripts')),
                  'preview_updated_at': time.time()}
             if prior.get('_renewal'):
                 v['_renewal'] = prior['_renewal']
