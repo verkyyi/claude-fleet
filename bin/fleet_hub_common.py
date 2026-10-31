@@ -369,7 +369,7 @@ def inventory_row(parts):
     Column 36 (task HHV0): `cantalk=1` → `can_talk: true`, else `can_talk: false`
     (the web may only read it: an older Claude Code / mod / Codex); an older
     node's row has none: absent.
-    Last (task DDBQ): `source=agent|schedule|api` → `source`, who opened a
+    Last (task DDBQ): `source=agent|schedule|api|studio` → `source`, who opened a
     session no person opened; absent on a person's."""
     parts = list(parts)
     extra = {}
@@ -377,7 +377,7 @@ def inventory_row(parts):
     # opened; absent ⇒ a person's.
     if len(parts) >= 37 and parts[-1].startswith("source="):
         value = parts.pop()[7:]
-        if value in ("agent", "schedule", "api"):
+        if value in ("agent", "schedule", "api", "studio"):
             extra["source"] = value
     # Native turn/state activity, never the inventory polling time.
     if len(parts) >= 40 and parts[-1].startswith("activity="):

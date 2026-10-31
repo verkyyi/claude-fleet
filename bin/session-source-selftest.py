@@ -2,7 +2,7 @@
 # selftest-entry
 """Who opened a session (task DDBQ): the one stamp, the one column, the one reader.
 
-A  inventory_row reads the last column `source=agent|schedule|api` into `source`;
+A  inventory_row reads the last column `source=agent|schedule|api|studio` into `source`;
    a person's row (no column) and an unknown word carry none — the row as before.
 B  every spawner says it: dash-raw-session.sh --source (stamped only for
    agent|schedule|api, derived `agent` from a session's --origin, carried over
@@ -48,15 +48,17 @@ _, extra = inventory_row(base + ["park=", "loop=0", "nativewait=", "activity=180
 check("A: a person's row has none", "source" not in extra and extra.get("activity_at") == 1800000000)
 _, extra = inventory_row(base + ["park=", "source=person"])
 check("A: an unknown word is no source", "source" not in extra)
+_, extra = inventory_row(base + ["park=", "source=studio"])
+check("A: source=studio is read (V374)", extra.get("source") == "studio")
 
 # ---- B: the spawners --------------------------------------------------------------
 raw = read("bin", "dash-raw-session.sh")
 check("B: dash-raw-session.sh takes --source", "--source)" in raw and "--source=*)" in raw)
-check("B: refuses an unknown source", "case \"$SOURCE\" in ''|person|agent|schedule|api) ;;" in raw)
+check("B: refuses an unknown source", "case \"$SOURCE\" in ''|person|agent|schedule|api|studio) ;;" in raw)
 check("B: a session's --origin is an agent's",
       "[ -n \"$SOURCE\" ] || case \"$ORIGIN\" in ''|hub) ;; *) SOURCE=agent ;; esac" in raw)
 check("B: a person's session is stamped nothing",
-      "case \"$SOURCE\" in agent|schedule|api) stamp_option @session_source \"$SOURCE\"" in raw)
+      "case \"$SOURCE\" in agent|schedule|api|studio) stamp_option @session_source \"$SOURCE\"" in raw)
 check("B: the --bg re-exec carries it", "owarg=\"$owarg --source=$SOURCE\"" in raw)
 check("B: a scheduled run's first sentence is its name (X24T)",
       '[ "$SOURCE" = schedule ] && [ -n "$custom" ] && stamp_option @task_line "$custom"' in raw)
@@ -68,7 +70,8 @@ check("B: the task tool (via 编排) opens an agent's", "src=''; [ \"$via\" = �
 check("B: a scheduled run says schedule (python runner)", "'--source','schedule'" in read("bin", "fleet_schedule_run.py"))
 check("B: a scheduled run says schedule (shell runner)", "--source schedule" in read("bin", "fleet-task-run.sh"))
 ctl = read("bin", "fleet-control-read.sh")
-SRC_FMT = "#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,}}"
+SRC_FMT = ("#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,"
+           "#{?#{==:#{@agent_def},livepage-studio},studio,#{?#{==:#{@agent_def},bubble-cloud-deck},studio,}}}}")
 check("B: the inventory reads @session_source", SRC_FMT + "' 2>/dev/null) || cwds=''" in ctl
       and 'suffix += ("\\tsource=" + src) if src else ""' in ctl)
 # X24T: a window a scheduler opened before the stamp (reap origin probe, not a
@@ -79,7 +82,9 @@ if shutil.which("tmux"):
     try:
         tm("new-session", "-d", "-s", "t", "-n", "person")
         for n, opts in (("old", {"@reap_origin": "probe"}), ("test", {"@reap_origin": "probe", "@test_identity": "1"}),
-                        ("agent", {"@session_source": "agent", "@reap_origin": "probe"}), ("mine", {"@reap_origin": "person"})):
+                        ("agent", {"@session_source": "agent", "@reap_origin": "probe"}), ("mine", {"@reap_origin": "person"}),
+                        ("lp", {"@agent_def": "livepage-studio"}), ("bc", {"@agent_def": "bubble-cloud-deck"}),
+                        ("other", {"@agent_def": "fleet-worker"})):
             tm("new-window", "-t", "t:", "-n", n)
             for k, v in opts.items():
                 tm("set-option", "-w", "-t", "t:" + n, k, v)
@@ -87,8 +92,12 @@ if shutil.which("tmux"):
         check("B: an old scheduled window reads schedule", got.get("old") == "schedule")
         check("B: a test identity, a person's and a stamped window keep theirs",
               got.get("test") == "" and got.get("person") == "" and got.get("mine") == "" and got.get("agent") == "agent")
+        check("B: an old workbench window reads studio (V374)",
+              got.get("lp") == "studio" and got.get("bc") == "studio" and got.get("other") == "")
     finally:
         tm("kill-server")
+check("B: the workbench opens a studio session (V374)",
+      '["--as", profile, "--source", "studio"]' in read("extras", "web-chat", "server.mjs"))
 check("B: a migration carries it", re.search(r'^MIGRATE_CARRY="[^"]*@session_source', read("bin", "fleet-migrate.sh"), re.M) is not None)
 
 # ---- C: one decision, two readers ---------------------------------------------------

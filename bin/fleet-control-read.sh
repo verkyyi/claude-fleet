@@ -247,12 +247,14 @@ case "$mode" in
     # carries it as the row's origin.
     # Column 36 (task HHV0): `cantalk=1` when the web may say a sentence into it (the
     # session gate, bin/fleet_session_gate.py), else empty: read-only there.
-    # Last, after park= and the native facts (task DDBQ): `source=agent|schedule|api`
+    # Last, after park= and the native facts (task DDBQ): `source=agent|schedule|api|studio`
     # — who opened a session no person opened (@session_source, the spawners); the
     # hub's list groups it apart. Absent on a person's session: the row as before.
     # A window opened before the stamp says it by its reap origin: `probe` is only
     # ever stamped by the two schedulers (fleet_schedule_run.py, fleet-task-run.sh)
-    # and a test identity, so probe without @test_identity 1 is a schedule's (X24T).
+    # and a test identity, so probe without @test_identity 1 is a schedule's (X24T);
+    # one started from a workbench agent file (livepage-studio / bubble-cloud-deck)
+    # is the workbench's (V374).
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -264,7 +266,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}\t#{?@turn_activity_at,#{@turn_activity_at},#{@claude_state_ts}}\t#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,}}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}\t#{?@turn_activity_at,#{@turn_activity_at},#{@claude_state_ts}}\t#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,#{?#{==:#{@agent_def},livepage-studio},studio,#{?#{==:#{@agent_def},bubble-cloud-deck},studio,}}}}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     orep=''
     [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
