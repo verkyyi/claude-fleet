@@ -436,7 +436,7 @@ func (s *Server) liveFleetRows(now time.Time) ([]store.FleetRow, map[string]stri
 	avail := s.nodeAvailability(now)
 	var out []store.FleetRow
 	for _, r := range rows {
-		if !r.Present || r.OSUser == "" || s.isFleetAdmin(r.OSUser) {
+		if !r.Present || r.OSUser == "" || s.fleetAdminRow(r) {
 			continue
 		}
 		if a := avail[r.EndpointID]; a == "" || a == "lost" {
@@ -445,6 +445,16 @@ func (s *Server) liveFleetRows(now time.Time) ([]store.FleetRow, map[string]stri
 		out = append(out, r)
 	}
 	return out, avail, nil
+}
+
+// fleetAdminRow says a fleet is the admin role's, never a home (claude-fleet
+// #4234). The role is a login NAME on the operator's machines; a person's pod
+// holds that one person's login and never the role, so a pod login that shares
+// an admin's name (`--own-name` for an operator whose GitHub login is also their
+// Mac's admin account) is still theirs — before task APVZ every such pod was
+// silently left out of the home choices («只能换到你有登录、且上面有在用的 fleet 的机器»).
+func (s *Server) fleetAdminRow(r store.FleetRow) bool {
+	return s.isFleetAdmin(r.OSUser) && !isUserPodName(r.Hostname)
 }
 
 // spareChecked says a's op passed its check (claude-fleet#4673) — the hub's
