@@ -42,6 +42,7 @@ var chatRoutes = map[string]string{
 	"studio/open":    http.MethodPost,
 	"studio/action":  http.MethodPost,
 	"studio/preview": http.MethodPost,
+	"studio/bc":      http.MethodPost, // the Bubble Cloud workbench (APVZ): {op, …}
 	"conversation":   http.MethodGet,
 	"turn":           http.MethodPost,
 	// the home conversation's own stop / answer; with ?worker= a session's

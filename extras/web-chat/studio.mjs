@@ -15,6 +15,35 @@ export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pend
       });
     child.stdin.end(JSON.stringify(body));
   });
+  // The Bubble Cloud profile's own store and image service (bin/fleet_bc_studio.py, task APVZ).
+  const bc = (op, body = {}, timeout = 15000) => new Promise((resolve, reject) => {
+    const child = execFile("python3", [join(helpers, "fleet_bc_studio.py"), op],
+      { env, timeout, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
+        try {
+          const data = JSON.parse(stdout);
+          if (error || data.error) reject(new Error(data.error || "方案工作台暂时不可用")); else resolve(data);
+        } catch { reject(new Error("方案工作台暂时不可用")); }
+      });
+    child.stdin.end(JSON.stringify(body));
+  });
+  const BC_OPS = new Set(["read", "save", "asset", "import_portfolio", "generate", "media", "judge", "pick", "usage"]);
+  const background = new Map();
+  async function bubbleCloud(a) {
+    const op = String(a.op || "");
+    if (!BC_OPS.has(op)) throw new Error("unknown operation");
+    // Renderings, scoring and the portfolio import take minutes: answered at once, the page reads the store.
+    if (op === "generate") {
+      const planned = await bc("plan", a);
+      void bc("run", { ...a, ids: planned.ids }, 600000).catch(() => {});
+      return { state: "started", ...planned };
+    }
+    if (op === "judge" || op === "import_portfolio") {
+      const id = op + ":" + String(a.id || "");
+      if (!background.has(id)) background.set(id, bc(op, a, 300000).catch(() => {}).finally(() => background.delete(id)));
+      return { state: "started" };
+    }
+    return bc(op, a, op === "asset" ? 60000 : 15000);
+  }
   const renewing = new Map();
   async function renew(a) {
     const id = `${a.fid}:${a.proposal_id}:${a.version_id}`;
@@ -68,16 +97,21 @@ export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pend
     if (prior) return { ...prior, reused: true };
     if (proposal && !state.projects.some(p => p.proposal_id === proposal)) throw new Error("请先刷新项目列表");
     if (a.agent !== "claude" && a.agent !== "codex") throw new Error("请选择 Claude Code 或 Codex");
+    const bubble = a.profile === "bubble-cloud";
     const origin = new URL(a.embed_origin);
     if (origin.protocol !== "https:" || origin.origin !== a.embed_origin) throw new Error("无效预览来源");
     const instruction = key === "catalog"
       ? "读取本人工作区的全部活页项目（list_proposals，含分页），用 fleet.studio_projects 展示。只读，不修改页面。"
       : proposal ? `打开已绑定活页 ${proposal}，读取当前状态和版本，获取预览并 show_page。不自动发布，不改可见范围。`
         : String(a.text || "请先问我想做什么页面；所有改动先 hold 并给预览。").slice(0, 10000);
-    const text = `${instruction}\n\n[增长运营 Agent] 本会话使用 livepage-studio 定义。先 page_target，未绑定时稍后重试。全部改动 hold；只有右栏确认记录可授权上线或推送。`;
-    const result = await spawn(text, a.agent, "livepage-studio");
+    const pick = (v) => (/^[A-Za-z0-9_-]{1,40}$/.test(String(v || "")) ? String(v) : "");
+    const text = bubble
+      ? `${instruction}\n\n[Bubble Cloud 方案工作台] 本会话使用 bubble-cloud-deck 定义，studio key = ${key}。客户卡 = ${pick(a.client) || "未选，先问我"}；模板 = ${pick(a.template) || "未选，用 13 页模板"}。先 page_target 与 bc_config；效果图用 bc_image；全部改动 hold；只有右栏确认记录可授权上线。`
+      : `${instruction}\n\n[增长运营 Agent] 本会话使用 livepage-studio 定义。先 page_target，未绑定时稍后重试。全部改动 hold；只有右栏确认记录可授权上线或推送。`;
+    const result = await spawn(text, a.agent, bubble ? "bubble-cloud-deck" : "livepage-studio");
     if (!result.fid) throw new Error(result.error || "没能开一个工作台会话");
-    return book("bind", { key, fid: result.fid, agent: a.agent, proposal_id: proposal, embed_origin: origin.origin });
+    return book("bind", { key, fid: result.fid, agent: a.agent, proposal_id: proposal, embed_origin: origin.origin,
+      ...(bubble ? { profile: "bubble-cloud", client: pick(a.client), template: pick(a.template) } : {}) });
   }
   return async (req, res, path) => {
     try {
@@ -91,7 +125,8 @@ export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pend
       }
       if (req.method !== "POST") return send(res, 405, { error: "POST only" });
       if (req.headers["x-fleet-webchat"] !== "1") return send(res, 403, { error: "forbidden" });
-      const a = await readJson(req);
+      // An uploaded venue photo rides in the body (the page shrinks it first; the entry caps a request at 1 MB).
+      const a = await readJson(req, path === "/api/studio/bc" ? 1024 * 1024 : undefined);
       if (!a) return send(res, 400, { error: "invalid body" });
       if (path === "/api/studio/open") {
         const next = opening.then(() => open(a));
@@ -99,6 +134,7 @@ export function studioHandlers({ helpers, env, readJson, send, spawn, gate, pend
         return send(res, 200, await next);
       }
       if (path === "/api/studio/preview") return send(res, 200, await renew(a));
+      if (path === "/api/studio/bc") return send(res, 200, await bubbleCloud(a));
       if (path === "/api/studio/action") {
         const receipt = await book("action", a);
         if (receipt.used || ["queued", "sent", "executing", "succeeded", "unknown"].includes(receipt.state)) return send(res, 200, { state: receipt.state });

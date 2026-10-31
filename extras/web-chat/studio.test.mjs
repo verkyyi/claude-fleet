@@ -65,5 +65,18 @@ try {
   assert.equal((await call()).body.state, "unknown");
   assert.equal((await call()).body.state, "unknown");
   assert.equal(sends, 1);
-  console.log("PASS studio: concurrent open, restart, scope, CSRF, unconfirmed action");
+  // The Bubble Cloud profile (APVZ): its own agent definition and binding; the store's ops only.
+  const bcFid = "abcdef12-1234-4234-8234-123456789abc";
+  handler = studioHandlers({ ...dependencies, spawn: async (text, agent, profile) => {
+    assert.equal(profile, "bubble-cloud-deck"); assert.match(text, /客户卡 = c-google/); assert.match(text, /bc_config/); return { fid: bcFid };
+  } });
+  const bcOpen = await handler({ method: "POST", headers: { "x-fleet-webchat": "1" }, body: { key: "new-bc", text: "deck", agent: "claude",
+    embed_origin: "https://hub.example.com", profile: "bubble-cloud", client: "c-google", template: "../x" } }, {}, "/api/studio/open");
+  assert.equal(bcOpen.body.profile, "bubble-cloud"); assert.equal(bcOpen.body.client, "c-google"); assert.equal(bcOpen.body.template, "");
+  const bcCall = (body) => handler({ method: "POST", headers: { "x-fleet-webchat": "1" }, body }, {}, "/api/studio/bc");
+  assert.equal((await bcCall({ op: "read" })).body.config.rev, 1);
+  assert.equal((await bcCall({ op: "run", ids: [] })).status, 400, "run is the service's own, never the page's");
+  assert.equal((await bcCall({ op: "generate", prompt: "x" })).status, 400, "a batch names its proposal");
+  assert.equal((await handler({ method: "POST", headers: {}, body: { op: "read" } }, {}, "/api/studio/bc")).status, 403);
+  console.log("PASS studio: concurrent open, restart, scope, CSRF, unconfirmed action, Bubble Cloud profile");
 } finally { rmSync(dir, { recursive: true, force: true }); }

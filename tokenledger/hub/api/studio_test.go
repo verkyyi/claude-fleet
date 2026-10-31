@@ -33,7 +33,7 @@ func TestStudioFounderGate(t *testing.T) {
 	check(owner, "/app/studio", "GET", 200)
 	// Authorized identity reaches normal home selection, never another machine.
 	check(owner, "/v1/chat/studio", "GET", 409)
-	for _, p := range []string{"/app/studio", "/v1/chat/studio", "/v1/chat/studio/open", "/v1/chat/studio/action", "/v1/chat/studio/preview"} {
+	for _, p := range []string{"/app/studio", "/v1/chat/studio", "/v1/chat/studio/open", "/v1/chat/studio/action", "/v1/chat/studio/preview", "/v1/chat/studio/bc"} {
 		method := "GET"
 		if p == "/v1/chat/studio/open" || p == "/v1/chat/studio/action" || p == "/v1/chat/studio/preview" {
 			method = "POST"

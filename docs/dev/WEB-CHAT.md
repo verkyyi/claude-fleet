@@ -66,6 +66,25 @@ BREAK-IT `studio-unconfirmed-publish`；原生 hook 生成和托管安装测试�
 线上验收仍需在真实 URL、本人登录下走 hold → 预览 → 右栏确认 → 读取生效状态，
 并拍 1440 与 390 宽截图；隔离夹具的截图不算线上验收。
 
+## Bubble Cloud 方案工作台（task APVZ）
+
+`/app/studio?profile=bc` 是同一个工作台的第二个配置：给 Bubble Cloud Events 做客户方案 Deck。只做电脑版（≥ 1280 宽），
+四栏：**配置**（公司 / 客户 / 模板 / 素材）· **对话** · **画布**（Deck 预览 + 「改第 N 页」；「效果图」分支工作台）·
+**讲稿与发布**（每页讲稿、可见范围、确认发布、链接、阅读）。进入名单、hold → 预览 → 右栏确认的规矩与增长运营 Agent 完全相同。
+
+- 会话以 `--as bubble-cloud-deck --no-repo` 打开（`conf/agent-defaults/claude/agents/bubble-cloud-deck.md`），绑定里多存
+  `profile=bubble-cloud`、`client`、`template`；Agent 用 `show_page(scripts)` 回传每页讲稿。
+- 资料与效果图存在家登录 `$FLEET_WEBCHAT_STATE/bubble-cloud/`（`bin/fleet_bc_studio.py`：`config.json` 带 revision、
+  `images.json`、`media/` 原图与 320 px 缩略图）。页面经 `POST /v1/chat/studio/bc {op, …}`（hub 路由表一行）读写；
+  出图、打分、导入作品照在家登录后台跑，页面轮询。
+- 出图与打分调 Bubble Cloud 报价台服务端的 `/api/studio/image` / `/api/studio/judge`（客户自己的应用，不在本仓；
+  固定来源，Bearer 令牌在调用时从 `BC_STUDIO_TOKEN` 或 `~/.config/bc-preview/studio.key` 读）；
+  每份方案的花费上限在那一侧，到线后页面要人确认才带 `override`。
+- Agent 的 MCP 工具：`bc_config`（资料、素材与本方案效果图的本地路径）、`bc_image`、`bc_judge`。
+- 「圈一块改」在浏览器里把红框画进原图，作为第一张参考图连同「只改框内」的指令出图。
+
+验证：`bin/fleet-bc-studio-selftest.py`、`extras/web-chat/studio.test.mjs`、`extras/web-console/test/bubble-cloud-browser.mjs`。
+
 ## 经官网（EPIC #3642）
 
 人从官网 `/chat` 进来；**入口只认人、找家、转发，不跑对话**。对话跑在这个人的家登录上，入口和别的机器都碰不到内容。
