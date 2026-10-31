@@ -71,7 +71,8 @@ var stageBudget = map[string]float64{
 // ledger itself, the node image built beside the release, and the Mac half
 // that follows it.
 var stageOffPath = map[string]bool{
-	"红灯即停": true, "ledger": true, "node tools": true, "node image": true, stageMacFollow: true,
+	"红灯即停": true, "ledger": true, "node tools": true, "node image": true,
+	"node image · AWS": true, "node image · AWS template": true, stageMacFollow: true,
 }
 
 // stageTests run the selftests (a red test is theirs); stageVerdict only sums

@@ -942,7 +942,7 @@ jobs:
           # node tools / node image (#3855) build the node image beside the
           # release, never gate it: a registry hiccup does not hold stable back;
           # nor does the ledger (#3870), which waits for this job
-          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image' --ignore-check ledger --ignore-check next
+          set -- --ignore-check release --ignore-check 'node tools' --ignore-check 'node image' --ignore-check 'node image · AWS' --ignore-check 'node image · AWS template' --ignore-check ledger --ignore-check next
           # a Linux shard whose cluster runner went away and that `Linux rescue`
           # reran green (issue #3864): its red job is not this train's verdict
           for k in $(printf '%s' "$LOST" | tr -c '0-9' ' '); do set -- "$@" --ignore-check "Linux / shard $k"; done
@@ -1355,3 +1355,87 @@ jobs:
             echo '```'
             echo "部署按 digest 引用（render.py --image $REPO@$DIGEST）。"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  node-image-ecr:
+    # The same node image in ECR (task APVZ): people's pods on the AWS k3s box
+    # pull from ECR, never from Shenzhen's ACR, and until this job their template
+    # stayed on the image copied by hand at the box's set-up (2026-10-25) — every
+    # pod made there since ran a week-old runtime. On GitHub's runner (outside CN):
+    # ACR read with the node-image role, ECR push with tokenman-node-image (that
+    # repository only, this environment only). By digest, amd64 only.
+    name: node image · AWS
+    needs: [board, node-image]
+    if: >-
+      always() && needs.node-image.result == 'success' &&
+      vars.FLEET_HUB_TARGET == 'aws-k3s' && vars.NODE_IMAGE_REPO_AWS != '' && vars.AWS_NODE_IMAGE_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: node-image
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ steps.copy.outputs.image }}
+    env:
+      TRAIN_SHA: ${{ needs.board.outputs.train_sha }}
+      REPO: ${{ vars.NODE_IMAGE_REPO }}
+      ECR_REPO: ${{ vars.NODE_IMAGE_REPO_AWS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.board.outputs.train_sha }}
+      - uses: ./.github/actions/hub-acr
+        with:
+          role: gha-claudefleet-node-image
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_NODE_IMAGE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-west-2' }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      - name: copy <acr>:<TRAIN_SHA> into ECR
+        id: copy
+        run: |
+          set -euo pipefail
+          src=$(docker buildx imagetools inspect "$REPO:$TRAIN_SHA" --format '{{json .Manifest}}' | jq -r '.digest // ""')
+          [[ "$src" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no node image $REPO:$TRAIN_SHA"; exit 1; }
+          for try in 1 2 3; do
+            docker buildx imagetools create --platform linux/amd64 -t "$ECR_REPO:$TRAIN_SHA" "$REPO@$src" && break
+            [ "$try" -lt 3 ] || { echo "::error::cannot copy $REPO@$src into $ECR_REPO"; exit 1; }
+            sleep $((try * 15))
+          done
+          dg=$(docker buildx imagetools inspect "$ECR_REPO:$TRAIN_SHA" --format '{{json .Manifest}}' | jq -r '.digest // ""')
+          [[ "$dg" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::ECR names no digest for $ECR_REPO:$TRAIN_SHA"; exit 1; }
+          echo "image=$ECR_REPO@$dg" >> "$GITHUB_OUTPUT"
+          echo "### 节点镜像 · AWS \`${TRAIN_SHA:0:7}\`"$'\n'"\`$ECR_REPO@$dg\`（自 \`$REPO@$src\`）" >> "$GITHUB_STEP_SUMMARY"
+
+  node-image-aws:
+    # …and the AWS box's provisioner template onto it (task APVZ): new pods start
+    # on this release, and the hub's pod rolls (fleet.user_pod_roll) move the old
+    # ones, a batch at a time (fleet_user_pod_roll.go). Through SSM like the hub's
+    # release (bin/fleet-hub-aws-deploy.sh node-image); a failed apply puts the old
+    # template image back. Red here is the pods' alone: stable has already moved.
+    name: node image · AWS template
+    needs: [node-image-ecr]
+    if: always() && needs.node-image-ecr.result == 'success' && needs.node-image-ecr.outputs.image != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+      AWS_BOX_INSTANCE_ID: ${{ vars.AWS_BOX_INSTANCE_ID }}
+      AWS_BOX_TAG: ${{ vars.AWS_BOX_TAG || 'tokenman-core' }}
+      AWS_BOX_REPO_DIR: ${{ vars.AWS_BOX_REPO_DIR || '/home/ubuntu/src' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: the template onto the new image
+        env:
+          IMAGE: ${{ needs.node-image-ecr.outputs.image }}
+        run: bin/fleet-hub-aws-deploy.sh node-image "$IMAGE"

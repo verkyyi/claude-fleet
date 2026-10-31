@@ -81,8 +81,15 @@ by itself):
      -t <acct>.dkr.ecr.us-west-2.amazonaws.com/fleet/ccquota:$TAG --push tokenledger/
    ```
 
-   (`--platform linux/amd64` on an x86 box.) The managed-node image: copy the
-   train's build into ECR by digest (`docker buildx imagetools create`), amd64.
+   (`--platform linux/amd64` on an x86 box.) The managed-node image: the release
+   train copies each release's build into ECR by digest (job `node image · AWS`,
+   repo variables `NODE_IMAGE_REPO_AWS` = `<acct>.dkr.ecr.us-west-2.amazonaws.com/tokenman/managed-node`
+   and `AWS_NODE_IMAGE_ROLE_ARN` — a role trusted for the `node-image` environment
+   alone, ECR push on that one repository) and points the provisioner's template
+   at it (`node image · AWS template`: `bin/fleet-hub-aws-deploy.sh node-image`,
+   MANAGED_NODE_IMAGE in deploy.env + `bootstrap.sh apply`, task APVZ). With the
+   hub setting `fleet.user_pod_roll=on` the hub then rolls the old pods, a batch at
+   a time. For the first box, copy it by hand the same way (`docker buildx imagetools create`), amd64.
 2. **RDS**: Postgres 16, db.t4g.micro, in the box's VPC, its security group open
    to the box only. Put the URL (`postgres://user:pass@host:5432/fleet?sslmode=require`)
    in SSM Parameter Store as a SecureString, e.g. `/fleet-core/db-url`.

@@ -35,7 +35,7 @@ import urllib.request
 
 # never what made a train slow: a watcher spanning the run, this ledger, the
 # node image built beside the release (the hub's stageOffPath, kept in step)
-OFF_PATH = {"红灯即停", "ledger", "node tools", "node image", "mac follow"}
+OFF_PATH = {"红灯即停", "ledger", "node tools", "node image", "node image · AWS", "node image · AWS template", "mac follow"}
 CONCLUSIONS = {"success", "failure", "cancelled", "superseded"}
 # run-selftests.sh's own verdict lines — `FAIL  <test>  12.3s (exit 1)`,
 # `TIMEOUT <test>  480s (limit …)` — never a FAIL a test prints of its own
