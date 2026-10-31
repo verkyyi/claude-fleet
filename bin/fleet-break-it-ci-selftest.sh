@@ -1292,16 +1292,15 @@ drill_train_node_image_stale() {
   train_rig "$d" || { WHY="could not build the rig repo"; rm -rf "$d"; return 1; }
   key() { bash "$BIN/fleet-node-image-key.sh" "$d/co" "$(cat "$d/$1")"; }
   prev=$(key base) || { WHY="no key for the rig's first commit"; rm -rf "$d"; return 1; }
-  for c in other hubonly selftest; do
-    k=$(key "$c"); [ "$k" = "$prev" ] || { WHY="a change to $c (replaced by the pod's first update) changed the image key — no reuse"; rm -rf "$d"; return 1; }
-  done
-  for c in updater agent recipe pins; do
+  # a person's pod is image-owned (no updater): ANY change to the release changes the key (task APVZ)
+  [ "$(key base)" = "$prev" ] || { WHY="the same commit got two keys — a re-run train would not reuse"; rm -rf "$d"; return 1; }
+  for c in other hubonly selftest updater agent recipe pins; do
     k=$(key "$c"); [ -n "$k" ] && [ "$k" != "$prev" ] || { WHY="a change to the $c left the image key alone — stable's stale image would be reused"; rm -rf "$d"; return 1; }
     prev=$k
   done
   bash "$BIN/fleet-node-image-key.sh" "$d/co" nope >/dev/null 2>&1 && { WHY="an unreadable commit got a key"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="节点镜像键：只改发布里别的文件、hub 源、自测 ⇒ 键不变、复用 stable 的镜像只打 tag；改更新器 / 节点源 / 配方 / 钉住的工具 ⇒ 键变、发布后重新构建；读不到提交 ⇒ 没有键、不复用"
+  WHAT="节点镜像键：人的 pod 不自更新（镜像即运行时），发布里任何改动（别的文件、hub 源、自测、更新器、节点源、配方、钉住的工具）⇒ 键变、发布后重新构建；同一提交重跑 ⇒ 键不变、复用；读不到提交 ⇒ 没有键、不复用"
 }
 
 # The node image's downloads (BREAK-IT train-hub-slow): two trains sat out the
