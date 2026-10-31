@@ -5,11 +5,15 @@
 # image for the new release instead of building another one (2+ minutes after
 # the release, on the critical path of a pod following stable).
 #
-# The image's runtime is only a SEED (#3212): a pod copies it onto its volume on
-# its first boot and from then on the machine updater moves `current` to stable,
-# so a seed one release older is what every running pod had a minute ago. What
-# a reused image must NOT get wrong is what runs before that update — so the key
-# is, read from git (no checkout needed):
+# The image's runtime is NOT only a seed for a person's pod (task APVZ): a pod is
+# image-owned (FLEET_NODE_UPDATE_OWNER=image, #4791) — no updater moves its
+# `current`, image-stage.py seeds it from the image at every start — so a reused
+# image left every pod on the release the image was BUILT for (AWS 2026-10-31:
+# pods rolled to «TRAIN_SHA's image» still ran 8b70d96, without the release's
+# fixes, and the hub's roll asked again forever). The key therefore ends with the
+# release's whole tree: an image is reused only for the very same tree (a re-run
+# train), any change rebuilds. The parts below stay in the key for the drill's
+# sake (what must change it is still named):
 #   * extras/managed-node/          the recipe: Dockerfile, image-stage.py (the
 #                                   boot), devnet/, the build scripts
 #   * conf/release-keys/            the root the seed and every update verify by
@@ -46,4 +50,5 @@ src=$(python3 "$BIN/fleet-src-digest.py" "$dir" "$rev") \
       print p " " m[3]
     }' | LC_ALL=C sort
   printf 'node-src %s\n' "$src"
+  printf 'tree %s\n' "$(git -C "$dir" rev-parse "$rev^{tree}")"
 } | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; } | cut -d' ' -f1
