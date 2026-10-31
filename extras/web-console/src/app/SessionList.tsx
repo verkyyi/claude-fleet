@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
-import { compactRows, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, ROW_SOURCES, rowMeta, rowRef, searchRows, sourceLabel, type CompactGroups, type RowSource } from "./session-list";
+import { compactRows, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, ROW_SOURCES, rowMeta, rowRef, scheduleRuns, searchRows, sourceLabel, type CompactGroups, type RowSource } from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
@@ -236,6 +236,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const { ref, pathname } = useOpenRef();
   const [goneOpen, setGoneOpen] = useState(false);
   const [sourceOpen, setSourceOpen] = useState<Partial<Record<RowSource, boolean>>>({});
+  const [runsOpen, setRunsOpen] = useState<Record<string, boolean>>({});
   const [pressed, setPressed] = useState<Row | null>(null);
   const previous = useRef<CompactGroups | undefined>(undefined);
   const [pointing, setPointing] = useState(false);
@@ -307,7 +308,20 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
               <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{sourceLabel(src)}<span className="font-mono"> · {items.length}</span>
                 {asking ? <span className="text-destructive font-medium">{tr(` · ${asking} 个在问你`, ` · ${asking} asking`)}</span> : null}</span>
             </button>
-            {shown ? <List>{items.map(row)}</List> : null}
+            {shown ? <List>{src === "schedule" ? scheduleRuns(items).flatMap((g) => {
+              // one schedule, one line (X24T): its newest run, the older ones behind a count
+              const open = runsOpen[g.key] ?? g.older.some((r) => rowRef(r) === ref);
+              return [...g.shown.map(row), ...(g.older.length ? [
+                <li key={`runs-${g.key}`} data-schedule-runs={g.key} className="list-none group-data-[collapsible=icon]:hidden">
+                  <button type="button" onClick={() => setRunsOpen({ ...runsOpen, [g.key]: !open })} aria-expanded={open}
+                    className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-2 text-xs",
+                      variant === "page" ? "h-9 pl-11 pr-4" : "h-7 pl-8 pr-2")}>
+                    {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
+                    <span className="truncate">{tr(`${g.label} · ${g.older.length} 次更早运行`, `${g.label} · ${g.older.length} earlier ${g.older.length === 1 ? "run" : "runs"}`)}</span>
+                  </button>
+                </li>,
+                ...(open ? g.older.map(row) : [])] : [])];
+            }) : items.map(row)}</List> : null}
           </div>;
         })}
         {gone.length ? <>

@@ -141,8 +141,27 @@ class RunnerTests(unittest.TestCase):
         for agent in ('', 'claude', 'codex'):
             with self.subTest(agent=agent):self.check_replay(agent)
 
+    def test_run_title_is_readable(self):
+        run=module('fleet_schedule_run')
+        t=1793350000  # 2026-10-30 Asia/Shanghai
+        self.assertEqual(run.run_title({'name':'LivePage 模板工厂','timezone':'Asia/Shanghai'},t,1),'LivePage 模板工厂 10-30')
+        self.assertEqual(run.run_title({'name':'Daily #brief','timezone':'Asia/Shanghai'},t,3),'Daily brief 10-30 #3')
+        long=run.run_title({'name':'一个非常非常长的定时任务名字用来测试截断','timezone':'Asia/Shanghai'},t,2)
+        self.assertEqual(long,'一个非常非常长… 10-30 #2')
+        self.assertLessEqual(sum(map(run.cols,long)),24)
+        self.assertRegex(run.run_title({'name':'','timezone':'No/Zone'},t,1),r'^schedule \d\d-\d\d$')
+
+    def test_attempt_window_finds_its_key(self):
+        from unittest.mock import patch
+        run=module('fleet_schedule_run')
+        rows='@1\tLivePage 模板工厂 10-30\tschedule-k1\n@2\tschedule-k2\t\n@3\tother\t'
+        with patch.object(run,'tmux',return_value=rows):
+            self.assertEqual(run.attempt_window('test','schedule-k1',{}),'@1')  # renamed: by @schedule_key
+            self.assertEqual(run.attempt_window('test','schedule-k2',{}),'@2')  # an older run: by its name
+            self.assertEqual(run.attempt_window('test','schedule-k3',{}),'')
+
     def check_replay(self,agent):
-        import json,os,time,subprocess
+        import json,os,time,subprocess,hashlib
         from unittest.mock import patch,Mock
         run=module('fleet_schedule_run')
         with tempfile.TemporaryDirectory() as d:
@@ -162,7 +181,10 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(spawn.call_count,1)
                 stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_id','schedule-a')
                 stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_run_id','one')
+                key=hashlib.sha256(b'schedule-a:manual-one:1').hexdigest()[:24]
+                stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_key','schedule-'+key)
                 argv=spawn.call_args.args[0]
+                self.assertRegex(argv[argv.index('--name')+1],r'^schedule \d\d-\d\d$')
                 import uuid
                 self.assertEqual(argv[argv.index('--fid')+1],str(uuid.uuid5(uuid.NAMESPACE_URL,'schedule-a:manual-one:1')))
                 if agent:self.assertEqual(argv[argv.index('--agent')+1],agent)

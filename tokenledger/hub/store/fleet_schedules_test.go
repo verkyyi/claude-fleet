@@ -159,7 +159,7 @@ func TestScheduleSessionBindingAndSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	own, err := s.ScheduleSessions("alice")
-	if err != nil || own[run.SessionID].ID != run.ID || own[run.SessionID].Title != "Daily "+now.In(time.FixedZone("Shanghai", 8*3600)).Format("2006-01-02") {
+	if err != nil || own[run.SessionID].ID != run.ID || own[run.SessionID].Title != "Daily "+now.In(time.FixedZone("Shanghai", 8*3600)).Format("01-02") {
 		t.Fatal("rename/delete changed historical source", own, err)
 	}
 }

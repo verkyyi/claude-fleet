@@ -302,7 +302,12 @@ func (s *Store) AdmitSchedule(owner, endpoint, id, slot string, revision int64, 
 	// Same UUID5 as fleet_schedule_run.py; admission persists it before launch.
 	sessionID := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:%s:%d", id, slot, attempt))).String()
 	zone, _ := time.LoadLocation(spec.Spec.Timezone)
-	title := spec.Spec.Name + " " + now.In(zone).Format("2006-01-02")
+	// The same words the node names the session's window (fleet_schedule_run.py
+	// run_title): the schedule's name, the day, and the attempt past the first.
+	title := spec.Spec.Name + " " + now.In(zone).Format("01-02")
+	if attempt > 1 {
+		title += fmt.Sprintf(" #%d", attempt)
+	}
 	consent, _ := json.Marshal(map[string]any{"consent": spec.Spec.Delivery, "consent_at": spec.Updated, "session_title": title})
 	_, e = tx.Exec(`INSERT INTO fleet_schedule_runs(id,schedule_id,owner,endpoint,revision,slot,attempt,day,state,started,session_id,delivery) VALUES (?,?,?,?,?,?,?,?,'running',?,?,?)`, rid, id, owner, endpoint, revision, slot, attempt, day, now.Unix(), sessionID, string(consent))
 	if e != nil {

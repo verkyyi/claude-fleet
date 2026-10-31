@@ -1407,6 +1407,11 @@ fi
 # Who opened it (task DDBQ): a person's session carries nothing.
 [ -n "$SOURCE" ] || case "$ORIGIN" in ''|hub) ;; *) SOURCE=agent ;; esac
 case "$SOURCE" in agent|schedule|api) stamp_option @session_source "$SOURCE" 2>/dev/null ;; esac
+# A scheduled run is about its schedule, not the prompt a person wrote once (X24T):
+# its name («<schedule> 10-30», fleet_schedule_run.py run_title) is its first
+# sentence — set before the agent starts, so set-claude-state.sh's first-prompt
+# stamp (only when empty) keeps it, and the inventory's title= / fleet ls say it.
+[ "$SOURCE" = schedule ] && [ -n "$custom" ] && stamp_option @task_line "$custom" 2>/dev/null
 # A no-repo session opened with no words (⌘N, a plain `fleet` whose last session is
 # gone — issue #4000): its first turn is tracked (`@prompted`, set-claude-state.sh's
 # `working`), so one nobody ever typed into is closed after its grace
