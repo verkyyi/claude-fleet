@@ -386,15 +386,20 @@ class SessionArchive(unittest.TestCase):
             self.assertFalse(v.archive_stops(gone))
             saved = subprocess.CompletedProcess([], 0, "", "")
             calls = []
+            # subprocess.run is patched process-wide: a background thread an earlier
+            # test left (a cache refresh) must not count as this archive's call
+            import threading
+            me = threading.get_ident()
+            run = lambda *a, **k: (calls.append("archive") if threading.get_ident() == me else None) or saved
             with patch.object(v, "stop_task", side_effect=lambda r, *a, **k: calls.append("stop") or (0, "ok")), \
-                    patch.object(v.subprocess, "run", side_effect=lambda *a, **k: calls.append("archive") or saved), \
+                    patch.object(v.subprocess, "run", side_effect=run), \
                     patch.object(v, "act_env", return_value={}), patch.object(v, "hub_reread"), \
                     patch.object(v, "say", side_effect=lambda key, *args: key):
                 self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["archive"], idle, "", wait=False)[0], 0)
                 self.assertEqual(calls, ["stop", "archive"], "stop first, then archive")
                 calls.clear()
             with patch.object(v, "stop_task", return_value=(1, "refused")), \
-                    patch.object(v.subprocess, "run", side_effect=lambda *a, **k: calls.append("archive") or saved), \
+                    patch.object(v.subprocess, "run", side_effect=run), \
                     patch.object(v, "act_env", return_value={}), patch.object(v, "say", side_effect=lambda key, *args: key):
                 self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["archive"], idle, "", wait=False)[0], 1)
                 self.assertEqual(calls, [], "a stop that fails archives nothing")
