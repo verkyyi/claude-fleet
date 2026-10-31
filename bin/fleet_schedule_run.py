@@ -4,6 +4,7 @@
 Results are durably spooled before upload. Restarting the daemon adopts the
 same native session; it never mistakes spawning a process for a final answer.
 """
+import datetime
 import fcntl
 import hashlib
 import importlib.util
@@ -14,6 +15,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 import uuid
 
 BIN=Path(__file__).resolve().parent
@@ -100,13 +102,38 @@ def conclusion(rec):
         with path.open(errors='replace') as f:return final_from_lines(f,rec.get('agent','claude'),rec.get('sid',''))
     except OSError:return ''
 
+def cols(ch):
+    return 2 if unicodedata.east_asian_width(ch) in ('W','F') else 1
+
+def run_title(doc,started,attempt):
+    """A person reads this, not a key: the schedule's name, its day and the
+    attempt past the first — the hub's session_title (fleet_schedules.go) —
+    in the 24 columns a window name keeps (dash-raw-session.sh): the name is
+    clipped, never the day."""
+    try:
+        from zoneinfo import ZoneInfo
+        day=datetime.datetime.fromtimestamp(started,ZoneInfo(doc.get('timezone') or 'Asia/Shanghai')).strftime('%m-%d')
+    except (ImportError,ValueError,KeyError,OSError):
+        day=time.strftime('%m-%d',time.localtime(started))
+    tail=' '+day+(' #%d'%attempt if attempt>1 else '')
+    name=' '.join(str(doc.get('name') or '').replace('#',' ').split()) or 'schedule'
+    room=24-len(tail)
+    if sum(map(cols,name))>room:
+        out='';w=0
+        for ch in name:
+            if w+cols(ch)>room-1:break
+            out+=ch;w+=cols(ch)
+        name=out.rstrip()+'…'
+    return name+tail
+
 def attempt_window(session,name,rec):
     if rec.get('fid'):
         p=subprocess.run(['bash','-c','. "$1/fleet-lib.sh"; fleet_win_for_fid "$2" "$3"','_',str(BIN),rec['fid'],session],capture_output=True,text=True,timeout=15)
         if p.returncode==0 and p.stdout.strip():return p.stdout.strip()
         if p.returncode==2:raise ValueError('ambiguous attempt identity')
-    windows=tmux(session,'list-windows','-a','-F','#{window_id}\t#{window_name}').splitlines()
-    matches={x.split('\t')[0] for x in windows if x.split('\t')[-1]==name}
+    # The attempt's key: @schedule_key, or the window name an older run gave it.
+    windows=tmux(session,'list-windows','-a','-F','#{window_id}\t#{window_name}\t#{@schedule_key}').splitlines()
+    matches={x.split('\t')[0] for x in windows if name in x.split('\t')[1:]}
     if len(matches)>1:raise ValueError('ambiguous attempt session')
     return next(iter(matches),'')
 
@@ -151,7 +178,7 @@ def run():
             # Commit the launch intent first. A crash after fork must never
             # cause a second session, even if stdout was lost or renamed.
             rec.update(launch_intent=True,started=ans['started'],fid=str(uuid.uuid5(uuid.NAMESPACE_URL,doc['id']+':'+slot+':'+str(attempt))));atomic(local,rec)
-            args=[str(spawn),'--origin','hub','--source','schedule','--reap-origin','probe','--reap','done:15m','--print','--fid',rec['fid'],'--name',name,'--prompt',os.environ['FLEET_TASK_PROMPT']]
+            args=[str(spawn),'--origin','hub','--source','schedule','--reap-origin','probe','--reap','done:15m','--print','--fid',rec['fid'],'--name',run_title(doc,ans['started'],attempt),'--prompt',os.environ['FLEET_TASK_PROMPT']]
             if doc.get('agent'):args+=['--agent',doc['agent']]
             args+=['--repo',doc['repo']] if doc.get('repo') else ['--no-repo']
             try:
@@ -170,6 +197,7 @@ def run():
             atomic(local,rec)
         if wid:
             tmux(session,'set-option','-w','-t',wid,'@schedule_id',doc['id'])
+            tmux(session,'set-option','-w','-t',wid,'@schedule_key',name)
             tmux(session,'set-option','-w','-t',wid,'@schedule_run_id',ans['id'])
         started=rec.get('started',ans['started']);last=rec.get('native',{});summary='';why=''
         while time.time()-started<3600:

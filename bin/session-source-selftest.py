@@ -8,12 +8,16 @@ B  every spawner says it: dash-raw-session.sh --source (stamped only for
    agent|schedule|api, derived `agent` from a session's --origin, carried over
    the --bg re-exec), dash-issue-session.sh from --origin, fleet-task-record.sh
    (via 编排 ⇒ agent), the two schedule runners (--source schedule); the
+   inventory reads @session_source (a window from before it: reap origin probe,
+   no test identity ⇒ schedule — X24T); the
    inventory reads @session_source and a migration carries it.
 C  the hub decides once (fleet_board.go boardSource) and both lists read it:
    session-list.ts rowSource and fleet_view.py SOURCES.
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 BIN = os.path.dirname(os.path.abspath(__file__))
@@ -54,6 +58,8 @@ check("B: a session's --origin is an agent's",
 check("B: a person's session is stamped nothing",
       "case \"$SOURCE\" in agent|schedule|api) stamp_option @session_source \"$SOURCE\"" in raw)
 check("B: the --bg re-exec carries it", "owarg=\"$owarg --source=$SOURCE\"" in raw)
+check("B: a scheduled run's first sentence is its name (X24T)",
+      '[ "$SOURCE" = schedule ] && [ -n "$custom" ] && stamp_option @task_line "$custom"' in raw)
 check("B: dash-issue-session.sh stamps a session's spawn",
       re.search(r"case \"\$ORIGIN\" in ''\|hub\) ;; \*\) _sw\+=\(.*@session_source agent\)", read("bin", "dash-issue-session.sh")) is not None)
 rec = read("bin", "fleet-task-record.sh")
@@ -62,8 +68,27 @@ check("B: the task tool (via 编排) opens an agent's", "src=''; [ \"$via\" = �
 check("B: a scheduled run says schedule (python runner)", "'--source','schedule'" in read("bin", "fleet_schedule_run.py"))
 check("B: a scheduled run says schedule (shell runner)", "--source schedule" in read("bin", "fleet-task-run.sh"))
 ctl = read("bin", "fleet-control-read.sh")
-check("B: the inventory reads @session_source", "#{@session_source}' 2>/dev/null) || cwds=''" in ctl
+SRC_FMT = "#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,}}"
+check("B: the inventory reads @session_source", SRC_FMT + "' 2>/dev/null) || cwds=''" in ctl
       and 'suffix += ("\\tsource=" + src) if src else ""' in ctl)
+# X24T: a window a scheduler opened before the stamp (reap origin probe, not a
+# test identity) is a schedule's — asked of a real tmux on an isolated socket.
+if shutil.which("tmux"):
+    sock = "src-selftest-%d" % os.getpid()
+    tm = lambda *a: subprocess.run(["tmux", "-L", sock, "-f", "/dev/null"] + list(a), capture_output=True, text=True)
+    try:
+        tm("new-session", "-d", "-s", "t", "-n", "person")
+        for n, opts in (("old", {"@reap_origin": "probe"}), ("test", {"@reap_origin": "probe", "@test_identity": "1"}),
+                        ("agent", {"@session_source": "agent", "@reap_origin": "probe"}), ("mine", {"@reap_origin": "person"})):
+            tm("new-window", "-t", "t:", "-n", n)
+            for k, v in opts.items():
+                tm("set-option", "-w", "-t", "t:" + n, k, v)
+        got = dict(l.split("=", 1) for l in tm("list-windows", "-t", "t:", "-F", "#{window_name}=" + SRC_FMT).stdout.split())
+        check("B: an old scheduled window reads schedule", got.get("old") == "schedule")
+        check("B: a test identity, a person's and a stamped window keep theirs",
+              got.get("test") == "" and got.get("person") == "" and got.get("mine") == "" and got.get("agent") == "agent")
+    finally:
+        tm("kill-server")
 check("B: a migration carries it", re.search(r'^MIGRATE_CARRY="[^"]*@session_source', read("bin", "fleet-migrate.sh"), re.M) is not None)
 
 # ---- C: one decision, two readers ---------------------------------------------------

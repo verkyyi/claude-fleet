@@ -2358,6 +2358,7 @@ def board_apply(board, groups, shut, gone, here, me):
             e["agent_words"] = r.get("agent_words")
         e["activity_at"] = r.get("activity_at") or r.get("at") or 0
         e["source"] = r.get("source") if r.get("source") in SOURCES else ""
+        e["schedule_id"] = r.get("schedule_id") or ""
         e["list_preferences"] = board.get("session_list")
         e["attention_error"] = r.get("why_tone") == "red" or r.get("tag") in ("failed", "refused")
         e["board_context"] = board_words({"words": r.get("context") or ["", ""]})
@@ -2741,6 +2742,29 @@ def source_label(k):
             "api": "Via API" if en else "API 派发"}[k]
 
 
+SCHEDULE_DAY_RE = re.compile(r"(?:[\s_-]+\d{4}-\d{2}-\d{2}|\s+\d{2}-\d{2})(?:(?:\s+#|-)\d+)?$")
+
+
+def schedule_label(title):
+    """A schedule run's title without its day (X24T) — session-list.ts scheduleLabel."""
+    return SCHEDULE_DAY_RE.sub("", title or "").strip() or (title or "")
+
+
+def schedule_runs(group, keep=()):
+    """One schedule, one line (X24T) — session-list.ts scheduleRuns: the runs of
+    a newest-first group under their schedule (the hub's schedule_id, else the
+    title without its day), each [key, label, shown, older]; shown = the newest
+    run, any run working or asking the person, and the rows in `keep`."""
+    out = {}
+    for e in group:
+        label = schedule_label(e.get("text") or e.get("name") or "")
+        key = e.get("schedule_id") or "title:" + label
+        g = out.setdefault(key, [key, label, [], []])
+        lift = not g[2] or needs_attention(e) or task_status(e) in ("work", "pending") or e["target"] in keep
+        (g[2] if lift else g[3]).append(e)
+    return list(out.values())
+
+
 def needs_attention(e):
     return task_status(e) == "needs" or (not e.get("lost") and not e.get("gone") and
            (e.get("state") == "failed" or e.get("attention_error")))
@@ -2792,11 +2816,24 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
         if asking:
             label += (" · %d asking" if ui_lang() == "en" else " · %d 个在问你") % asking
         out.append({"kind": "sec", "sec": "src-" + k, "text": label, "n": len(group), "alert": bool(asking)})
-        for e in group:
-            e.pop("sec", None)
-            if e["target"] not in (current, selected):
-                e["sec"] = "src-" + k   # folded with its heading; the one open now stays shown
-            out.append(e)
+        runs = schedule_runs(group, (current, selected)) if k == "schedule" else [["", "", group, []]]
+        for key, name, shown, folded in runs:
+            for e in shown:
+                e.pop("sec", None)
+                if e["target"] not in (current, selected):
+                    e["sec"] = "src-" + k   # folded with its heading; the one open now stays shown
+                out.append(e)
+            if folded:
+                # one schedule, one line (X24T): its older runs behind a count,
+                # inside the group — shown only while the group is open too
+                sub = "sched-" + key
+                n = len(folded)
+                out.append({"kind": "sec", "sec": sub, "sec_parent": "src-" + k, "n": n,
+                            "text": "  " + name + (" · %d earlier run%s" % (n, "" if n == 1 else "s") if ui_lang() == "en"
+                                                   else " · %d 次更早运行" % n)})
+                for e in folded:
+                    e.update(sec=sub, sec_parent="src-" + k)
+                    out.append(e)
     older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:
         running = sum(task_status(e) == "work" for e in history)
@@ -2821,7 +2858,8 @@ def visible(items, query, opened, current="", selected=""):
             hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
         return [e for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1]))]
     return [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
-            for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)]
+            for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)
+            and not (e.get("sec_parent") and e["sec_parent"] not in opened)]
 
 
 def sec_fold(opened, sec, expand):

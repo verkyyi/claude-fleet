@@ -45,6 +45,27 @@ export const rowSource = (r: Row): RowSource | "" => {
 };
 export const sourceLabel = (s: RowSource) => s === "agent" ? tr("会话派出的", "From sessions")
   : s === "schedule" ? tr("定时任务", "Scheduled") : tr("API 派发", "Via API");
+// One schedule, one line (task X24T): inside 定时任务 a schedule's runs fold
+// under their schedule — the hub's schedule_id, else (a node `fleet task`, an
+// older run) the title without its day. `shown` is the newest run plus any run
+// still working or asking the person; `older` folds behind 「N 次更早运行」.
+// The input is already newest first; so is each schedule, and the schedules
+// keep the order of their newest run.
+export type ScheduleRuns = { key: string; label: string; shown: Row[]; older: Row[] };
+export const scheduleLabel = (title: string) =>
+  title.replace(/(?:[\s_-]+\d{4}-\d{2}-\d{2}|\s+\d{2}-\d{2})(?:(?:\s+#|-)\d+)?$/, "").trim() || title;
+export function scheduleRuns(rows: Row[]): ScheduleRuns[] {
+  const out = new Map<string, ScheduleRuns>();
+  for (const r of rows) {
+    const label = scheduleLabel(r.title);
+    const key = r.board?.schedule_id || `title:${label}`;
+    let g = out.get(key);
+    if (!g) out.set(key, g = { key, label, shown: [], older: [] });
+    const st = listStatus(r).kind;
+    (!g.shown.length || needsAttention(r) || st === "work" || st === "pending" ? g.shown : g.older).push(r);
+  }
+  return [...out.values()];
+}
 export type SourceGroups = Record<RowSource, Row[]>;
 export type CompactGroups = ListGroups & { sources: SourceGroups };
 // One order: PIN, then everything by recent activity (task DDBQ). A row that

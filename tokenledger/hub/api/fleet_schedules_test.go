@@ -357,7 +357,7 @@ func TestScheduleConversationProvenance(t *testing.T) {
 	live := []FleetSession{{Worker: map[string]any{"identity": run.SessionID, "state": "working", "title": "schedule-internal"}, Availability: "online"}}
 	board, err := h.srv.buildBoard("alice", live, now)
 	loc, _ := time.LoadLocation("Asia/Shanghai")
-	if err != nil || len(board.Rows) != 1 || board.Rows[0].ScheduleID != row.Spec.ID || board.Rows[0].RunID != run.ID || board.Rows[0].Title != "Group brief "+now.In(loc).Format("2006-01-02") {
+	if err != nil || len(board.Rows) != 1 || board.Rows[0].ScheduleID != row.Spec.ID || board.Rows[0].RunID != run.ID || board.Rows[0].Title != "Group brief "+now.In(loc).Format("01-02") {
 		t.Fatalf("running source: %+v %v", board, err)
 	}
 	for _, owner := range []string{"alice", "bob"} {

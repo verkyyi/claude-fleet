@@ -142,6 +142,24 @@ class TaskList(unittest.TestCase):
                 self.assertEqual(len({e["target"] for e in sessions}), len(items))
                 self.assertEqual([e.get("sec") for e in items], ["gone" if r["group"] == "gone" else "" for r in c["rows"]], "folding never mutates source lifecycle")
 
+    def test_schedule_runs_fold_per_schedule(self):
+        # X24T: inside 定时任务 one schedule is one line — session-list.ts scheduleRuns
+        self.assertEqual(v.schedule_label("LivePage 模板工厂 10-30 #2"), "LivePage 模板工厂")
+        self.assertEqual(v.schedule_label("daily-2026-10-31"), "daily")
+        self.assertEqual(v.schedule_label("10-30"), "10-30")
+        run = lambda t, title, at, **x: row(t, text=title, name=title, source="schedule", activity_at=at, **x)
+        items = [run("a3", "Brief 10-31", 9, schedule_id="s1"), run("d2", "daily-2026-10-31", 8),
+                 run("a2", "Brief 10-30", 7, schedule_id="s1", state="needs"), run("a1", "Brief 10-29", 6, schedule_id="s1"),
+                 run("d1", "daily-2026-10-30", 5), run("b1", "Brief 10-28", 4, schedule_id="s2")]
+        targets = lambda opened: [e.get("target") or e["text"] for e in v.visible(items, "", opened) if e.get("sec", "").startswith(("src-", "sched-")) or e["kind"] == "sess"]
+        self.assertEqual(targets(set()), ["定时任务 · 6 · 1 个在问你"])
+        self.assertEqual(targets({"src-schedule"}), ["定时任务 · 6 · 1 个在问你", "a3", "a2", "  Brief · 1 次更早运行",
+                                                     "d2", "  daily · 1 次更早运行", "b1"])
+        self.assertEqual(targets({"src-schedule", "sched-s1"})[:5], ["定时任务 · 6 · 1 个在问你", "a3", "a2", "  Brief · 1 次更早运行", "a1"])
+        self.assertNotIn("a1", targets({"sched-s1"}), "a run folds with its group too")
+        self.assertIn("a1", [e["target"] for e in v.visible(items, "", set(), current="a1") if e["kind"] == "sess"],
+                      "the run open now is never folded")
+
     def test_history_and_search_preserve_fold(self):
         items = [row("old", sec="gone", gone=True), row("exited", state="exited", sec="gone", shut=True),
                  row("loop", loop=True, sec="gone"), row("lost", lost=True, sec="gone")]

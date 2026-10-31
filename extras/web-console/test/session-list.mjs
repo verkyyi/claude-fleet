@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, searchRows, seenMark } from '../src/app/session-list.ts';
+import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, scheduleLabel, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
 
 const tr2 = (w) => (w ? w.join('|') : '');
 const F = '5b1e0000-0000-4000-8000-00000000f001';
@@ -225,3 +225,30 @@ const frozen = compactRows(changedRows, {now,previous:initial,interacting:true})
 assert.deepEqual(frozen.open.map(r=>r.id), initial.open.map(r=>r.id), 'interaction keeps row positions');
 assert.equal(compactRows(changedRows,{now,previous:frozen}).open[0].id,'fresh11', 'new Turn returns a folded session');
 assert.equal(compactRows(changedRows,{now,previous:frozen,interacting:true,current:'fresh10'}).open.some(r=>r.id==='fresh10'),true,'opening hidden session protects it immediately');
+
+// X24T: inside 定时任务 a schedule's runs fold under it — by schedule_id, else
+// by the title without its day; the newest run and any working / asking run show.
+{
+  const run = (id, title, x = {}) => ({ id, title, at: 0, group: 'gone', board: { source: 'schedule', ...x } });
+  assert.equal(scheduleLabel('LivePage 模板工厂 10-30'), 'LivePage 模板工厂');
+  assert.equal(scheduleLabel('LivePage 模板工厂 10-30 #2'), 'LivePage 模板工厂');
+  assert.equal(scheduleLabel('Group brief 2026-10-30'), 'Group brief');
+  assert.equal(scheduleLabel('daily-2026-10-31'), 'daily');
+  assert.equal(scheduleLabel('daily-2026-10-31-2'), 'daily');
+  assert.equal(scheduleLabel('10-30'), '10-30', 'a title that is only a day stays');
+  const runs = scheduleRuns([
+    run('a3', 'Brief 10-31', { schedule_id: 's1' }),
+    run('d2', 'daily-2026-10-31'),
+    run('a2', 'Brief 10-30', { schedule_id: 's1', state: 'needs' }),
+    run('a1', 'Brief renamed 10-29', { schedule_id: 's1' }),
+    run('d1', 'daily-2026-10-30'),
+    run('b1', 'Brief 10-28', { schedule_id: 's2' }),
+  ]);
+  assert.deepEqual(runs.map(g => [g.key, g.label, g.shown.map(r => r.id), g.older.map(r => r.id)]), [
+    ['s1', 'Brief', ['a3', 'a2'], ['a1']],
+    ['title:daily', 'daily', ['d2'], ['d1']],
+    ['s2', 'Brief', ['b1'], []],
+  ], 'one line per schedule; an asking run is never folded; same name, other schedule apart');
+  assert.deepEqual(scheduleRuns([]), []);
+}
+console.log('session-list: schedule runs OK');
