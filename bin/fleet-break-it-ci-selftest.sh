@@ -937,8 +937,18 @@ AWS
   box rollback
   [ "$rc" = 0 ] && [ "$(git -C "$d/box" rev-parse HEAD)" = "$B" ] && grep -qx 'HUB_IMAGE=r/hub:b' "$d/deploy.env" \
     || { WHY="rollback did not put the box back on B ($rc): $out"; rm -rf "$d"; return 1; }
+  # the people's pods' template (task APVZ): node-image writes MANAGED_NODE_IMAGE only; a failed apply puts it back
+  local N1 N2; N1="r/node@sha256:$(printf '1%.0s' $(seq 64))" N2="r/node@sha256:$(printf '2%.0s' $(seq 64))"
+  box node-image "$N1"
+  [ "$rc" = 0 ] && grep -qx "MANAGED_NODE_IMAGE=$N1" "$d/deploy.env" && grep -qx 'HUB_IMAGE=r/hub:b' "$d/deploy.env" \
+    && [ "$(git -C "$d/box" rev-parse HEAD)" = "$B" ] || { WHY="node-image did not set only the template image ($rc): $out"; rm -rf "$d"; return 1; }
+  echo 1 > "$d/box/deploy/aws/k3s-box/rc"; box node-image "$N2"
+  [ "$rc" = 1 ] && grep -qx "MANAGED_NODE_IMAGE=$N1" "$d/deploy.env" \
+    || { WHY="a failed apply did not put the template image back ($rc): $out"; rm -rf "$d"; return 1; }
+  out=$(bash "$sh" script node-image r/node:latest 2>&1); rc=$?
+  [ "$rc" = 2 ] || { WHY="a template image not pinned by digest was not refused ($rc): $out"; rm -rf "$d"; return 1; }
   SECS=$(since "$t0"); rm -rf "$d"
-  WHAT="入口在 AWS k3s 盒子上（FLEET_HUB_TARGET=aws-k3s）：SSM 命令失败 / 超时（取消）/ 按标签找到两台或零台盒子：红、带盒子自己的输出，零台两台不发命令；盒子上 bootstrap.sh apply 失败：deploy.env 与检出放回上一版再 apply、红；健康检查红：rollback 放回"
+  WHAT="入口在 AWS k3s 盒子上（FLEET_HUB_TARGET=aws-k3s）：SSM 命令失败 / 超时（取消）/ 按标签找到两台或零台盒子：红、带盒子自己的输出，零台两台不发命令；盒子上 bootstrap.sh apply 失败：deploy.env 与检出放回上一版再 apply、红；健康检查红：rollback 放回；node-image 只改人的 pod 模板镜像（必须按 digest），apply 失败放回原镜像"
 }
 
 drill_train_call_permissions() {

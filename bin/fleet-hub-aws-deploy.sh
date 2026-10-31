@@ -10,6 +10,10 @@
 #   fleet-hub-aws-deploy.sh rollback               on the box: the deploy.env and
 #        checkout the last `deploy` replaced, applied again (the job's road when
 #        the health check fails after a deploy that itself went through)
+#   fleet-hub-aws-deploy.sh node-image <image>     on the box: MANAGED_NODE_IMAGE=<image>
+#        (pinned by digest) in deploy.env, `bootstrap.sh apply` — the provisioner's
+#        template, so new pods and the hub's pod rolls (fleet.user_pod_roll) take it;
+#        the checkout and HUB_IMAGE stay. A failed apply puts the old line back (task APVZ)
 #   fleet-hub-aws-deploy.sh instance               print the box's instance id
 #   fleet-hub-aws-deploy.sh script deploy|rollback [<sha> <image>]
 #        print the shell the box would run, send nothing (the selftest runs it
@@ -59,6 +63,9 @@ remote_script() {   # remote_script deploy|rollback [<sha> <image>]
   if [ "$mode" = deploy ]; then
     safe sha "$sha" '^[0-9a-f]{40}$'
     safe image "$image" '^[A-Za-z0-9][A-Za-z0-9._/:@-]*$'
+  elif [ "$mode" = node-image ]; then
+    image=$sha sha=''
+    safe image "$image" '^[A-Za-z0-9][A-Za-z0-9._/-]*@sha256:[0-9a-f]{64}$'
   fi
   printf '#!/bin/bash\nset -uo pipefail\nmode=%s sha=%s image=%s repo=%s conf=%s\n' \
     "$mode" "$sha" "$image" "$AWS_BOX_REPO_DIR" "$AWS_BOX_CONF"
@@ -84,6 +91,23 @@ put_back() {   # the deploy.env + checkout the last deploy replaced, applied
   say "rolling back to $(sed -n 's/^HUB_IMAGE=//p' "$conf") at $(cat "$conf.prev-ref")"
   boot
 }
+
+if [ "$mode" = node-image ]; then
+  was=$(sed -n 's/^MANAGED_NODE_IMAGE=//p' "$conf" | tail -1)
+  [ "$was" = "$image" ] && { say "the template is already $image"; exit 0; }
+  cp -p "$conf" "$conf.node-prev" || { say "could not record the live template image — nothing changed"; exit 3; }
+  tmp=$(mktemp "$conf.XXXXXX")
+  awk -v img="$image" 'BEGIN{d=0} /^MANAGED_NODE_IMAGE=/{print "MANAGED_NODE_IMAGE=" img; d=1; next} {print} END{if(!d) print "MANAGED_NODE_IMAGE=" img}' "$conf" > "$tmp" \
+    && chmod 0600 "$tmp" && mv -f "$tmp" "$conf" || { say "could not write MANAGED_NODE_IMAGE into $conf"; exit 3; }
+  say "template: ${was:-none} → $image"
+  if ! boot; then
+    say "bootstrap.sh apply failed — putting the previous template image back"
+    cp -p "$conf.node-prev" "$conf" && boot || say "ROLLBACK FAILED — the box needs a person (deploy/aws/README.md «Roll back»)"
+    exit 1
+  fi
+  say "template on $image"
+  exit 0
+fi
 
 if [ "$mode" = rollback ]; then
   put_back || exit 1
@@ -172,8 +196,9 @@ cmd=${1:-}
 case "$cmd" in
   deploy)   [ "$#" = 3 ] || die "usage: deploy <sha> <image>"; send deploy "$2" "$3" ;;
   rollback) [ "$#" = 1 ] || die "usage: rollback"; send rollback ;;
+  node-image) [ "$#" = 2 ] || die "usage: node-image <image@sha256:…>"; send node-image "$2" ;;
   instance) instance ;;
-  script)   shift; case "${1:-}" in deploy|rollback) remote_script "$@" ;; *) die "usage: script deploy|rollback [<sha> <image>]" ;; esac ;;
+  script)   shift; case "${1:-}" in deploy|rollback|node-image) remote_script "$@" ;; *) die "usage: script deploy|rollback|node-image [<sha> <image>]" ;; esac ;;
   -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "usage: deploy <sha> <image> | rollback | instance | script deploy|rollback [<sha> <image>]" ;;
+  *) die "usage: deploy <sha> <image> | rollback | node-image <image@sha256:…> | instance | script deploy|rollback|node-image [<sha> <image>]" ;;
 esac

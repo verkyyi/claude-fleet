@@ -64,7 +64,7 @@ import re
 import sys
 
 # jobs that only watch, sum up or follow the run: never the reason it is red
-WATCHERS = {"红灯即停", "train", "ledger", "next", "node tools", "node image", "Linux 补跑?"}
+WATCHERS = {"红灯即停", "train", "ledger", "next", "node tools", "node image", "node image · AWS", "node image · AWS template", "Linux 补跑?"}
 SHARD = re.compile(r"^Linux(?: rescue)? / shard (\d+)$")
 RED = re.compile(r"^(FAIL|TIMEOUT)\s+(\S+)")
 RED_JOB = ("failure", "timed_out")
