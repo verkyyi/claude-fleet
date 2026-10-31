@@ -14,6 +14,7 @@ try {
   const context = await browser.newContext({viewport:{width:1440,height:900}});
   const page = await context.newPage();
   const calls = [], said = [], opened = [];
+  let failStudio = 0, inflight = 0, overlap = 0;
   let config = {rev:1, company:{name:'Bubble Cloud Events', positioning:'Full-service corporate events for Bay Area tech companies.'},
     clients:[{id:'c-google', name:'Google', event:'Holiday party', date:'12/14', include_prices:false}],
     templates:[{id:'tpl-html', name:'Corporate event proposal (13 pages, HTML — start here)', kind:'template', version_id:'v-tpl'}]};
@@ -51,7 +52,12 @@ try {
     if (u.pathname === '/v1/me') body = {person:'alice', role:'user', studio:true, pages:['app']};
     if (u.pathname === '/v1/fleet/tasks') body = {tasks:[]};
     if (u.pathname === '/v1/fleet/sessions') body = {sessions:[], board:{rows:[{id:fid, worker_id:worker, title:'BC', group:'work', tag:'working', words:['工作中','Working'], at:1, agent:'claude'}], count:1, groups:{}}};
-    if (u.pathname === '/v1/chat/studio') body = {projects:[], sessions:{[session.key]:session}};
+    if (u.pathname === '/v1/chat/studio') {
+      if (++inflight > 1) overlap++;
+      await new Promise(r => setTimeout(r, 50)); inflight--;
+      if (failStudio > 0) { failStudio--; return route.fulfill({status:502, json:{error:'home slow'}}); }
+      body = {projects:[], sessions:{[session.key]:session}};
+    }
     if (u.pathname === '/v1/chat/studio/open') { opened.push(req.postDataJSON()); body = {...session, key:'new-2', proposal_id:'', versions:[]}; }
     if (u.pathname === '/v1/chat/studio/bc') {
       const a = req.postDataJSON(); calls.push(a);
@@ -72,6 +78,13 @@ try {
   for (const name of ['配置', '与 Agent 对话', '画布', '讲稿与发布']) assert.ok(await page.getByRole('region', {name}).or(page.getByRole('complementary', {name})).isVisible(), name);
   await page.getByText('This arch greets 300 guests.').waitFor();
   if (shots) await page.screenshot({path:`${shots}/bc-1440-deck.png`});
+
+  // A single failed read (a slow home) puts up no notice; reads never overlap.
+  failStudio = 1;
+  await page.waitForFunction(() => true); await page.waitForTimeout(6500);
+  assert.equal(failStudio, 0, 'the failing read happened');
+  assert.equal(await page.getByRole('alert').count(), 0, 'one blip shows no reconnecting notice');
+  assert.equal(overlap, 0, 'studio reads never overlap');
 
   // Company profile: an edit is saved with the revision it was read at.
   await page.getByRole('textbox').filter({hasText:'Full-service corporate events'}).fill('Full-service corporate events, Bay Area.');
@@ -116,5 +129,5 @@ try {
   // Desktop only: a narrow window says so instead of squeezing four columns.
   await page.setViewportSize({width:900, height:800});
   await page.getByText('方案工作台只做了电脑版').waitFor();
-  console.log('PASS bubble-cloud: four columns, config save, slide edit, bench batch / pick / hand-off, new proposal, desktop only');
+  console.log('PASS bubble-cloud: four columns, config save, slide edit, bench batch / pick / hand-off, new proposal, desktop only, one blip silent, no overlapping reads');
 } finally { await browser.close(); }

@@ -7,6 +7,7 @@ import { Crop, ImagePlus, Loader2, Plus, Sparkles, Star, Wand2, X } from "lucide
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { usePoll } from "./poll";
 
 export type BcClient = { id?: string; name: string; event?: string; date?: string; venue?: string; guests?: string; budget?: string;
   brand?: string; prefs?: string; contacts?: string; quote_url?: string; notes?: string; include_prices?: boolean };
@@ -30,15 +31,10 @@ export async function bc<T>(op: string, body: Record<string, unknown> = {}): Pro
 export function useBc(proposal: string) {
   const [state, setState] = useState<BcState | null>(null);
   const [error, setError] = useState("");
-  const read = useCallback(async () => {
-    try { setState(await bc<BcState>("read", { proposal })); setError(""); } catch (e) { setError((e as Error).message); }
-  }, [proposal]);
+  const load = useCallback(async () => { setState(await bc<BcState>("read", { proposal })); setError(""); }, [proposal]);
+  const read = useCallback(async () => { try { await load(); } catch (e) { setError((e as Error).message); } }, [load]);
   const running = !!state?.renders.some(r => r.status === "running");
-  useEffect(() => {
-    void read();
-    const t = setInterval(() => { if (document.visibilityState === "visible") void read(); }, running ? 4000 : 15000);
-    return () => clearInterval(t);
-  }, [read, running]);
+  usePoll(load, running ? 5000 : 20_000, 60_000, (fails, e) => { if (fails >= 2) setError((e as Error).message); });
   return { state, error, read, setError };
 }
 

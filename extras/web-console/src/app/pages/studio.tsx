@@ -11,6 +11,7 @@ import { usePage, useShell } from "../Shell";
 import { useWorkRows } from "../work-rows";
 import { rowForOpen } from "../new-session";
 import { useStudioPreview } from "./studio-preview";
+import { usePoll } from "./poll";
 import { BcConfigPanel, BcImageBench, BcScripts, useBc, type BcClient, type BcTemplate, type Script } from "./bubble-cloud";
 import { cn } from "@/lib/utils";
 
@@ -124,15 +125,10 @@ function Studio() {
   const refresh = useCallback(async () => {
     try { setState(await request<State>("")); setSyncError(""); } catch (e) { setSyncError((e as Error).message); }
   }, []);
-  useEffect(() => {
-    let live = true;
-    const read = async () => { try { const j = await request<State>(""); if (live) { setState(j); setSyncError(""); setLoaded(true); } } catch (e) { if (live) setSyncError((e as Error).message); } };
-    void read();
-    const wake = () => { if (document.visibilityState === "visible") void read(); };
-    const t = setInterval(wake, 5000);
-    window.addEventListener("online", wake); window.addEventListener("focus", wake);
-    return () => { live = false; clearInterval(t); window.removeEventListener("online", wake); window.removeEventListener("focus", wake); };
-  }, []);
+  // One read in flight, backing off while the home is slow; a single failed read is not shown —
+  // only two in a row (a real outage) put up the reconnecting notice.
+  usePoll(async () => { const j = await request<State>(""); setState(j); setSyncError(""); setLoaded(true); }, 5000, 60_000,
+    (fails, e) => { if (fails >= 2) setSyncError((e as Error).message); });
   const preview = useStudioPreview(session, version, request, refresh);
   const open = async (proposal?: Project, text?: string, catalog = false, bcPick?: { client?: BcClient; template?: BcTemplate }) => {
     if (busy) return;
