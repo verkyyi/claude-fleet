@@ -206,7 +206,8 @@ while [ "$#" -gt 0 ]; do
     --reap=*)      REAP="${1#--reap=}"; shift ;;
     # Legacy origin words remain accepted; only explicit probe selects a test
     # default. Web also stamps its transport provenance, not a retention role.
-    # --source <agent|schedule|api> (task DDBQ): who opened it, for the list's
+    # --source <agent|schedule|api|studio> (task DDBQ; studio = the web workbench,
+    # V374): who opened it, for the list's
     # groups (@session_source). None = a person's (⌘P, web, the CLI), unless
     # --origin names a session — then a session's tool opened it (agent).
     --source)      SOURCE="${2:-}"; shift; [ "$#" -gt 0 ] && shift ;;
@@ -361,8 +362,8 @@ if [ -n "$DISPATCH" ]; then
 fi
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
-case "$SOURCE" in ''|person|agent|schedule|api) ;;
-  *) printf 'dash-raw-session: --source takes person|agent|schedule|api\n' >&2; exit 2 ;;
+case "$SOURCE" in ''|person|agent|schedule|api|studio) ;;
+  *) printf 'dash-raw-session: --source takes person|agent|schedule|api|studio\n' >&2; exit 2 ;;
 esac
 case "$REAP_ORIGIN" in ''|person|dispatched|member|driver|orchestrator|decide|probe|web) ;;
   *) printf 'dash-raw-session: --reap-origin takes person|dispatched|member|driver|orchestrator|decide|probe\n' >&2; exit 2 ;;
@@ -1406,7 +1407,7 @@ fi
 [ "$REAP_ORIGIN" = web ] && stamp_option @session_origin web 2>/dev/null
 # Who opened it (task DDBQ): a person's session carries nothing.
 [ -n "$SOURCE" ] || case "$ORIGIN" in ''|hub) ;; *) SOURCE=agent ;; esac
-case "$SOURCE" in agent|schedule|api) stamp_option @session_source "$SOURCE" 2>/dev/null ;; esac
+case "$SOURCE" in agent|schedule|api|studio) stamp_option @session_source "$SOURCE" 2>/dev/null ;; esac
 # A scheduled run is about its schedule, not the prompt a person wrote once (X24T):
 # its name («<schedule> 10-30», fleet_schedule_run.py run_title) is its first
 # sentence — set before the agent starts, so set-claude-state.sh's first-prompt

@@ -14,6 +14,7 @@ func TestBoardSource(t *testing.T) {
 		{"a scheduled run", BoardRow{ScheduleID: "s1"}, boardSourceSchedule},
 		{"the schedule wins over a node word", BoardRow{ScheduleID: "s1", Source: boardSourceAgent}, boardSourceSchedule},
 		{"the node's stamp", BoardRow{Source: boardSourceAgent}, boardSourceAgent},
+		{"a workbench session (V374)", BoardRow{Source: boardSourceStudio}, boardSourceStudio},
 		{"the node's stamp beats the record", BoardRow{Source: boardSourceAPI, taskVia: "编排"}, boardSourceAPI},
 		{"a bearer worker_start", BoardRow{taskVia: "api"}, boardSourceAPI},
 		{"a session's task tool", BoardRow{taskVia: "编排"}, boardSourceAgent},

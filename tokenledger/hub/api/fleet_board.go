@@ -562,7 +562,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Origin = "web"
 		}
 		switch src := wstr(w, "source"); src {
-		case boardSourceAgent, boardSourceSchedule, boardSourceAPI:
+		case boardSourceAgent, boardSourceSchedule, boardSourceAPI, boardSourceStudio:
 			r.Source = src
 		}
 		r.CanTalk = r.Group != "gone" && !r.Lost && wid != "" && fs.Availability != "maintenance" && fs.Availability != MachineAvailDisabled
@@ -939,6 +939,7 @@ const (
 	boardSourceAgent    = "agent"
 	boardSourceSchedule = "schedule"
 	boardSourceAPI      = "api"
+	boardSourceStudio   = "studio" // the web workbench's sessions (V374)
 )
 
 // boardSource is the ONE place a row's source is decided: a scheduled run's

@@ -2732,14 +2732,14 @@ def list_preferences(value=None):
             "idle_hours": value.get("idle_hours") if type(value.get("idle_hours")) is int and value["idle_hours"] in (0, 12, 24, 72) else 24}
 
 
-SOURCES = ("agent", "schedule", "api")
+SOURCES = ("agent", "schedule", "api", "studio")   # studio: the web workbench (V374)
 
 
 def source_label(k):
     """A source group's heading (task DDBQ) — the web's words, session-list.ts sourceLabel."""
     en = ui_lang() == "en"
     return {"agent": "From sessions" if en else "会话派出的", "schedule": "Scheduled" if en else "定时任务",
-            "api": "Via API" if en else "API 派发"}[k]
+            "api": "Via API" if en else "API 派发", "studio": "Studio" if en else "工作台"}[k]
 
 
 SCHEDULE_DAY_RE = re.compile(r"(?:[\s_-]+\d{4}-\d{2}-\d{2}|\s+\d{2}-\d{2})(?:(?:\s+#|-)\d+)?$")

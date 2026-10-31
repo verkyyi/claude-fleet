@@ -36,15 +36,16 @@ export const needsAttention = (r: Row) => listStatus(r).kind === "ask" ||
     ((r.live?.state || r.board?.state) === "failed" || r.board?.why_tone === "red" || r.board?.tag === "failed" || r.board?.tag === "refused"));
 // Who opened a session (task DDBQ, the hub's board.source): a person's is the
 // main list; one a session's tool, a schedule or an API caller opened has its
-// own folded group, newest first, whatever its state. PIN keeps whatever was pinned.
-export type RowSource = "agent" | "schedule" | "api";
-export const ROW_SOURCES: RowSource[] = ["agent", "schedule", "api"];
+// own folded group, newest first, whatever its state; so has one the workbench
+// opened (V374, studio). PIN keeps whatever was pinned.
+export type RowSource = "agent" | "schedule" | "api" | "studio";
+export const ROW_SOURCES: RowSource[] = ["agent", "schedule", "api", "studio"];
 export const rowSource = (r: Row): RowSource | "" => {
   const s = r.board?.source;
-  return s === "agent" || s === "schedule" || s === "api" ? s : "";
+  return s === "agent" || s === "schedule" || s === "api" || s === "studio" ? s : "";
 };
 export const sourceLabel = (s: RowSource) => s === "agent" ? tr("会话派出的", "From sessions")
-  : s === "schedule" ? tr("定时任务", "Scheduled") : tr("API 派发", "Via API");
+  : s === "schedule" ? tr("定时任务", "Scheduled") : s === "studio" ? tr("工作台", "Studio") : tr("API 派发", "Via API");
 // One schedule, one line (task X24T): inside 定时任务 a schedule's runs fold
 // under their schedule — the hub's schedule_id, else (a node `fleet task`, an
 // older run) the title without its day. `shown` is the newest run plus any run
@@ -78,7 +79,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   const at = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
   const grouped = (s: RowSource) => rows.filter((r) => r.group !== "pin" && rowSource(r) === s)
     .sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
-  const sources = { agent: grouped("agent"), schedule: grouped("schedule"), api: grouped("api") };
+  const sources = { agent: grouped("agent"), schedule: grouped("schedule"), api: grouped("api"), studio: grouped("studio") };
   const base = listRows(rows.filter((r) => r.group === "pin" || !rowSource(r)), previous);
   const isCurrent = (r: Row) => rowRef(r) === current;
   const pin = base.pin;
@@ -108,7 +109,8 @@ export function compactRows(rows: Row[], options: { current?: string; preference
       used.add(r.id); return [fresh];
     });
     const stable = { pin: refresh(previous.pin), open: refresh(previous.open), gone: refresh(previous.gone),
-      sources: { agent: refresh(previous.sources.agent), schedule: refresh(previous.sources.schedule), api: refresh(previous.sources.api) } };
+      sources: { agent: refresh(previous.sources.agent), schedule: refresh(previous.sources.schedule), api: refresh(previous.sources.api),
+        studio: refresh(previous.sources.studio ?? []) } };
     for (const r of rows.filter((r) => !used.has(r.id))) {
       const src = r.group === "pin" ? "" : rowSource(r);
       (src ? stable.sources[src] : stable.gone).push(r);

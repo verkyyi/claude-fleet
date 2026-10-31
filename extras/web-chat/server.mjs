@@ -1893,7 +1893,8 @@ async function spawnNativeSession(text, agent, profile = "", purpose = "", paren
   writeFileSync(pf, text, { mode: 0o600 });
   const args = [...(target ? [target] : []), "--origin", purpose === "probe" ? parent : "hub", "--print", "--no-repo", "--node", "local",
     "--reap-origin", purpose === "probe" ? "probe" : "web", ...(agent ? ["--agent", agent] : []),
-    ...(profile ? ["--as", profile] : []), `--prompt-file=${pf}`];
+    // a workbench session (an agent profile) has its own folded group in the list (V374)
+    ...(profile ? ["--as", profile, "--source", "studio"] : []), `--prompt-file=${pf}`];
   const r = await run(RAW, args);
   try { unlinkSync(pf); } catch { /* read by the spawn */ }
   const line = (r.stdout || "").trim().split("\n").filter((l) => l.includes("\t")).pop() || "";
