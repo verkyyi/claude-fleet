@@ -206,7 +206,7 @@ running after 30 minutes is cancelled). BREAK-IT `train-aws-ssm-fails`.
 
 To change Tokenman's WeChat application notifications, first deploy a hub that
 supports `ccquota hub --probe-wx-newreq`, then run **Actions → hub-wx-notify →
-Run workflow** on `master`. Supply the registered category 1273 template 61558
+Run workflow** on `master`, choosing `operation=apply`. Supply the registered category 1273 template 61558
 ID, `thing1=platform,thing2=person,time4=time`, the registered one-time 30803
 subscription ID, and one existing administrator's GitHub login. The administrator
 must have a followed service-account identity. This sends one labelled test.
@@ -231,6 +231,12 @@ again and verify the original live values; a failed rollback is explicitly red.
 Backups stay on the box; neither site.env nor credentials enter job logs or
 artifacts. Do not hard-cancel a running transaction: forced termination or host
 loss can interrupt rollback; use the retained backup on that host to recover.
+After any uncertain result, run the same workflow with `operation=inspect`
+(the default) first. This compares only the three named keys on disk, in each
+running pod and in the latest backup, printing boolean matches. It changes no
+files and sends no messages. Each apply/rollback stage is named in the log,
+including both the original failure and any rollback failure; raw command
+output remains captured on the host.
 
 The role needs the same `ssm:SendCommand` permission on the target instance and
 `AWS-RunShellScript` document, plus `ssm:GetCommandInvocation` and

@@ -17,6 +17,8 @@
 #   fleet-hub-aws-deploy.sh instance               print the box's instance id
 #   fleet-hub-aws-deploy.sh wx-notify <newreq> <fields> <review-sub> <admin>
 #        change only the three WeChat settings, restart and probe; undo on failure
+#   fleet-hub-aws-deploy.sh wx-notify-check <newreq> <fields> <review-sub> <admin>
+#        compare the three settings on disk, in pods and in the latest backup
 #   fleet-hub-aws-deploy.sh script deploy|rollback [<sha> <image>]
 #        print the shell the box would run, send nothing (the selftest runs it
 #        against a sandbox checkout)
@@ -63,14 +65,16 @@ remote_script() {   # remote_script deploy|rollback [<sha> <image>]
   local mode=$1 sha=${2:-} image=${3:-}
   safe repo-dir "$AWS_BOX_REPO_DIR" '^/[A-Za-z0-9._/-]+$'
   safe conf "$AWS_BOX_CONF" '^/[A-Za-z0-9._/-]+$'
-  if [ "$mode" = wx-notify ]; then
+  if [ "$mode" = wx-notify ] || [ "$mode" = wx-notify-check ]; then
     [ "$#" = 5 ] || die 'usage: wx-notify <newreq> <fields> <review-sub> <admin>'
     safe newreq "$2" '^[A-Za-z0-9_-]{20,100}$'
     safe fields "$3" '^[a-z0-9_=,]+$'
     safe review-sub "$4" '^[A-Za-z0-9_-]{20,100}$'
     safe admin "$5" '^[A-Za-z0-9][A-Za-z0-9-]{0,38}$'
-    printf "#!/bin/bash\nset -uo pipefail\npython3 - --repo '%s' --conf '%s' --newreq '%s' --fields '%s' --review-sub '%s' --admin '%s' <<'WX_CONFIG_PY'\n" \
-      "$AWS_BOX_REPO_DIR" "$AWS_BOX_CONF" "$2" "$3" "$4" "$5"
+    local inspect=''
+    [ "$mode" != wx-notify-check ] || inspect=--inspect
+    printf "#!/bin/bash\nset -uo pipefail\npython3 - %s --repo '%s' --conf '%s' --newreq '%s' --fields '%s' --review-sub '%s' --admin '%s' <<'WX_CONFIG_PY'\n" \
+      "$inspect" "$AWS_BOX_REPO_DIR" "$AWS_BOX_CONF" "$2" "$3" "$4" "$5"
     cat "$(dirname "$0")/fleet-wx-config.py"
     printf '\nWX_CONFIG_PY\n'
     return
@@ -212,9 +216,9 @@ case "$cmd" in
   deploy)   [ "$#" = 3 ] || die "usage: deploy <sha> <image>"; send deploy "$2" "$3" ;;
   rollback) [ "$#" = 1 ] || die "usage: rollback"; send rollback ;;
   node-image) [ "$#" = 2 ] || die "usage: node-image <image@sha256:…>"; send node-image "$2" ;;
-  wx-notify) [ "$#" = 5 ] || die 'usage: wx-notify <newreq> <fields> <review-sub> <admin>'; send "$@" ;;
+  wx-notify|wx-notify-check) [ "$#" = 5 ] || die 'usage: wx-notify[-check] <newreq> <fields> <review-sub> <admin>'; send "$@" ;;
   instance) instance ;;
-  script)   shift; case "${1:-}" in deploy|rollback|node-image|wx-notify) remote_script "$@" ;; *) die "usage: script deploy|rollback|node-image|wx-notify [arguments]" ;; esac ;;
+  script)   shift; case "${1:-}" in deploy|rollback|node-image|wx-notify|wx-notify-check) remote_script "$@" ;; *) die "usage: script deploy|rollback|node-image|wx-notify[-check] [arguments]" ;; esac ;;
   -h|--help) sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "usage: deploy <sha> <image> | rollback | node-image <image@sha256:…> | wx-notify <newreq> <fields> <review-sub> <admin> | instance | script <mode> [arguments]" ;;
 esac

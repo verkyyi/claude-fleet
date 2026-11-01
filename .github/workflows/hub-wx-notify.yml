@@ -3,6 +3,11 @@ name: hub-wx-notify
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: 'inspect compares disk, pods and latest backup; apply changes settings and sends one test'
+        type: choice
+        options: [inspect, apply]
+        default: inspect
       newreq_template:
         description: 'Registered 61558 template ID (category 1273)'
         required: true
@@ -48,6 +53,7 @@ jobs:
       NEWREQ_FIELDS: ${{ inputs.newreq_fields }}
       REVIEW_SUBSCRIPTION: ${{ inputs.review_subscription }}
       ADMIN_LOGIN: ${{ inputs.admin_login }}
+      OPERATION: ${{ inputs.operation }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -56,5 +62,10 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
       - name: Preflight, back up, apply, verify and send one test
         run: |
-          bin/fleet-hub-aws-deploy.sh wx-notify \
+          case "$OPERATION" in
+            inspect) mode=wx-notify-check ;;
+            apply) mode=wx-notify ;;
+            *) echo 'Choose inspect or apply' >&2; exit 2 ;;
+          esac
+          bin/fleet-hub-aws-deploy.sh "$mode" \
             "$NEWREQ_TEMPLATE" "$NEWREQ_FIELDS" "$REVIEW_SUBSCRIPTION" "$ADMIN_LOGIN"

@@ -16,6 +16,15 @@ import tempfile
 KEYS = ("CCQUOTA_WX_TPL_NEWREQ", "CCQUOTA_WX_TPL_NEWREQ_FIELDS", "CCQUOTA_WX_SUB_REVIEW")
 
 
+def error_stage(error):
+    return str(error) if isinstance(error, RuntimeError) else "local operation failed"
+
+
+def file_values(path):
+    values = dict(line.split(b"=", 1) for line in path.read_bytes().splitlines() if b"=" in line)
+    return [values.get(k.encode(), b"").decode() for k in KEYS]
+
+
 def validate(values, admin):
     for value in (values[0], values[2]):
         if not re.fullmatch(r"[A-Za-z0-9_-]{20,100}", value):
@@ -69,6 +78,7 @@ class Rollout:
         self.k = ["k3s", "kubectl", "-n", "fleet-hub"]
 
     def run(self, argv, stage, timeout=900, env=None):
+        print("wx-notify: " + stage, flush=True)
         try:
             p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  text=True, start_new_session=True, env=env)
@@ -124,17 +134,35 @@ class Rollout:
         if old:
             self.run(self.k + ["wait", "--for=delete"] + ["pod/" + p for p in old] + ["--timeout=180s"], "wait for old hub pods", 200)
 
-    def verify_env(self, expected):
+    def live_values(self):
         pods = self.pods()
         if not pods:
             raise RuntimeError("no running hub pods")
         # Print only the three named, non-secret values inside each container.
         script = "printf '%s\\n' " + " ".join('"${' + k + '-}"' for k in KEYS)
-        for pod in pods:
-            got = self.run(self.k + ["exec", pod, "-c", "ccquota", "--", "sh", "-c", script], "verify live template settings").splitlines()
+        return {pod: self.run(self.k + ["exec", pod, "-c", "ccquota", "--", "sh", "-c", script], "read live template settings").splitlines() for pod in pods}
+
+    def verify_env(self, expected):
+        live = self.live_values()
+        for got in live.values():
             if got != list(expected):
                 raise RuntimeError("live template settings differ from the requested values")
-        return pods
+        return list(live)
+
+    def inspect(self):
+        # Comparisons only: not even a misplaced secret in one of these keys
+        # can escape through diagnostics. No config write or message send.
+        validate(self.values, self.admin)
+        current = file_values(self.site)
+        backups = sorted(self.site.parent.glob("wx-notify-backup-*/site.env"), key=lambda p: p.stat().st_mtime)
+        prior = file_values(backups[-1]) if backups else None
+        live = self.live_values()
+        print(json.dumps({"inspection": True, "backup_count": len(backups),
+            "site_matches_requested": current == list(self.values),
+            "site_matches_latest_backup": current == prior,
+            "pods": [{"name": pod, "matches_site": values == current,
+                      "matches_requested": values == list(self.values),
+                      "matches_latest_backup": values == prior} for pod, values in live.items()]}), flush=True)
 
     def execute(self):
         validate(self.values, self.admin)
@@ -154,13 +182,15 @@ class Rollout:
             self.apply()
             pods = self.verify_env(self.values)
             result = self.probe(pods[0], dry=False)
-        except Exception:
+        except Exception as failure:
+            print("wx-notify: transaction failed: " + error_stage(failure), flush=True)
             try:
                 atomic_write(self.site, original, owner)
                 self.apply()
                 self.verify_env([old_values.get(k.encode(), b"").decode() for k in KEYS])
                 print("wx-notify: failed; original site.env restored and running pods verified", flush=True)
-            except Exception:
+            except Exception as rollback_failure:
+                print("wx-notify: rollback failed: " + error_stage(rollback_failure), flush=True)
                 raise RuntimeError("ROLLBACK FAILED; inspect the hub and retained backup on the box") from None
             raise
         # The backup stays on this root-only host for deliberate rollback.
@@ -180,9 +210,11 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for key in ("repo", "conf", "newreq", "fields", "review-sub", "admin"):
         p.add_argument("--" + key, required=True)
+    p.add_argument("--inspect", action="store_true", help="compare only the three keys and latest backup; never write or send")
     a = p.parse_args()
     try:
-        Rollout(a.repo, a.conf, (a.newreq, a.fields, a.review_sub), a.admin).execute()
+        rollout = Rollout(a.repo, a.conf, (a.newreq, a.fields, a.review_sub), a.admin)
+        rollout.inspect() if a.inspect else rollout.execute()
     except (ValueError, OSError, RuntimeError, subprocess.TimeoutExpired):
         # Exception details can contain subprocess output or JSON; never echo it.
         import sys
