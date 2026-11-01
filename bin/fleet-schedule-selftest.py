@@ -195,6 +195,7 @@ class RunnerTests(unittest.TestCase):
                 key=hashlib.sha256(b'schedule-a:manual-one:1').hexdigest()[:24]
                 stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_key','schedule-'+key)
                 argv=spawn.call_args.args[0]
+                self.assertEqual(argv[argv.index('--node')+1],'local')  # never placed on another machine
                 self.assertRegex(argv[argv.index('--name')+1],r'^schedule \d\d-\d\d$')
                 import uuid
                 self.assertEqual(argv[argv.index('--fid')+1],str(uuid.uuid5(uuid.NAMESPACE_URL,'schedule-a:manual-one:1')))
