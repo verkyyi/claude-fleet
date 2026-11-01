@@ -66,6 +66,31 @@ export function scheduleRuns(rows: Row[]): ScheduleRuns[] {
   }
   return [...out.values()];
 }
+// The ⏰ 定时任务 card is the ONE place a schedule's runs show (task Y8XY): the
+// main list never draws them, running or not. Per schedule (the card's own
+// ids): its runs that are working, waiting to start or asking the person —
+// the card's line already says the last result, the detail page every run.
+// A run whose schedule the card does not list (deleted, an older run with no
+// schedule_id) goes to `other`, newest first, so it stays reachable.
+export type ScheduleCard = { live: Record<string, Row[]>; other: Row[]; running: number; asking: number };
+export function scheduleCard(rows: Row[], ids: string[]): ScheduleCard {
+  const known = new Set(ids);
+  const at = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+  const runs = rows.filter((r) => !r.board?.archived && r.group !== "pin" && rowSource(r) === "schedule")
+    .sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
+  const out: ScheduleCard = { live: {}, other: [], running: 0, asking: 0 };
+  for (const r of runs) {
+    const st = listStatus(r).kind;
+    const ask = needsAttention(r);
+    const busy = st === "work" || st === "pending";
+    if (ask) out.asking++;
+    else if (busy) out.running++;
+    const id = r.board?.schedule_id || "";
+    if (!known.has(id)) out.other.push(r);
+    else if (ask || busy) (out.live[id] ??= []).push(r);
+  }
+  return out;
+}
 export type SourceGroups = Record<RowSource, Row[]>;
 export type CompactGroups = ListGroups & { sources: SourceGroups };
 // One order: PIN, then everything by recent activity (task DDBQ). A row that
