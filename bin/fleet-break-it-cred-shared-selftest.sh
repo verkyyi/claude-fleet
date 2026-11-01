@@ -13,6 +13,9 @@
 #                       login names no account; only root pins; bin/fleet-session-cred.sh rebind
 #   cred-sep-acct-full  bin/fleet-cred-proxy.py pick_account / repick / limit_until (issue
 #                       #2412): a quota 429 moves the same request to the account with room
+#   cred-weekly-only    bin/fleet-cred-proxy.py rl_reading / used / pick_account (task CBSB): an
+#                       account with no 5-hour cap (Ultra) answers the weekly window only; its
+#                       reading is kept, so the pick leaves it before its week runs out
 #   cred-sep-codex-full bin/fleet-cred-proxy.py held / standing / limit_until + the default
 #                       home unpinned (issue #4606), bin/fleet-session-cred.sh mint / standing:
 #                       Codex forwards the original429 once; only future work skips a spent account
@@ -266,6 +269,32 @@ drill_cred_sep_acct_full() {
   grep -q '"ev": "acct_switch"' "$SB/log/alpha.log" || { WHY="no acct_switch in the log"; shared_down; return 1; }
   shared_down
   WHAT="会话所在的 $first 周限满（429）：代理把它标到重置、同一请求改走 $other 直接 200，会话凭据不变、不退出不续；后续请求留在 $other"
+}
+
+# cred-weekly-only (task CBSB): since 2026-10-30 a verified $200 (Ultra) account has
+# no 5-hour cap, so an answer may carry the weekly window alone. Before, a half
+# reading was no reading: the account stayed «unread», the session sat on it at
+# 90 % of its week and only a 429 moved it. Now the weekly half is kept (rl5h -)
+# and the session's next request moves to the account with room, before any 429.
+drill_cred_weekly_only() {
+  CAP=10
+  local tok t0 first other
+  shared_up weeklyonly || return 1
+  printf '{"sk-ant-oat-a1":{"u7":40,"no5h":true},"sk-ant-oat-a2":{"u7":40,"no5h":true}}' > "$CD/accts.json"
+  tok=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --provider claude --sid s1 2>&1)
+  case "$tok" in fcp1.*) ;; *) WHY="mint failed: $tok"; shared_down; return 1 ;; esac
+  [ "$(cred_req "$tok" "$SB/r")" = 200 ] || { WHY="the first request: $(cat "$SB/r")"; shared_down; return 1; }
+  first=$(sed -n 's/.*sk-ant-oat-\(a[12]\).*/\1/p' "$SB/r"); [ "$first" = a1 ] && other=a2 || other=a1
+  printf '{"sk-ant-oat-%s":{"u7":90,"no5h":true},"sk-ant-oat-%s":{"u7":30,"no5h":true}}' "$first" "$other" > "$CD/accts.json"
+  t0=$(now)
+  [ "$(cred_req "$tok" "$SB/r")" = 200 ] && grep -q "sk-ant-oat-$first" "$SB/r" \
+    || { WHY="the reading request: $(cat "$SB/r")"; shared_down; return 1; }
+  [ "$(cred_req "$tok" "$SB/r")" = 200 ] && grep -q "sk-ant-oat-$other" "$SB/r" \
+    || { WHY="a weekly-only reading at 90 % left the session on $first: $(cat "$SB/r")"; shared_down; return 1; }
+  SECS=$(since "$t0")
+  grep -q '"ev": "pick".*"why": "full"' "$SB/log/alpha.log" || { WHY="no pick why=full in the log"; shared_down; return 1; }
+  shared_down
+  WHAT="上游只回周窗口（无 5h 头，Ultra）：${first} 周用到 90% 超过挑号上限，下一请求就换到 ${other}，没等 429"
 }
 
 # cred-sep-codex-full (#4606, T972): Codex never replays current inference.

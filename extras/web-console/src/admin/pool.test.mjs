@@ -40,8 +40,8 @@ assert.equal(room([rows.find(r => !r.owner), own], "h5").left, 50);
 assert.equal(stateOf({ ...own, h5: null, h7: null }, 85), "unread");
 
 assert.equal(planName("claude", "max"), "Max");
-assert.equal(planName("claude", "max", "default_claude_max_5x"), "Max 5×");
-assert.equal(planName("claude", "max", "default_claude_max_20x"), "Max 20×");
+assert.equal(planName("claude", "max", "default_claude_max_5x"), "Max");
+assert.equal(planName("claude", "max", "default_claude_max_20x"), "Ultra");
 assert.equal(planName("claude", "max", "Charlie_20X"), "Max");
 assert.equal(planName("codex", " PLUS "), "Plus");
 assert.equal(planName("codex", "prolite"), "Pro Lite");
@@ -62,7 +62,7 @@ assert.equal(windowsOf({ windows: [{ id: "primary", utilization: 10 }] }, true).
 // An admin-set plan carries its tier and the hub's monthly price.
 const charlie = subscriptions({ creds: { credentials: [{ principal_id: "pool", provider: "claude", account: "Charlie_20X", credential_id: "cred:c",
   plan: "max", plan_source: "admin", plan_tier: "default_claude_max_20x", monthly_cost: 200, currency: "USD" }] } })[0];
-assert.equal(planName(charlie.prov, charlie.plan, charlie.planTier), "Max 20×");
+assert.equal(planName(charlie.prov, charlie.plan, charlie.planTier), "Ultra");
 assert.equal(charlie.monthly, 200);
 assert.equal(monthlyLabel(charlie.monthly, charlie.currency), "$200/mo");
 assert.equal(monthlyLabel(99.5, "EUR", "/月"), "99.50 EUR/月");

@@ -3,8 +3,9 @@ export function planName(provider: string, raw: string, tier = ""): string | nul
   const plan = raw.trim().toLowerCase();
   if (provider === "claude") {
     if (plan === "max") {
-      if (tier === "default_claude_max_5x") return "Max 5×";
-      if (tier === "default_claude_max_20x") return "Max 20×";
+      // Renamed 2026-10-30: the $100 tier is plain Max, the $200 tier Ultra (no 5-hour cap once verified).
+      if (tier === "default_claude_max_5x") return "Max";
+      if (tier === "default_claude_max_20x") return "Ultra";
       return "Max";
     }
     if (plan === "pro") return "Pro";
