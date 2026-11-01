@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"io"
 	"net/http"
@@ -332,5 +333,47 @@ func TestPreviewRegistrationIdentity(t *testing.T) {
 	}
 	if w := ask(token, good, task.Ref, `{"action":"register","socket":"app.sock"}`); w.Code != 403 {
 		t.Fatal("old login", w.Code, w.Body.String())
+	}
+}
+
+// A deep link opened before sign-in lands on that page, not on "/" (the
+// first-open-shows-the-root bug): path and query survive the round-trip.
+func TestPreviewDeepLinkSurvivesSignIn(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h, pAlice)
+	p := setupPreview(t, h.srv)
+	base := h.srv.previewURL(p.ID)
+	const deep = "/2026-11-01-design.html?x=1&y=%2F"
+	first := previewRequest(h.srv, "GET", base+deep)
+	if first.Code != 302 {
+		t.Fatal(first.Code, first.Body.String())
+	}
+	state, next := cookieNamed(first.Result(), previewStateCookie), cookieNamed(first.Result(), previewNextCookie)
+	if next == nil || !next.Secure || !next.HttpOnly || next.Domain != "" {
+		t.Fatal("deep link not remembered", next)
+	}
+	issued := previewRequest(h.srv, "GET", first.Header().Get("Location"), personCookie(pAlice, "alice"))
+	done := previewRequest(h.srv, "GET", issued.Header().Get("Location"), state, next)
+	if done.Code != 303 || done.Header().Get("Location") != deep {
+		t.Fatalf("returned to %q (%d)", done.Header().Get("Location"), done.Code)
+	}
+	if c := cookieNamed(done.Result(), previewNextCookie); c == nil || c.MaxAge >= 0 {
+		t.Fatal("next cookie not cleared", c)
+	}
+	// Without the cookie (or with a forged one) the callback still lands on "/".
+	for _, v := range []string{"//evil.test/x", "/\\evil.test", "https://evil.test/", "/a\nb", previewCallback + "?state=x", ""} {
+		if got := previewNext(v); got != "" {
+			t.Errorf("accepted %q", v)
+		}
+		r := httptest.NewRequest("GET", base+previewCallback, nil)
+		r.AddCookie(&http.Cookie{Name: previewNextCookie, Value: base64.RawURLEncoding.EncodeToString([]byte(v))})
+		if got := previewNextFrom(r); got != "/" {
+			t.Errorf("forged %q returned %q", v, got)
+		}
+	}
+	// A root visit starts sign-in without forgetting an earlier deep link.
+	root := previewRequest(h.srv, "GET", base+"/")
+	if root.Code != 302 || cookieNamed(root.Result(), previewNextCookie) != nil {
+		t.Fatal("root visit overwrote the deep link")
 	}
 }
