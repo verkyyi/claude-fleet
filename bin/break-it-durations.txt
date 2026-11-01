@@ -1,3 +1,4 @@
+# disk-gate-starves-park: first cost from a local PASS wall time (21.3 s), until the next CI refresh.
 # reopen-claude-on-codex-fleet: first cost from a local PASS wall time (6.1 s), until the next CI refresh.
 # credproxy-hub-url-moved: first cost from a local PASS wall time (1.1 s), until the next CI refresh.
 # hubsess-viewer-keeps-loop, collect-overrun-hubsess, panel-worker-hung: first costs from local PASS wall times (a loaded Mac), until the next CI refresh.
@@ -164,6 +165,7 @@
 0.0 db-move-policy-seed
 1.1 dev-checkout-overwritten
 2.5 disk-full
+22.0 disk-gate-starves-park
 0.4 dispatch-identity-fallback
 0.1 dispatch-wrong-replica
 2.1 dist-bad-signature

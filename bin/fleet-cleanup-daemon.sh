@@ -464,6 +464,29 @@ EOF
   fi
 ) }
 
+# --- a closed disk gate still parks (task T1253) -------------------------------------
+# Parking ends an idle agent's process in its own window: no worktree teardown, no
+# base pull, a few KB of screen. A gate that stayed closed for a day and a half on
+# one machine (8 GB < 12 GB) left 20+ finished agents running — the very memory a full
+# box needs back. So a closed gate stops the reaps above, never the park pass.
+park_fleet() { (
+  sess="$1"
+  fleet_load_conf "$sess"
+  k="${FLEET_CLEANUP_MAX_PER_TICK:-4}"
+  case "$k" in ''|*[!0-9]*) k=4;; esac
+  [ "$k" -gt 0 ] || exit 0
+  [ -f "$BIN/fleet-cleanup-idle.sh" ] || exit 0
+  cto="${FLEET_CLEANUP_CANDIDATE_TIMEOUT:-120}"
+  case "$cto" in ''|*[!0-9]*) cto=120 ;; esac
+  park_out=$(fleet_timebox "$cto" bash "$BIN/fleet-cleanup-idle.sh" "$sess" --park-only --limit "$k")
+  park_rc=$?
+  [ -z "$park_out" ] || printf '%s\n' "$park_out" | while IFS= read -r l; do log "$sess: $l"; done
+  case "$park_rc" in
+    124) log "$sess: park pass deferred (rc=124)" ;;
+    75) log "$sess: park pass deferred (rc=75); rate limit stops all fleets"; exit 75 ;;
+  esac
+) }
+
 # --- which fleets? argv wins; else every live fleet session on this server. -----
 SESSIONS=()
 if [ "${#ARGV_SESS[@]}" -gt 0 ]; then
@@ -601,7 +624,11 @@ if [ "$DISK_OPEN" = 0 ] && "$BIN/fleet-diskguard.sh" --gate >/dev/null 2>&1; the
   DISK_OPEN=1
 fi
 if [ "$DISK_OPEN" = 0 ]; then
-  log "disk gate closed — skipping all fleets this tick"
+  log "disk gate closed — skipping all fleets this tick (idle sessions still park)"
+  for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
+    park_fleet "$s"
+    [ "$?" = 75 ] && break
+  done
   exit 0
 fi
 

@@ -388,6 +388,21 @@ run s1 s2
 grep -q 'rc=75' "$WORK/log" || fail 'rate limit stop must be visible'
 [ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail 'rate limit must stop before the second fleet'
 
+# T1253) a closed disk gate stops the reaps, never the park pass: one machine sat a day
+# and a half under the floor with 20+ finished agents still running.
+rm -f "$WORK/idle-rate"
+: > "$WORK/idle-calls"
+reset
+conf
+touch "$WORK/disk_closed"
+run s1
+rm -f "$WORK/disk_closed"
+[ -s "$CLEAN_LOG" ] && fail "T1253 a closed disk gate must still reap nothing"
+grep -q 's1 --park-only --limit 4' "$WORK/idle-calls" \
+  || fail "T1253 a closed disk gate must still run the park pass" "$(cat "$WORK/idle-calls")"
+[ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail "T1253 only the park pass runs under a closed gate"
+: > "$WORK/idle-calls"
+
 # T905) gh could not read a PR: backoff, a 3-times-gone tombstone, a limit stops the pass.
 rm -f "$WORK/idle-rate" "$WORK/conf/s2.conf"; rm -rf "$WORK/conf/fleets/s2"
 MISS="$C/fleets/fake-repo/prmap.miss"; rm -f "$MISS"
@@ -413,5 +428,5 @@ rm -f "$MISS"; printf '101 error:gh-rate-limit\n' > "$WORK/tok"; reset; run s1
 grep -q 'backing off' "$WORK/log" || fail "T905 the rate-limit stop must be logged"
 rm -f "$WORK/tok" "$MISS"
 
-printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed · PR pass before idle · gh-miss backoff/tombstone\n'
+printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate (parks) · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed · PR pass before idle · gh-miss backoff/tombstone\n'
 exit 0
