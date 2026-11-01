@@ -2109,6 +2109,9 @@ def doctor_rows(p):
     rows += admin_agent_rows(p, cur)
     rows += codesign_rows(p)
     rows += login_tree_rows(p)
+    hu = hub_url_row(p)
+    if hu:
+        rows.append(hu)
     cr = credsep_row(p)
     if cr:
         rows.append(cr)
@@ -2305,6 +2308,28 @@ def install_row(p, cur, login, ident):
                 % (login, shape, fix))
     return ("WARN", "install", "%s: ~/.claude/fleet at %s (%s), the release is %s — this login runs old bin/ and "
             "account tasks; %s" % (login, sha[:12], shape, cur[:12], fix))
+
+
+def hub_url_row(p):
+    """<state>/hub-url — the seated updater's copy of machine.env's hub address
+    (#3670) — equals machine.env's (task APVZ: a stale copy fetched every release
+    from the old hub, and the machine fell behind). None with no copy or when
+    machine.env is not readable (the seat's own doctor)."""
+    copy = os.path.join(p.state, "hub-url")
+    lines = _read_lines(copy)[:1]
+    if not lines:
+        return None
+    want = ""
+    for line in _read_lines(p.machine_env):
+        if line.startswith("CCQUOTA_HUB_URL="):
+            want = line.split("=", 1)[1].strip().strip('"\'')
+    if not want:
+        return None
+    have = lines[0].strip()
+    if have == want:
+        return ("PASS", "hub-url", "the seat fetches from %s (machine.env's)" % want)
+    return ("WARN", "hub-url", "the seat fetches releases from %s, machine.env says %s — the core rewrites "
+            "%s within a minute (fleet-node-core.py hub_url_loop)" % (have, want, copy))
 
 
 def credsep_row(p):

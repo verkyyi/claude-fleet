@@ -122,6 +122,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `hub` | node | [mac-node-enroll] | node.env 与 fleet.conf 对入口说法不一：`fleet-conf.sh migrate` |
 | `hub-image` | node | [hub-deploy] [release-rules] | 入口镜像落后 / 分叉 / 与 stable 不同源：按 stable 重新部署入口，或等下一趟列车 |
 | `hubids` | node | [node-doctor] | 入口上开着的会话编号比窗口多：清理拍的 `fleet-id.sh live` 会关；`--dry` 看要关哪些 |
+| `hub-url` | machine | [release-rules] | 托管更新器取发布的入口地址（`hub-url`）与 machine.env 不一致：根核心每分钟对齐；仍不一致就重启根核心（`launchctl kickstart -k system/com.claude-fleet.node-core`） |
 | `hub-sessions` | node | [node-doctor] | 别的机器的会话不刷新：照行内修（入口在不在、令牌） |
 | `hubauth` | node | [mac-node-enroll] [login-lifecycle] | 入口不认这台的令牌：查 node.env，或 `fleet login` |
 | `icloud` | node | [mac-node-prep] | 退出 iCloud 或关同步 |

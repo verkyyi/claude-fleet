@@ -464,6 +464,13 @@ From `fleet doctor`.
 - **What it is**: whether the version the hub runs and stable are the same commit.
 - **On WARN / FAIL**: behind or forked: redeploy the hub at stable, or wait for the next release.
 
+#### `hub-url`
+
+From `fleet doctor --machine`.
+
+- **What it is**: whether the hub address the seated updater fetches releases from (`/var/db/fleet-node/hub-url`) is the one machine.env names.
+- **On WARN / FAIL**: when they differ the updater fetches from the old hub, keeps failing and the machine falls behind. The root core realigns it with machine.env every minute; if it stays different, restart the core (`sudo launchctl kickstart -k system/com.claude-fleet.node-core`, on Linux `sudo systemctl restart fleet-node-core`).
+
 #### `personcert`
 
 From `fleet doctor`.

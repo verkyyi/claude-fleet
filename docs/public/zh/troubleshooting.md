@@ -464,6 +464,13 @@ fleet doctor --json
 - **是什么**：入口跑的版本和稳定版是不是同一次提交。
 - **WARN / FAIL 怎么办**：落后或分叉：按稳定版重新部署入口，或等下一次发版。
 
+#### `hub-url`
+
+来自 `fleet doctor --machine`。
+
+- **是什么**：托管的更新器取发布用的入口地址（`/var/db/fleet-node/hub-url`）和 machine.env 里的是不是同一个。
+- **WARN / FAIL 怎么办**：不一致时更新器从旧入口取发布、一直失败、机器落后：根核心每分钟会把它对齐 machine.env；仍不一致就重启根核心（`sudo launchctl kickstart -k system/com.claude-fleet.node-core`，Linux 上 `sudo systemctl restart fleet-node-core`）。
+
 #### `personcert`
 
 来自 `fleet doctor`。

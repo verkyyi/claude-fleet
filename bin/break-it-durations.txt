@@ -670,3 +670,4 @@
 2.1 worker-inventory-rs
 0.1 wx-relay-forged
 10.0 hub-session-list-scan
+0.1 seated-reload-stale-job

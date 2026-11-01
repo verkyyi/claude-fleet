@@ -7315,6 +7315,15 @@ drill_task_continue_authority() {
   SECS=$(since "$t0")
 }
 
+drill_seated_reload_stale_job() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-node-core-reload-selftest.py" >"$WORK/seated-reload.log" 2>&1 || {
+    WHY="seated reload / hub-url: $(tail -5 "$WORK/seated-reload.log")"; return 1;
+  }
+  WHAT='托管的守护进程重载根核心的机器任务时连同核心的任务一起停（不只停自己的代问进程）；hub-url 随 machine.env，不一致时体检告警'
+  SECS=$(since "$t0")
+}
+
 drill_task_stop_replay_cleanup() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-task-execution-control-selftest.py" \

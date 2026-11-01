@@ -1109,9 +1109,16 @@ class Core(object):
             pids = self.strays(ent)
             stopped = [stop_group(x) for x in pids]  # never short-circuit a later stray
             return {"ok": True, "stopped": all(stopped) if pids else False, "strays": len(pids)}
-        # start: one copy — a job of mine still running, or the root daemon's
+        # start: one copy — a job of mine still running, or the root daemon's.
+        # Mine: the seat's stand-in follows it (its pid, then its exit) instead of
+        # being refused — refused, the stand-in exited rc 1 once a minute for days
+        # and the seat had nothing to stop when the job's code changed (task APVZ).
         if mine:
-            return {"error": "running", "pid": mine.pid}
+            self.log(self.tl.uid, "machine", a, "following pid %d" % mine.pid)
+            self.send(conn, {"ok": True, "pid": mine.pid, "following": True})
+            rc = mine.wait()
+            self.send(conn, {"exit": rc})
+            return None
         left = self.strays(ent)
         if left:
             # An orphan (PPID 1) no book of this core holds is what an earlier core
@@ -1343,6 +1350,28 @@ class Core(object):
         if code_digest(os.path.join(self.p.runtime, "bin"), self.code) != self.me:
             threading.Timer(1.0, self.quit).start()
 
+    def hub_url_loop(self):
+        """<state>/hub-url — the seated updater's copy of machine.env's address
+        (#3670) — kept equal to it (task APVZ): it was written only by `install
+        --seat`, so a hub move that rewrote machine.env left the seat fetching
+        releases from the old hub (a machine fell a day behind, every fetch a
+        timeout). Only where the seat layout put one; once a minute, cheap."""
+        while not self.stop:
+            try:
+                dst = os.path.join(sup.Paths().state, "hub-url")
+                if os.path.exists(dst):
+                    want = sup.machine_hub_url(sup.Paths())
+                    have = (sup.read_text(dst) or "").strip()
+                    if want and want != have:
+                        sup.seat_hub_url(sup.Paths())
+                        self.log(os.geteuid(), "hub-url", None, "%s → %s (machine.env)" % (have or "-", want))
+            except Exception as e:  # never takes the core down
+                self.log(os.geteuid(), "hub-url", None, "not refreshed: %s" % e)
+            for _ in range(60):
+                if self.stop:
+                    return
+                time.sleep(1)
+
     def quit(self):
         self.stop = True
         try:
@@ -1388,6 +1417,7 @@ class Core(object):
         os.rename(tmp, self.p.sock)
         signal.signal(signal.SIGTERM, lambda *_: self.quit())
         self.log(os.geteuid(), "serve", None, "listening on %s for uid %d" % (self.p.sock, self.peer[0]))
+        threading.Thread(target=self.hub_url_loop, daemon=True).start()
         while not self.stop:
             try:
                 conn, _ = s.accept()
