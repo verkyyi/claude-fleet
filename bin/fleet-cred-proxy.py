@@ -1771,8 +1771,7 @@ class Tenant:
     # answers). A session keeps its account (its prompt cache lives there) until
     # that account reaches the ceiling, answers a quota 429, or is limited; then
     # the next request runs on the one with the most room, the session none the
-    # wiser. Unread accounts rank in the middle (PICK_UNKNOWN). A new pick ranks
-    # a Claude account's week by its pace, not its raw percent (task CBSB).
+    # wiser. Unread accounts rank in the middle (PICK_UNKNOWN).
     def held(self, provider):
         if provider == "codex":
             return tenant_labels(self.cfg, "codex")   # the pool's and the store's own homes
@@ -1797,23 +1796,6 @@ class Tenant:
                 continue
             u.append(0.0 if r and 0 < r <= now else v)
         return max(u) if u else None
-
-    @staticmethod
-    def pace(provider, acct, now):
-        """-> how far a Claude account's week runs AHEAD of an even week (%, task
-        CBSB): weekly used minus the share of the week already gone, so 30 % used
-        three days in reads below 50 % used one day in. None without a weekly
-        reading and its reset, or once that reset has passed (the week refreshed).
-        Since 2026-10-30 an Ultra account has no 5-hour cap, so nothing else slows
-        a hot account down before its week is spent."""
-        if provider != "claude":
-            return None
-        rd = Proxy.reads.get((provider, acct)) or {}
-        v, r = _num(rd.get("rl7d")), _num(rd.get("rl_reset7"))
-        if v is None or not r or r <= now:
-            return None
-        gone = 100.0 * (1 - min(max((r - now) / WEEK_SECS, 0.0), 1.0))
-        return v - gone
 
     def usable(self, provider, acct, now):
         if Proxy.limited.get((provider, acct), 0) > now:
@@ -2253,15 +2235,7 @@ class Tenant:
                     if pv == provider:
                         load[a] = load.get(a, 0) + 1
         def rank(a):
-            # a NEW pick only (a session keeps a usable account — its cache): the
-            # 5h window as read, the week by its pace (task CBSB)
             u = self.used(provider, a, now)
-            pc = self.pace(provider, a, now)
-            if pc is not None:
-                u5 = _num((Proxy.reads.get((provider, a)) or {}).get("rl5h"))
-                r5 = _num((Proxy.reads.get((provider, a)) or {}).get("rl_reset5"))
-                u5 = None if u5 is None or (r5 and 0 < r5 <= now) else u5
-                u = pc if u5 is None else max(u5, pc)
             return (u if u is not None else PICK_UNKNOWN, load.get(a, 0), a)
         good = [a for a in held if self.usable(provider, a, now)]
         nxt = min(good or held, key=rank)
@@ -2306,7 +2280,6 @@ class Tenant:
 
 
 PICK_UNKNOWN = 50.0
-WEEK_SECS = 7 * 86400   # the weekly window's length, for pace (task CBSB)
 REJECT_HOLD = int(os.environ.get("FLEET_CRED_REJECT_HOLD") or 900)    # a 401'd account stays out (s)
 
 
