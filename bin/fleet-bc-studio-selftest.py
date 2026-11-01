@@ -9,7 +9,6 @@ import json
 import os
 import tempfile
 import threading
-import time
 import unittest
 from unittest.mock import patch
 
@@ -19,7 +18,6 @@ PNG = 'data:image/png;base64,' + base64.b64encode(bytes.fromhex(
     '89504e470d0a1a0a0000000d4948445200000001000000010806000000'
     '1f15c4890000000d49444154789c63f8cfc0f00f00050001ff5a8a2d3a0000000049454e44ae426082')).decode()
 SEEN = []
-STORE = {'media': {}}
 
 
 class Double(BaseHTTPRequestHandler):
@@ -36,31 +34,7 @@ class Double(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.headers.get('Authorization') != 'Bearer t0k':
             return self.answer(401, {'error': 'studio_token_required'})
-        if self.path == '/api/studio/store/meta':
-            if STORE.get('down'):
-                return self.answer(503, {'error': 'down'})
-            return self.answer(200, STORE['meta']) if 'meta' in STORE else self.answer(404, {'error': 'no_store'})
-        if self.path.startswith('/api/studio/store/media/'):
-            raw = STORE['media'].get(self.path.rsplit('/', 1)[1])
-            if raw is None:
-                return self.answer(404, {'error': 'no_media'})
-            self.send_response(200)
-            self.send_header('Content-Type', 'image/jpeg')
-            self.end_headers()
-            return self.wfile.write(raw)
         self.answer(200, {'spent': 0.1, 'cap': 5, 'models': ['gemini', 'gpt', 'seedream']})
-
-    def do_PUT(self):
-        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-        if self.headers.get('Authorization') != 'Bearer t0k':
-            return self.answer(401, {'error': 'studio_token_required'})
-        if self.path == '/api/studio/store/meta':
-            STORE['meta'] = body
-            STORE['puts'] = STORE.get('puts', 0) + 1
-            return self.answer(200, {'ok': True})
-        name = self.path.rsplit('/', 1)[1]
-        STORE['media'][name] = base64.b64decode(body['data'].split(',', 1)[1])
-        self.answer(200, {'ok': True})
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
@@ -91,38 +65,6 @@ class BcStudioTest(unittest.TestCase):
                                            'BC_STUDIO_URL': f'http://127.0.0.1:{self.server.server_port}'})
         self.env.start()
         SEEN.clear()
-        STORE.clear()
-        STORE['media'] = {}
-
-    def test_backup_and_restore(self):
-        bc.call('save', {'rev': 1, 'clients': [{'name': 'Acme', 'event': 'Launch'}]})
-        self.assertEqual(STORE['meta']['config']['clients'][0]['name'], 'Acme')
-        venue = bc.call('asset', {'data': PNG, 'label': 'lobby'})
-        self.assertIn(venue['id'] + '.jpg', STORE['media'])
-        self.assertIn(venue['id'] + '.t.jpg', STORE['media'])
-        puts = STORE['puts']
-        bc.call('read', {})
-        self.assertEqual(STORE['puts'], puts, 'a read pushes nothing')
-        # a new home: the store comes back from the copy, files included
-        with tempfile.TemporaryDirectory() as fresh, patch.dict(os.environ, {'FLEET_WEBCHAT_STATE': fresh}):
-            back = bc.call('read', {})
-            self.assertEqual(back['config']['clients'][0]['name'], 'Acme')
-            self.assertEqual([a['id'] for a in back['assets']], [venue['id']])
-            self.assertTrue(bc.media(venue['id']).exists())
-        # the copy unreadable: an empty store refuses rather than start over it
-        STORE['down'] = True
-        with tempfile.TemporaryDirectory() as fresh, patch.dict(os.environ, {'FLEET_WEBCHAT_STATE': fresh}):
-            with self.assertRaisesRegex(ValueError, 'saved copy could not be read'):
-                bc.call('read', {})
-        STORE.pop('down')
-
-    def test_stale_running_render_fails(self):
-        planned = bc.call('plan', {'proposal': 'p1', 'prompt': 'arch'})
-        with bc.store() as st:
-            bc.find(st, planned['ids'][0])['at'] = time.time() - bc.STALE_RUN - 5
-        r = bc.call('read', {'proposal': 'p1'})['renders'][0]
-        self.assertEqual(r['status'], 'failed')
-        self.assertIn('timed out', r['error'])
 
     def tearDown(self):
         self.env.stop()

@@ -85,19 +85,13 @@ def root():
     return fleet_studio.root() / 'bubble-cloud'
 
 
-STALE_RUN = 600  # a rendering still `running` after this many seconds was lost (a service restart)
-
-
 @contextlib.contextmanager
 def store():
     d = root()
     (d / 'media').mkdir(mode=0o700, parents=True, exist_ok=True)
-    changed = False
     with open(d / 'store.lock', 'a') as lock:
         os.chmod(lock.name, 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if not (d / 'config.json').exists() and not (d / 'images.json').exists():
-            restore()
         state = {}
         for name, default in (('config', DEFAULT_CONFIG), ('images', [])):
             try:
@@ -105,12 +99,8 @@ def store():
             except FileNotFoundError:
                 state[name] = copy.deepcopy(default)
         before = json.dumps(state, sort_keys=True)
-        for e in state['images']:
-            if e.get('status') == 'running' and time.time() - e.get('at', 0) > STALE_RUN:
-                e.update(status='failed', error='timed out (service restarted?) — retry')
         yield state
         if json.dumps(state, sort_keys=True) != before:
-            changed = True
             for name in ('config', 'images'):
                 fd, tmp = tempfile.mkstemp(prefix=f'.{name}-', dir=d)
                 try:
@@ -120,112 +110,6 @@ def store():
                 finally:
                     if os.path.exists(tmp):
                         os.unlink(tmp)
-            meta = {'config': state['config'], 'images': state['images']}
-    if changed:
-        backup(meta)
-
-
-# ---- the store's copy on the quote server (task APVZ): pushed after every change, pulled into an empty store ----
-# PUT/GET /api/studio/store/meta {config, images} · PUT/GET /api/studio/store/media/<id>[.t].jpg. A failure never
-# fails the local op: it is logged in backup.log, and the next change pushes again (media not yet sent included).
-
-def backup_on():
-    return os.environ.get('BC_STUDIO_BACKUP', '1') != '0'
-
-
-def backup_log(line):
-    with contextlib.suppress(OSError):
-        with open(root() / 'backup.log', 'a') as f:
-            f.write(time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()) + ' ' + line + '\n')
-
-
-def sent_file():
-    return root() / 'media-sent.json'
-
-
-def backup(meta):
-    if not backup_on():
-        return
-    try:
-        token()
-    except ValueError:
-        return
-    try:
-        remote('/api/studio/store/meta', meta, timeout=60, method='PUT')
-    except ValueError as exc:
-        backup_log('meta: ' + str(exc))
-        return
-    try:
-        sent = set(json.loads(sent_file().read_text()))
-    except (OSError, ValueError):
-        sent = set()
-    pushed = 0
-    for f in sorted((root() / 'media').glob('*.jpg')):
-        if f.name in sent or not re.fullmatch(r'[a-f0-9]{12}(\.t)?\.jpg', f.name):
-            continue
-        try:
-            remote('/api/studio/store/media/' + f.name, {'data': data_url(f)}, timeout=120, method='PUT')
-        except ValueError as exc:
-            backup_log(f'media {f.name}: {exc}')
-            break
-        sent.add(f.name)
-        pushed += 1
-    if pushed:
-        with contextlib.suppress(OSError):
-            sent_file().write_text(json.dumps(sorted(sent)))
-
-
-def restore():
-    """An empty store (a new home, a lost disk) from the server's copy; nothing there ⇒ the defaults."""
-    if not backup_on():
-        return
-    try:
-        token()
-    except ValueError:
-        return
-    try:
-        meta = remote('/api/studio/store/meta', timeout=60)
-    except ValueError as exc:
-        if 'no_store' in str(exc) or 'not_found' in str(exc):  # nothing saved, or a server without the store yet
-            return
-        # never start an empty store over a copy we could not read: its first push would replace it
-        backup_log('restore meta: ' + str(exc))
-        raise ValueError('the workbench store is empty here and its saved copy could not be read (%s) — try again shortly' % exc)
-    if not isinstance(meta.get('config'), dict) or not isinstance(meta.get('images'), list):
-        return
-    d = root()
-    got = set()
-    for e in meta['images']:
-        if e.get('status', 'ok') != 'ok' or not ID.fullmatch(str(e.get('id', ''))):
-            continue
-        for name in (e['id'] + '.jpg', e['id'] + '.t.jpg'):
-            if (d / 'media' / name).exists():
-                got.add(name)
-                continue
-            try:
-                raw = remote_bytes('/api/studio/store/media/' + name)
-            except ValueError as exc:
-                backup_log(f'restore {name}: {exc}')
-                continue
-            (d / 'media' / name).write_bytes(raw)
-            got.add(name)
-    for name in ('config', 'images'):
-        (d / f'{name}.json').write_text(json.dumps(meta[name], ensure_ascii=False))
-    with contextlib.suppress(OSError):
-        sent_file().write_text(json.dumps(sorted(got)))
-    backup_log(f'restored {len(meta["images"])} images, {len(got)} files')
-
-
-def remote_bytes(path, timeout=120):
-    req = urllib.request.Request(origin() + path, headers={'Authorization': 'Bearer ' + token(), 'User-Agent': 'fleet-bc-studio'})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read()
-    except urllib.error.HTTPError as e:
-        e.close()
-        raise ValueError(f'HTTP {e.code}')
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise ValueError(f'unreachable: {e}')
 
 
 def text(v, limit=2000):
@@ -284,9 +168,9 @@ def origin():
     return o
 
 
-def remote(path, body=None, timeout=240, method=None):
+def remote(path, body=None, timeout=240):
     req = urllib.request.Request(origin() + path, data=json.dumps(body).encode() if body is not None else None,
-                                 method=method or ('POST' if body is not None else 'GET'),
+                                 method='POST' if body is not None else 'GET',
                                  headers={'Authorization': 'Bearer ' + token(), 'Content-Type': 'application/json',
                                           'User-Agent': 'fleet-bc-studio'})
     try:

@@ -678,7 +678,7 @@ pod.
   (2) a batch, a batch every 10 minutes, a pod with a session working or asking
   left for the next one, each pod once per release, a failure asked again after
   an hour and holding back no other pod (`fleet_user_pod_roll.go`;
-  `fleet.user_pod_roll=off` stops it). `fleet.user_pod_roll_window` (`"HH-HH"`, UTC hours; `""` = any time) limits when a batch may start — e.g. `09-14` for 02:00–07:00 PDT (task APVZ). The node page's 版本 card says how many
+  `fleet.user_pod_roll=off` stops it). The node page's 版本 card says how many
   releases behind a pod is and its last roll. BREAK-IT `user-pod-image-stale`.
   The image's seed is copied to the disk at each start.
 - The readiness probe asks for the node program once a login is declared.

@@ -221,8 +221,6 @@ var hubSettings = map[string]hubSetting{
 		check: onOff(UserPodRollKey, "on")},
 	ClusterPodRetireKey: {def: "on", help: "retire a cluster pod's machine once its cluster's fleet-ops has not listed the pod (Deployment deleted or scaled to 0) for 30 minutes and none of its logins has been heard from (claude-fleet#4887): actor system, the PVC untouched, the operator told",
 		check: onOff(ClusterPodRetireKey, "on")},
-	UserPodRollWindowKey: {def: "", help: "the UTC hours a person pod's roll may start, \"HH-HH\" (task APVZ: 09-14 = 02:00–07:00 PDT); \"\" = any time",
-		check: checkRollWindow},
 	UserPodRollBatchKey: {def: "2", help: "at most this many person pods rolled per batch, a batch every 10 minutes (claude-fleet#4174)",
 		check: checkIntSetting(UserPodRollBatchKey, 1, 20, 2)},
 	SpareMaxKey: {def: "1", help: "this many spare logins per machine, 0–2 (claude-fleet#4673), within fleet.node_user_cap.<machine> (default 10) minus the logins handed out",
