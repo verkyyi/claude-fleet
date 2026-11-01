@@ -309,6 +309,15 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # @label=Reclaim idle scratch after @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
 #FLEET_SCRATCH_MAX_IDLE=0
 
+# --- Native worktree reclaim (task T1253) -----------------------------------------
+# A subagent run with worktree isolation leaves `.claude/worktrees/agent-*` behind
+# when it committed anything (Claude Code removes only an unchanged one). Past this
+# many seconds idle, the hourly janitor drops one that is clean, with no window,
+# tmux server or process in it; its branch is deleted only when git finds its
+# change on the base. 0 = never touch a native worktree (the old behaviour).
+# @label=Reclaim idle native worktrees after @group=janitor @tier=advanced @scope=global @edit=int @unit=seconds
+#FLEET_NATIVE_WORKTREE_IDLE=86400
+
 # --- Sessions park when idle (HHV0 / C1) ---------------------------
 # A session the web chat opened (@session_origin web) is never closed on its own;
 # idle this long (no turn running, no question open, no background job, nobody
@@ -1929,6 +1938,11 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #FLEET_QUOTA_BIN=             # default: whatever `ccquota` resolves to on PATH
 # @label=Disk warning GB @group=disk @tier=advanced @scope=global @edit=int @unit=GB
 #FLEET_DISK_WARN_GB=15        # watch capture + notify threshold
+# Under the warn line, at most every 6 hours, the diskguard tick empties the
+# rebuildable tool caches (go-build, old playwright browsers, yarn, npm, uv, stale
+# fleet bytecode — bin/fleet-cache-reclaim.py); log diskguard/cache-reclaim.log (T1253).
+# @label=Reclaim tool caches on low disk @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_DISK_CACHE_RECLAIM=1   # 0 = never touch the caches
 # (The volume the guard measures and the min seconds between incident captures are
 # fixed internal constants now — the guard measures the $TMPDIR volume the dash
 # cache writes to, else $HOME's (a Linux pod has no TMPDIR and its /tmp is the

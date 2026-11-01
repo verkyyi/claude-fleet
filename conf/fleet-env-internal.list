@@ -301,6 +301,7 @@ FLEET_CLIENT_IDENTITY              handoff: test = the client is the TEST identi
 FLEET_CLIENT_WHERE_CMD             seam: the hub read fleet-client-where.sh runs (default python3 fleet-client-lease.py where; the selftest swaps in a file, #1716)
 FLEET_CLIENT_XTVERSION             knob: 0 = never ask the terminal its name at client start (fleet-client-lease.py, 1, #1716)
 FLEET_CLEANUP_LEASE_TTL            knob: internal pacing/limit, safe in-code default (fleet-cleanup-daemon.sh)
+FLEET_CLEANUP_NO_PULL              handoff: the cleanup daemon's closed disk gate tells fleet-cleanup.sh to reap without a base pull (T1253)
 FLEET_CODEX_MANAGED                handoff: marks a codex launch as fleet-managed
 FLEET_CODEX_NATIVE_COMPLETION      handoff: launcher-verified native completion capability for the Stop hook; never inherited or configured
 FLEET_CODEX_PROFILE                handoff: an explicit codex profile for this launch

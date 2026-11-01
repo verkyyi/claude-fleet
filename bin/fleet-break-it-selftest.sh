@@ -25,7 +25,9 @@
 #   merged-then-commit                              bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
-#   disk-gate-starves-park                          bin/fleet-cleanup-daemon.sh (park_fleet), fleet-cleanup-idle.sh --park-only
+#   disk-gate-starves-park                          bin/fleet-cleanup-daemon.sh (FLEET_CLEANUP_NO_PULL), fleet-cleanup.sh
+#   native-worktree-pileup                          bin/worktree-autoclean.sh (native_process), fleet_worktree_drop --native
+#   cache-pileup                                    bin/fleet-cache-reclaim.py, fleet-diskguard.sh (cache_watch)
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
@@ -899,16 +901,39 @@ drill_disk_full() {
 
 # disk-gate-starves-park (task T1253): a disk that stays under the diskguard floor
 # closed the cleanup daemon's gate every tick, and the whole tick was skipped — the
-# idle parker with it, so finished agents ran on for days. A closed gate now stops
-# the reaps only; the park pass still runs for every fleet.
+# idle parker and every reap with it, so finished agents ran on for days and their
+# worktrees kept the volume full. A closed gate now skips only the base pulls.
 drill_disk_gate_starves_park() {
   CAP=90; local t0 out
   t0=$(now)
   out=$(bash "$BIN/fleet-cleanup-daemon-selftest.sh" 2>&1) || { WHY=$(printf '%s' "$out" | grep -m1 'FAIL'); return 1; }
-  sed -n '/^park_fleet()/,/^) }/p' "$BIN/fleet-cleanup-daemon.sh" | grep -q -- '--park-only' \
-    || { WHY="fleet-cleanup-daemon.sh park_fleet no longer runs the park-only pass"; return 1; }
+  grep -q 'export FLEET_CLEANUP_NO_PULL=1' "$BIN/fleet-cleanup-daemon.sh" \
+    || { WHY="fleet-cleanup-daemon.sh no longer reaps (without pulls) under a closed gate"; return 1; }
   SECS=$(since "$t0")
-  WHAT='磁盘门关着：一个也不回收，停放照跑（--park-only）'
+  WHAT='磁盘门关着：照样停放、照样回收，只是不拉基线'
+}
+
+# native-worktree-pileup (task T1253): subagents' native worktrees (CLAUDE_BASE)
+# that committed anything stayed forever — Claude Code removes only unchanged ones
+# and the fleet refused them all; 17 of them held 18 GB on one machine.
+drill_native_worktree_pileup() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/worktree-autoclean-native-selftest.sh" 2>&1) || { WHY=$(printf '%s' "$out" | grep -m1 'FAIL'); return 1; }
+  SECS=$(since "$t0")
+  WHAT='空闲一天、干净、没人用的原生 worktree 进回收站；没合的分支留着；脏的、在用的、新的不动'
+}
+
+# cache-pileup (task T1253): rebuildable tool caches only ever grew (~11 GB on one
+# machine) while the disk sat under the floor.
+drill_cache_pileup() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cache-reclaim-selftest.py" 2>&1) || { WHY=$(printf '%s' "$out" | grep -m1 'FAIL'); return 1; }
+  sed -n '/^  --watch)/,/;;/p' "$BIN/fleet-diskguard.sh" | grep -q '^    cache_watch' \
+    || { WHY="the diskguard --watch tick no longer runs cache_watch"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='低于告警线时清固定清单里的可重建缓存；清单外的、最新版浏览器、在用的不动'
 }
 
 # agent-file-broken (issue #3122, EPIC #3111 C11): a custom session is a standard
