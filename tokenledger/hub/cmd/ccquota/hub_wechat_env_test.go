@@ -44,6 +44,12 @@ func TestWxGatewayFromEnv(t *testing.T) {
 	if g := wxGatewayFromEnv(get); g == nil || g.RelayURL != "https://ac.ssl.24gmweb.com/node_w/wx/oauth/relay" || g.RelayTarget != "" {
 		t.Fatalf("relay set: %+v", g)
 	}
+	env["CCQUOTA_WX_SUB_REVIEW"] = "subscription-id"
+	env["CCQUOTA_WX_TPL_NEWREQ_FIELDS"] = "thing1=platform,thing2=person,time4=time"
+	env["CCQUOTA_WX_INTERNAL_TOKEN"] = "gate"
+	if g := wxGatewayFromEnv(get); g.SubReview != "subscription-id" || g.NewReqFields != env["CCQUOTA_WX_TPL_NEWREQ_FIELDS"] {
+		t.Fatal("subscription and replacement template fields not loaded")
+	}
 	delete(env, "CCQUOTA_WX_INTERNAL_TOKEN")
 	if g := wxGatewayFromEnv(get); g != nil {
 		t.Fatal("the relay turned on without the gate token that checks its signature")

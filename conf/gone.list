@@ -297,3 +297,6 @@ re go\("/schedules"\) T1121 extras/web-console/src/app/Shell.tsx
 
 # Studio is named for its growth and operations value.
 text 活页工作台 T1147 extras/web-console/src
+
+# New applications use category 1273; the retired 698 template must stay out.
+text PlJ5dFCF T1248 tokenledger/README.md,tokenledger/hub/,deploy/

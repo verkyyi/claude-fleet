@@ -1322,6 +1322,8 @@ func wxGatewayFromEnv(getenv func(string) string) *api.WxGateway {
 	// falls back to a customer-service message, then a mail.
 	g.TplReview = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_REVIEW"))
 	g.TplNewReq = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_NEWREQ"))
+	g.NewReqFields = strings.TrimSpace(getenv("CCQUOTA_WX_TPL_NEWREQ_FIELDS"))
+	g.SubReview = strings.TrimSpace(getenv("CCQUOTA_WX_SUB_REVIEW"))
 	if g.TplReview == "" || g.TplNewReq == "" {
 		log.Printf("wechat notices: CCQUOTA_WX_TPL_REVIEW / CCQUOTA_WX_TPL_NEWREQ not both set — that kind goes as a customer-service message or a mail")
 	}

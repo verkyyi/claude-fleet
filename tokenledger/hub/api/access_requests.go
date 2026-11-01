@@ -364,6 +364,7 @@ func (s *Server) applyShowExisting(w http.ResponseWriter, r *http.Request, loc s
 
 // applyView is everything applyTmpl draws.
 type applyView struct {
+	SubscribeTemplate, SubscribeConfig string
 	pageView
 	Screen string // form · pending · rejected · approved
 
@@ -637,6 +638,10 @@ func (v *applyView) statusOf(loc string, req *store.AccessRequest, now time.Time
 
 func (s *Server) writeApply(w http.ResponseWriter, r *http.Request, code int, loc string, v *applyView) {
 	entryHeaders(w, loc)
+	s.applySubscribeView(r, v)
+	if v.SubscribeTemplate != "" {
+		w.Header().Set("Content-Security-Policy", strings.Replace(entryCSP, "script-src 'none'", "script-src 'self' https://res.wx.qq.com", 1))
+	}
 	w.Header().Add("Vary", "Accept-Language, Cookie")
 	w.WriteHeader(code)
 	if r.Method == http.MethodHead {
@@ -681,6 +686,10 @@ var applyTmpl = template.Must(template.New("apply").Funcs(pageFuncs(i18n.EN)).Pa
 <p class="fine">{{t "apply.keep"}}</p></main>
 {{else if eq .Screen "pending"}}<main class="col lift" style="padding-top:32px"><div class="tile wait">` + clockIcon + `</div><h1>{{t "apply.pending.h1"}}<span class="dot">.</span></h1>
 <p class="lead">{{.PendingLead}}</p>
+{{if .SubscribeTemplate}}<div id="review-subscribe" hidden data-config="{{.SubscribeConfig}}" data-request="{{.R.ID}}" data-ok="{{t "apply.sub.ok"}}" data-failed="{{t "apply.sub.failed"}}">
+<wx-open-subscribe id="review-subscribe-tag" template="{{.SubscribeTemplate}}"><script type="text/wxtag-template"><style>button{padding:12px 24px;border:1px solid #888;border-radius:24px;background:white;font-size:16px;cursor:pointer}</style><button>{{t "apply.sub.button"}}</button></script></wx-open-subscribe>
+<p class="fine" id="review-subscribe-status" role="status">{{t "apply.sub.hint"}}</p></div>
+<script src="https://res.wx.qq.com/open/js/jweixin-1.6.0.js" defer></script><script src="/apply/subscribe.js" defer></script>{{end}}
 {{if .Alert}}<p class="alert" role="status">` + alertIcon + `<span>{{.Alert}}</span></p>{{end}}
 <ol class="steps"><li class="done"><span class="k"></span><span><div class="t">{{t "apply.step.sent"}}</div><div class="s">{{.When}}</div></span></li>
 <li class="now"><span class="k"></span><span><div class="t">{{t "apply.step.review"}}</div><div class="s">{{.WaitedLine}}</div></span></li>
@@ -728,6 +737,10 @@ func init() {
 		}}
 	for k, v := range map[string]i18n.Text{
 		"apply.title":      {i18n.EN: "Apply · {brand}", i18n.ZhCN: "申请使用 · {brand}"},
+		"apply.sub.button": {i18n.EN: "Notify me of the result", i18n.ZhCN: "审批结果通知我"},
+		"apply.sub.hint":   {i18n.EN: "Allow one WeChat notification for this request.", i18n.ZhCN: "授权一次，只接收这次申请的审批结果。"},
+		"apply.sub.ok":     {i18n.EN: "Enabled: we'll send this result on WeChat.", i18n.ZhCN: "已开启：这次审批结果会通过微信通知你。"},
+		"apply.sub.failed": {i18n.EN: "Could not save. Tap again; your existing notification method still works.", i18n.ZhCN: "暂未保存，请再点一次；原有通知方式仍然有效。"},
 		"apply.mine.title": {i18n.EN: "My request · {brand}", i18n.ZhCN: "我的申请 · {brand}"},
 		"apply.h1":         {i18n.EN: "Apply to use it", i18n.ZhCN: "申请使用"},
 		"apply.h1.edit":    {i18n.EN: "Change your request", i18n.ZhCN: "修改申请"},

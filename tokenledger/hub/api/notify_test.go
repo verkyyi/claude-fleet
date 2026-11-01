@@ -28,6 +28,8 @@ type fakeWxNotify struct {
 	srv    *httptest.Server
 	down   bool // workbench answers 502
 	tplErr int  // errcode template/send answers (0 = sent)
+	subErr int
+	sub    []map[string]any
 	kfErr  int  // errcode custom/send answers
 	echo   bool // a refusal's errmsg echoes the request, token and all
 	tpl    []map[string]any
@@ -72,6 +74,10 @@ func newFakeWxNotify(t *testing.T) *fakeWxNotify {
 		}
 	}
 	mux.HandleFunc("/cgi-bin/message/template/send", send(&f.tpl, &f.tplErr))
+	mux.HandleFunc("/cgi-bin/message/subscribe/bizsend", send(&f.sub, &f.subErr))
+	mux.HandleFunc("/cgi-bin/ticket/getticket", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"errcode": 0, "ticket": "test-js-ticket", "expires_in": 7200})
+	})
 	mux.HandleFunc("/cgi-bin/message/custom/send", send(&f.kf, &f.kfErr))
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)

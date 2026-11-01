@@ -807,3 +807,10 @@ CREATE TABLE IF NOT EXISTS fleet_schedule_manual (
 CREATE TABLE IF NOT EXISTS fleet_schedule_pages (
  schedule_id TEXT PRIMARY KEY, owner TEXT NOT NULL, proposal_id TEXT NOT NULL, url TEXT NOT NULL
 );
+-- One acceptance hint per application, consumed before the external send.
+CREATE TABLE IF NOT EXISTS hub_request_subscribe (
+    request_id TEXT PRIMARY KEY,
+    openid TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    consumed INTEGER NOT NULL DEFAULT 0
+);

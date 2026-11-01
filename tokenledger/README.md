@@ -969,7 +969,8 @@ offers every way that is configured, always in this order:
 `notify.go`: a request's result to its person, new requests to every admin.
 The event writes a notice into `hub_notify_outbox`; every replica's desk
 (`RunNotify`, a lease per notice so it goes once) sends it down the first road
-that works — a **template message** to someone following 「二四网络科技」
+that works — for an application result, a **one-time subscription notification**
+first when the applicant authorized it (see below); then a **template message** to someone following 「二四网络科技」
 (`CCQUOTA_WX_TPL_REVIEW` / `CCQUOTA_WX_TPL_NEWREQ`), else a **customer-service
 message** within 48 hours of their last scan, else a **mail** (the address the
 request named, else their mail sign-in), else nothing but the page
@@ -990,13 +991,48 @@ is banned, 43116):
 | 审核时间 `time6` | when it was decided (UTC+8) |
 | tap → | `/apply` |
 
-| `CCQUOTA_WX_TPL_NEWREQ` · 用户注册申请审核提醒 (`PlJ5dFCF…`) | |
+| `CCQUOTA_WX_TPL_NEWREQ` · 软件注册申请待审核通知 (public library 61558, category 1273, type 4) | |
 |---|---|
-| 平台名称 `thing1` | 「ClaudeFleet」 |
-| 用户名称 `thing2` | the first one's name; several: 「<名字> 等 N 人」 (≤ 20) |
-| 申请时间 `time6` | when the first one came in (UTC+8) |
-| 待审批数 `character_string10` | N |
+| 用户名称 `thing1` | 「ClaudeFleet」 |
+| 申请人 `thing2` | the first one's name; several: 「<名字> 等 N 人」 (≤ 20) |
+| 申请时间 `time4` | when the first one came in (UTC+8) |
 | tap → | `/admin/requests/<the first one>` |
+
+Register 61558 with `api_add_template`: `template_id_short="61558"` and
+`keyword_name_list=["用户名称","申请人","申请时间"]`. Set its returned ID in
+`CCQUOTA_WX_TPL_NEWREQ` and set `CCQUOTA_WX_TPL_NEWREQ_FIELDS` to
+`thing1=platform,thing2=person,time4=time`. This mapping also applies to the
+existing administrator alerts that share this template. Its values are
+`platform`, `person`, `time`, `count`; unset keeps the previous field mapping
+for rolling upgrades. This template belongs to 软件/建站/技术开发 (1273), so
+removing 预约/报名 (698) does not delete it. Verify a real send returns errcode 0
+before retiring the old category.
+
+**审批结果通知我**: after submitting a WeChat application, open `/apply` inside
+WeChat and tap this button, then accept WeChat's one-time authorization. A
+rejection or a closed authorization dialog leaves the existing notification
+method in place. The button needs `CCQUOTA_WX_SUB_REVIEW`, a registered
+subscription template ID, plus the page's hostname in the service account's
+JS-SDK security domains. Desktop browsers and SDK errors keep the ordinary
+page and fallback notifications. No authorization is required to submit.
+
+Use subscription public template **30803「审核结果通知」**, category **1273**,
+type **2** (one-time), registered with `kidList=[1,5,24,19]`. It carries
+审批类型 `thing1` (software access request), 审核结果 `phrase5` (已通过/未通过),
+审核时间 `time24` (UTC+8), and 申请编号 `character_string19`. A tap opens `/apply`.
+Before querying the public library, check each endpoint's daily quota via
+`/cgi-bin/openapi/quota/get`; never enumerate blindly (300 calls/day).
+
+The JS-SDK ticket and access token come through the existing gateway and stay
+in memory. The browser acceptance hint is bound to one pending request and its
+server-resolved openid/template; WeChat remains the authority for actual consent.
+The desk atomically consumes that hint before sending `message/subscribe/bizsend`
+and audits success as `wechat-subscribe`. No follow is required. Missing consent,
+a refusal (including 43101), or an ambiguous send failure uses the existing
+`CCQUOTA_WX_TPL_REVIEW` / customer-service / email fallback. It never retries a
+consumed subscription hint or reuses it for another request. Choosing email or
+page-only still takes precedence. Keep the result template configured for this
+fallback; it also belongs to category 1273.
 
 A template unset ⇒ that kind skips straight to the customer-service message and
 the mail.
