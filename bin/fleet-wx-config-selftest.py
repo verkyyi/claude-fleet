@@ -4,6 +4,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -57,6 +58,25 @@ class FakeRollout(wx.Rollout):
 
 
 class TransactionTests(unittest.TestCase):
+    def test_inspection_never_changes_or_sends(self):
+        with tempfile.TemporaryDirectory() as directory:
+            r = FakeRollout(directory)
+            r.live_values = lambda: {"hub-a": ["old", "", ""], "hub-b": list(VALUES)}
+            backup = r.site.parent / "wx-notify-backup-test"
+            backup.mkdir()
+            (backup / "site.env").write_bytes(ORIGINAL)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                r.inspect()
+            report = json.loads(output.getvalue())
+            self.assertTrue(report["site_matches_latest_backup"])
+            self.assertFalse(report["site_matches_requested"])
+            self.assertTrue(report["pods"][0]["matches_site"])
+            self.assertTrue(report["pods"][1]["matches_requested"])
+            self.assertEqual(r.site.read_bytes(), ORIGINAL)
+            self.assertEqual((r.applies, r.sends), (0, 0))
+            self.assertNotIn("do-not-export", output.getvalue())
+
     def test_whitelist_preserves_unrelated_bytes(self):
         out = wx.replace_keys(ORIGINAL, VALUES)
         unrelated = lambda b: b"".join(line for line in b.splitlines(keepends=True) if not any(line.startswith(k.encode() + b"=") for k in wx.KEYS))
@@ -81,6 +101,8 @@ class TransactionTests(unittest.TestCase):
                             r.execute()
                         if failure == "rollback":
                             self.assertIn("ROLLBACK FAILED", str(error.exception))
+                            self.assertIn("transaction failed: apply failed", output.getvalue())
+                            self.assertIn("rollback failed: apply failed", output.getvalue())
                     else:
                         r.execute()
                 self.assertNotIn("do-not-export", output.getvalue())
