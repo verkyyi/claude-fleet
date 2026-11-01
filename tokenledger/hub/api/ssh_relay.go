@@ -280,6 +280,43 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, ok := s.sshRelayHTTPIdentity(r)
+	var peerTarget *store.Node
+	if r.URL.Path == "/v1/node/peer-relay" {
+		if r.Method != http.MethodGet {
+			httpError(w, http.StatusMethodNotAllowed, "GET")
+			return
+		}
+		// T1243: the pod's entry door takes device keys. A hosting login
+		// instead reaches its owner's pod through this dedicated stream,
+		// then authenticates SSH with its existing five-minute peer cert.
+		ep, admitted := s.nodeEndpoint(w, r)
+		if !admitted {
+			return
+		}
+		var err error
+		peerTarget, err = s.peerTarget(ep, host)
+		if err != nil {
+			status := http.StatusInternalServerError
+			var pe *errPeer
+			if errors.As(err, &pe) {
+				status = pe.status
+			}
+			httpError(w, status, err.Error())
+			return
+		}
+		srcHost, srcUser := s.peerSelf(ep)
+		owner, err := s.principalOnNode(ep.ID, srcHost, srcUser)
+		if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
+			httpError(w, http.StatusInternalServerError, "cannot read source owner")
+			return
+		}
+		if why, err := s.machineDeniedFor("", peerTarget.Hostname, owner); err != nil || why != "" {
+			httpError(w, http.StatusForbidden, "target machine is unavailable to this owner")
+			return
+		}
+		host = peerTarget.Hostname
+		id, ok = sshRelayIdentity{Principal: owner, Actor: "peer:" + ep.ID}, true
+	}
 	if !ok && len(s.sshRelayCAs()) == 0 {
 		// No certificate is ever accepted on this hub, so there is nothing
 		// to prove in-band: refuse before the upgrade.
@@ -312,9 +349,11 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.sshRelayAllowed(id, host); err != nil {
-		refuse(err)
-		return
+	if peerTarget == nil {
+		if err := s.sshRelayAllowed(id, host); err != nil {
+			refuse(err)
+			return
+		}
 	}
 	max := s.SSHRelayMaxPerUser
 	if max <= 0 {
@@ -327,6 +366,16 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 	defer s.sshRelays.release(id.Actor)
 
 	epID, nc, err := s.sshRelayNode(id, host)
+	if peerTarget != nil {
+		// Never substitute a sibling login's agent for the authorized one.
+		epID, nc = peerTarget.EndpointID, s.nodes.get(peerTarget.EndpointID)
+		err = nil
+		if nc == nil || nc.hostname() != host || nc.user() != peerTarget.OSUser ||
+			!nc.canSSHRelay || !control.Compatible(int(nc.proto.Load())) ||
+			(s.podBehindDoor(host) && !nc.canPodRelay) {
+			err = sshRelayRefusal("NODE_OFFLINE", "target login has no SSH relay to its own machine")
+		}
+	}
 	if err != nil {
 		refuse(err)
 		return

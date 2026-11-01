@@ -164,8 +164,8 @@ func (s *Server) peerTargetHosts(name string, rows []store.Node) map[string]bool
 	return out
 }
 
-// issuePeerCert checks ownership, signs, records, and builds the answer.
-func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key ssh.PublicKey, ttl time.Duration, now time.Time) (*PeerCertResponse, error) {
+// peerTarget resolves an active login through the peer certificate ownership gate.
+func (s *Server) peerTarget(ep *store.Endpoint, target string) (*store.Node, error) {
 	srcHost, srcUser := s.peerSelf(ep)
 	// Both ends read "whose login" the one way session-cred does
 	// (principalOnNode, claude-fleet#2249): the machine's account, else the
@@ -220,6 +220,17 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 	if hit == nil {
 		return nil, &errPeer{http.StatusForbidden, fmt.Sprintf("%s@%s has no login of its owner on %s", srcUser, firstLabel(srcHost), firstLabel(tHost))}
 	}
+	return hit, nil
+}
+
+// issuePeerCert and the peer SSH relay use exactly the same ownership gate.
+func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key ssh.PublicKey, ttl time.Duration, now time.Time) (*PeerCertResponse, error) {
+	hit, err := s.peerTarget(ep, target)
+	if err != nil {
+		return nil, err
+	}
+	srcHost, srcUser := s.peerSelf(ep)
+	tHost := hit.Hostname
 	src := srcUser + "@" + firstLabel(srcHost)
 	iss, err := s.SSHCA.SignPeer(sshca.PeerRequest{
 		Key: key, Source: src, Target: hit.OSUser + "@" + firstLabel(tHost),

@@ -575,4 +575,14 @@ PY' _ "$B/conf/peerlink/state.json" \
   WHAT="入口的对端名单列了只是客户端的笔记本：每拍去连、每次连不上、doctor 一直红；修好的入口不列它，下一拍那条连线从 state.json 消失、mac-b 照常已连上；${gohalf}"
 }
 
+drill_peerlink_pod_entry() {
+  CAP=30
+  local t0
+  t0=$(now)
+  python3 "$BIN/fleet-peerlink-pod-selftest.py" > "$WORK/pod-entry.out" 2>&1 \
+    || { WHY="$(cat "$WORK/pod-entry.out")"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="容器的 jump 路线不再把入口当成容器 sshd；常开连接经节点间中转，保留短期证书、目标密钥与登录"
+}
+
 cred_run_drills "$0"

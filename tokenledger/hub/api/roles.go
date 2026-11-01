@@ -90,8 +90,9 @@ var routeAccess = map[string]string{
 	"/v1/node/join":        accessSelf, "/v1/node/dist/": accessSelf, "/v1/node/self": accessSelf, "/v1/node/gate": accessSelf,
 	NodeModelsPath:         accessSelf,
 	"/v1/node/maintenance": accessSelf, "/v1/node/peer-cert": accessSelf, "/v1/node/peers": accessSelf,
-	NodeLeavePath:     accessSelf,
-	"/v1/node/client": accessSelf, "/v1/node/client/actions": accessSelf,
+	"/v1/node/peer-relay": accessSelf,
+	NodeLeavePath:         accessSelf,
+	"/v1/node/client":     accessSelf, "/v1/node/client/actions": accessSelf,
 	"/v1/node/worker-records": accessSelf, "/v1/node/progress": accessSelf,
 	NodeTasksPath: accessSelf, NodeTasksPath + "/": accessSelf,
 	NodeIDsPath: accessSelf, NodeIDsPath + "/": accessSelf, // the ID mirror (EPIC T497 C2)
