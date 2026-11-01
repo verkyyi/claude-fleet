@@ -24,17 +24,18 @@ import (
 // fakeWxNotify stands in for workbench's /internal/wx/token and the two
 // sends a notice uses.
 type fakeWxNotify struct {
-	mu     sync.Mutex
-	srv    *httptest.Server
-	down   bool // workbench answers 502
-	tplErr int  // errcode template/send answers (0 = sent)
-	subErr int
-	sub    []map[string]any
-	kfErr  int  // errcode custom/send answers
-	echo   bool // a refusal's errmsg echoes the request, token and all
-	tpl    []map[string]any
-	kf     []map[string]any
-	tokens int
+	mu          sync.Mutex
+	srv         *httptest.Server
+	down        bool // workbench answers 502
+	tplErr      int  // errcode template/send answers (0 = sent)
+	subErr      int
+	sub         []map[string]any
+	kfErr       int  // errcode custom/send answers
+	echo        bool // a refusal's errmsg echoes the request, token and all
+	tpl         []map[string]any
+	kf          []map[string]any
+	tokens      int
+	registryBad bool
 }
 
 func newFakeWxNotify(t *testing.T) *fakeWxNotify {
@@ -74,6 +75,18 @@ func newFakeWxNotify(t *testing.T) *fakeWxNotify {
 		}
 	}
 	mux.HandleFunc("/cgi-bin/message/template/send", send(&f.tpl, &f.tplErr))
+	mux.HandleFunc("/cgi-bin/template/get_all_private_template", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		content := "用户名称:{{thing1.DATA}}\n申请人:{{thing2.DATA}}\n申请时间:{{time4.DATA}}"
+		if f.registryBad {
+			content += "\n额外字段:{{thing9.DATA}}"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"template_list": []map[string]any{{"template_id": "tpl-newreq", "title": "软件注册申请待审核通知", "content": content}}})
+	})
+	mux.HandleFunc("/wxaapi/newtmpl/gettemplate", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{{"priTmplId": "sub-review", "type": 2, "content": "{{thing1.DATA}}{{phrase5.DATA}}{{time24.DATA}}{{character_string19.DATA}}"}}})
+	})
 	mux.HandleFunc("/cgi-bin/message/subscribe/bizsend", send(&f.sub, &f.subErr))
 	mux.HandleFunc("/cgi-bin/ticket/getticket", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"errcode": 0, "ticket": "test-js-ticket", "expires_in": 7200})

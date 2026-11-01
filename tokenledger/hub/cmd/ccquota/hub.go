@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -663,11 +664,19 @@ func runHub(args []string) error {
 			"bound. hub-deploy runs the new image this way, with the live pod's\n"+
 			"environment, on a copy of the live database before it switches\n"+
 			"images (claude-fleet#2052). Refuses a --db that does not exist")
+	wxProbeAdmin := fs.String("probe-wx-newreq", "", "send one labelled new-request template test to this administrator login, then exit")
+	wxProbeDry := fs.Bool("probe-wx-dry-run", false, "with --probe-wx-newreq: check recipient, registered templates and SDK ticket without sending")
 	simulateMigrationFailure := fs.Bool("simulate-migration-failure", false,
 		"with --migrate-only or --check, fail as a migration that cannot pass\n"+
 			"would: the drill that proves hub-deploy's rehearsal stops a release")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *wxProbeDry && *wxProbeAdmin == "" {
+		return errors.New("--probe-wx-dry-run requires --probe-wx-newreq")
+	}
+	if *wxProbeAdmin != "" && (*check || *migrateOnly || *reprice || *simulateMigrationFailure) {
+		return errors.New("--probe-wx-newreq cannot be combined with check, migration or repricing modes")
 	}
 
 	// Parse before anything opens a database or binds a port: an operator who
@@ -741,6 +750,19 @@ func runHub(args []string) error {
 		return err
 	}
 	defer st.Close()
+	if *wxProbeAdmin != "" {
+		srv := &api.Server{Store: st, WxGW: wxGatewayFromEnv(os.Getenv), FleetPublicURL: os.Getenv("CCQUOTA_FLEET_PUBLIC_URL")}
+		if err := srv.ConfigurePortal(os.Getenv("CCQUOTA_PORTAL"), os.Getenv("CCQUOTA_PORTAL_ALIASES"), os.Getenv("CCQUOTA_WECHAT_PUBLIC_URL")); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		result, err := srv.ProbeWxNewRequest(ctx, *wxProbeAdmin, *wxProbeDry)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(os.Stdout).Encode(result)
+	}
 	// Which replica runs each background loop (claude-fleet#2123). SQLite is
 	// one hub: it leads everything and nothing below changes.
 	elector, err := hubElector()

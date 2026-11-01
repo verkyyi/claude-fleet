@@ -1,0 +1,60 @@
+name: hub-wx-notify
+
+on:
+  workflow_dispatch:
+    inputs:
+      newreq_template:
+        description: 'Registered 61558 template ID (category 1273)'
+        required: true
+        type: string
+      newreq_fields:
+        description: 'Registered field mapping'
+        required: true
+        default: 'thing1=platform,thing2=person,time4=time'
+        type: string
+      review_subscription:
+        description: 'Registered one-time 30803 subscription ID'
+        required: true
+        type: string
+      admin_login:
+        description: 'One existing administrator GitHub login to receive the labelled test'
+        required: true
+        type: string
+
+# Share the production mutation lane with hub-deploy, including train releases.
+concurrency:
+  group: hub-deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    if: github.ref == 'refs/heads/master' && vars.FLEET_HUB_TARGET == 'aws-k3s'
+    runs-on: ubuntu-24.04
+    environment: prod
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+      AWS_BOX_INSTANCE_ID: ${{ vars.AWS_BOX_INSTANCE_ID }}
+      AWS_BOX_TAG: ${{ vars.AWS_BOX_TAG || 'tokenman-core' }}
+      AWS_BOX_REPO_DIR: ${{ vars.AWS_BOX_REPO_DIR || '/home/ubuntu/src' }}
+      FLEET_SSM_TIMEOUT: '3300'
+      NEWREQ_TEMPLATE: ${{ inputs.newreq_template }}
+      NEWREQ_FIELDS: ${{ inputs.newreq_fields }}
+      REVIEW_SUBSCRIPTION: ${{ inputs.review_subscription }}
+      ADMIN_LOGIN: ${{ inputs.admin_login }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Preflight, back up, apply, verify and send one test
+        run: |
+          bin/fleet-hub-aws-deploy.sh wx-notify \
+            "$NEWREQ_TEMPLATE" "$NEWREQ_FIELDS" "$REVIEW_SUBSCRIPTION" "$ADMIN_LOGIN"
