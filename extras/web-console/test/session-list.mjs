@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, scheduleLabel, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
+import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, scheduleCard, scheduleLabel, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
 
 const tr2 = (w) => (w ? w.join('|') : '');
 const F = '5b1e0000-0000-4000-8000-00000000f001';
@@ -250,5 +250,28 @@ assert.equal(compactRows(changedRows,{now,previous:frozen,interacting:true,curre
     ['s2', 'Brief', ['b1'], []],
   ], 'one line per schedule; an asking run is never folded; same name, other schedule apart');
   assert.deepEqual(scheduleRuns([]), []);
+}
+// Y8XY: a schedule's runs never reach the main list — running, waiting to
+// start or asking — and the ⏰ card holds them: each schedule's live runs under
+// it, the runs of a schedule the card does not list under 其他运行.
+{
+  const run = (id, x = {}, b = {}) => ({ id, title: id, at: 0, group: 'run', ...x, board: { source: 'schedule', ...b } });
+  const rows = [
+    run('w', {}, { schedule_id: 's1', running: true, activity_at: 9 }),
+    run('p', {}, { schedule_id: 's1', pending_start: true, activity_at: 8 }),
+    run('q', {}, { schedule_id: 's2', state: 'needs', activity_at: 7 }),
+    run('e', { group: 'gone' }, { schedule_id: 's1', tag: 'ended', activity_at: 6 }),
+    run('x', { group: 'gone' }, { schedule_id: 'deleted', tag: 'ended', activity_at: 5 }),
+    run('y', { group: 'gone' }, { tag: 'ended', activity_at: 4 }),
+    run('arch', {}, { schedule_id: 's1', running: true, archived: true }),
+    { id: 'mine', title: 'mine', at: 0, group: 'run', board: { running: true } },
+  ];
+  const g = compactRows(rows, { now });
+  assert.deepEqual([...g.pin, ...g.open, ...g.gone].map(r => r.id), ['mine'], 'the main list is the person\'s own sessions only');
+  const card = scheduleCard(rows, ['s1', 's2']);
+  assert.deepEqual(Object.fromEntries(Object.entries(card.live).map(([k, v]) => [k, v.map(r => r.id)])), { s1: ['w', 'p'], s2: ['q'] });
+  assert.deepEqual(card.other.map(r => r.id), ['x', 'y'], 'a run of an unlisted schedule stays reachable');
+  assert.equal(card.running, 2);
+  assert.equal(card.asking, 1);
 }
 console.log('session-list: schedule runs OK');
