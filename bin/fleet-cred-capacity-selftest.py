@@ -549,6 +549,28 @@ class Capacity(unittest.TestCase):
         with patch.object(p,'read_json',side_effect=read):
             b.codex_pick('s',False,[early]); b.codex_record('s','a',[early],src)
 
+    def test_claude_new_pick_ranks_the_week_by_pace(self):
+        # task CBSB: a's week is 40 % used one day in, b's 55 % used six days in.
+        # Raw percent picks a; by pace a runs +26 ahead, b -31 behind: b.
+        now = time.time()
+        self.t.log = lambda **kv: None
+        week = lambda used, left: dict(rl5h='-', rl7d=str(used), rl_reset5='-', rl_reset7=str(int(now + left * 86400)))
+        p.Proxy.reads = {('claude','a'): week(40, 6), ('claude','b'): week(55, 1)}
+        self.assertEqual(self.t.pick_account('claude','s-new'), 'b')
+        # a session already on a usable account keeps it (its prompt cache)
+        self.t.picks[('claude','s-old')] = 'a'
+        self.assertEqual(self.t.pick_account('claude','s-old'), 'a')
+        # the 5h window still counts as read: b at 80 % of its 5 hours loses
+        p.Proxy.reads[('claude','b')] = dict(week(55, 1), rl5h='80', rl_reset5=str(int(now + 3600)))
+        self.assertEqual(self.t.pick_account('claude','s-new2'), 'a')
+        # a passed weekly reset is a refreshed week: raw percent again (both 0)
+        p.Proxy.reads = {('claude','a'): week(40, -1), ('claude','b'): week(55, 1)}
+        self.assertIsNone(self.t.pace('claude','a',now))
+        self.assertEqual(self.t.pick_account('claude','s-new3'), 'b')
+        # Codex keeps the legacy picker: no pace
+        p.Proxy.reads[('codex','a')] = week(40, 6)
+        self.assertIsNone(self.t.pace('codex','a',now))
+
     def test_legacy_fallback_and_upgrade_snapshot(self):
         p.Proxy.reads={('codex','a'):dict(rl5h='95',rl7d='95'),('codex','b'):dict(rl5h='20',rl7d='20')}
         for mode in ('off','shadow','active'):
