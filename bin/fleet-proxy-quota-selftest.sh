@@ -50,14 +50,12 @@ out = [
                          ("x-codex-secondary-used-percent", "5"), ("x-codex-secondary-window-minutes", "300")]),
   m.rl_reading("claude", [("anthropic-ratelimit-unified-5h-utilization", "0.2")]),
   m.rl_reading("claude", [("anthropic-ratelimit-unified-5h-utilization", "x"), ("anthropic-ratelimit-unified-7d-utilization", "0.1")]),
-  m.rl_reading("claude", [("anthropic-ratelimit-unified-7d-utilization", "0.9"), ("anthropic-ratelimit-unified-7d-reset", "1791698400")]),
-  m.rl_reading("claude", [("anthropic-ratelimit-unified-7d-utilization", "0.1"), ("anthropic-ratelimit-unified-5h-reset", "1791341400")]),
 ]
 print(json.dumps(out, sort_keys=True))
 PY
 )
-want='[{"rl5h": "29", "rl7d": "57.5", "rl_reset5": "1791341400", "rl_reset7": "1791698400"}, {"rl5h": "11", "rl7d": "40.7", "rl_reset5": "1791341400", "rl_reset7": "1100"}, {"rl5h": "5", "rl7d": "60", "rl_reset5": "-", "rl_reset7": "-"}, null, null, {"rl5h": "-", "rl7d": "90", "rl_reset5": "-", "rl_reset7": "1791698400"}, {"rl5h": "-", "rl7d": "10", "rl_reset5": "-", "rl_reset7": "-"}]'
-[ "$a" = "$want" ] && st_ok_all "A parse: Claude fraction ×100 (0.29→29, no float noise), Codex used-percent, unrounded; windows ordered by minutes; half a reading = none, except a Claude weekly window with no 5h header (no 5-hour cap: rl5h -)" \
+want='[{"rl5h": "29", "rl7d": "57.5", "rl_reset5": "1791341400", "rl_reset7": "1791698400"}, {"rl5h": "11", "rl7d": "40.7", "rl_reset5": "1791341400", "rl_reset7": "1100"}, {"rl5h": "5", "rl7d": "60", "rl_reset5": "-", "rl_reset7": "-"}, null, null]'
+[ "$a" = "$want" ] && st_ok_all "A parse: Claude fraction ×100 (0.29→29, no float noise), Codex used-percent, unrounded; windows ordered by minutes; half a reading = none" \
   || st_miss "A parse: $a"
 
 # ── the fake provider ────────────────────────────────────────────────────────

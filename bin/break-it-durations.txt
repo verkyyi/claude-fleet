@@ -137,7 +137,6 @@
 11.0 cred-relay-hub-restart
 1.4 cred-revoked-still-works
 0.7 cred-sep-acct-full
-0.7 cred-weekly-only
 0.3 cred-sep-bootstrap-fails
 1.6 cred-sep-codex-full
 1.0 cred-sep-compute-unlinks

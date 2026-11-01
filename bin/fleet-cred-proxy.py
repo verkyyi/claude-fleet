@@ -3123,11 +3123,7 @@ def rl_reading(provider, headers, now=None):
     strings (Claude's fraction × 100, ccquota's Utilization; never rounded here:
     conf/statusline.sh is the one place that floors) and epoch-second resets
     ("-" when absent) — or None when either window is missing: a half reading
-    is no reading (the quota watch's rule). One exception (task CBSB): a Claude
-    answer with the weekly window and NO 5h header at all is an account without
-    a 5-hour cap (Ultra, since 2026-10-30) — that reading keeps its weekly half
-    with rl5h "-", so the pick still steers off it before its week runs out; a
-    5h header present but unreadable is still no reading."""
+    is no reading (the quota watch's rule)."""
     h = {k.lower(): v for k, v in headers}
     now = int(now or time.time())
     if provider == "codex":
@@ -3146,18 +3142,17 @@ def rl_reading(provider, headers, now=None):
             wins.reverse()
         (_, p5, r5), (_, p7, r7) = wins
     else:
-        k5 = "anthropic-ratelimit-unified-5h-utilization"
-        p5 = _num(h.get(k5))
+        p5 = _num(h.get("anthropic-ratelimit-unified-5h-utilization"))
         p7 = _num(h.get("anthropic-ratelimit-unified-7d-utilization"))
-        if p7 is None or (p5 is None and k5 in h):
+        if p5 is None or p7 is None:
             return None
-        p5, p7 = None if p5 is None else p5 * 100, p7 * 100
-        r5 = None if p5 is None else _num(h.get("anthropic-ratelimit-unified-5h-reset"))
+        p5, p7 = p5 * 100, p7 * 100
+        r5 = _num(h.get("anthropic-ratelimit-unified-5h-reset"))
         r7 = _num(h.get("anthropic-ratelimit-unified-7d-reset"))
-    if (p5 is not None and p5 < 0) or p7 < 0:
+    if p5 < 0 or p7 < 0:
         return None
     # six places cancel the float noise (0.29 × 100 = 28.999…96 → "29")
-    pc = lambda x: "-" if x is None else ("%.6f" % x).rstrip("0").rstrip(".")
+    pc = lambda x: ("%.6f" % x).rstrip("0").rstrip(".")
     rs = lambda r: str(int(r)) if r is not None and r > 0 else "-"
     return {"rl5h": pc(p5), "rl7d": pc(p7), "rl_reset5": rs(r5), "rl_reset7": rs(r7)}
 
