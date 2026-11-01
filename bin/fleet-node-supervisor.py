@@ -2944,6 +2944,16 @@ class Supervisor(object):
                     p.wait(timeout=1)
                 except subprocess.TimeoutExpired:
                     pass
+        c = next((x for x in self.all_children() if x["name"] == name), None) if self.seated else None
+        if c is not None and not c.get("account") and not c.get("core") and not self.seat_runs(c) \
+                and self.core_cmd(c) is not None:
+            # the stand-in only ASKED the core (#3668): stopping it leaves root's job
+            # running on the old code — a reload must stop the job itself, or the next
+            # start finds it «running» forever (task APVZ: a shared credential proxy
+            # ran a release behind for a day and every hub release was rolled back)
+            r = core_ask("machine", {"job": name, "action": "stop"}, 60)
+            if not r.get("ok"):
+                self.log("child %s: the core did not stop its job: %s" % (name, r))
         cs = self.state["children"].get(name)
         if cs is not None:
             cs.update(pid=None, status="stopped")
@@ -8070,9 +8080,8 @@ def seat_share(paths, seat=None):
 SEAT_LINKS = ("state.json", "update.json", "update-restart.json", "fetch.progress")
 
 
-def seat_hub_url(paths):
-    """<state>/hub-url: the hub's address out of machine.env (root 0600), for the
-    seated updater (#3670) — an address, root's 0644, nothing else of the file."""
+def machine_hub_url(paths):
+    """machine.env's CCQUOTA_HUB_URL ("" when unreadable or not an address)."""
     url = ""
     try:
         with open(os.path.join(paths.state, "machine.env")) as f:
@@ -8080,8 +8089,24 @@ def seat_hub_url(paths):
                 if line.startswith("CCQUOTA_HUB_URL="):
                     url = line.split("=", 1)[1].strip().strip('"\'')
     except OSError:
-        return
-    if not re.match(r"^https?://[A-Za-z0-9._:/@%-]+$", url):
+        return ""
+    return url if re.match(r"^https?://[A-Za-z0-9._:/@%-]+$", url) else ""
+
+
+def read_text(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def seat_hub_url(paths):
+    """<state>/hub-url: the hub's address out of machine.env (root 0600), for the
+    seated updater (#3670) — an address, root's 0644, nothing else of the file.
+    The core keeps it equal to machine.env (hub_url_loop, task APVZ)."""
+    url = machine_hub_url(paths)
+    if not url:
         return
     dst = os.path.join(paths.state, "hub-url")
     tmp = dst + ".seat-tmp"

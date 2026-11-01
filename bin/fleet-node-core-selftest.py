@@ -695,7 +695,9 @@ class K_Machine(Sandbox):
         self.assertIn("once %d HOME=%s" % (os.getuid(), os.path.join(self.state, "home")),
                       open(os.path.join(self.d, "log", "tasks", "once.log")).read())
         p, first = self.follow("machine", json.dumps({"job": "looper", "action": "start"}))
-        self.assertEqual(self.req("machine", {"job": "looper", "action": "start"}).get("error"), "running")
+        # a second start of a job of mine follows it (task APVZ), never a second copy
+        again = self.req("machine", {"job": "looper", "action": "start"})
+        self.assertEqual((again.get("ok"), again.get("pid"), again.get("following")), (True, first["pid"], True), again)
         self.assertEqual(self.req("machine", {"job": "looper", "action": "held"}), {"ok": True, "held": ""})
         self.assertIn("refused", self.req("machine", {"job": "looper", "action": "hup"}))
         p.send_signal(signal.SIGTERM)
@@ -753,7 +755,8 @@ class K_Machine(Sandbox):
             self.assertIn("stopped orphan pid %d" % orphan, self.log())
             self.assertTrue(alive(r["pid"]), "no fresh copy")
             # a second start finds the fresh one, which is this core's: no new copy
-            self.assertEqual(self.req("machine", {"job": "pyloop", "action": "start"}).get("error"), "running")
+            again = self.req("machine", {"job": "pyloop", "action": "start"})
+            self.assertTrue(again.get("following") and again.get("pid"), again)
             r2 = self.req("machine", {"job": "pyloop", "action": "stop"})
             self.assertTrue(r2.get("ok"), r2)
             self.assertTrue(until(10, lambda: not alive(r["pid"])))
