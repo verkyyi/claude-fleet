@@ -78,6 +78,18 @@ class Rollout:
         self.values, self.admin = values, admin
         self.k = ["k3s", "kubectl", "-n", "fleet-hub"]
 
+    def resolve_site(self):
+        # bootstrap sources this root-owned file and allows SECRETS_DIR to
+        # differ from its default. Read the same setting, never assume the
+        # deploy.env parent is the directory whose secrets bootstrap applies.
+        script = 'set -e; . "$1"; printf "%s\\n" "${SECRETS_DIR:-/etc/fleet-core/secrets}"'
+        raw = self.run(["bash", "-c", script, "wx-config", str(self.conf)],
+                       "resolve bootstrap secrets directory", timeout=30)
+        directory = raw.removesuffix("\n")
+        if "\n" in directory or "\r" in directory or not Path(directory).is_absolute():
+            raise RuntimeError("bootstrap secrets directory is not one absolute path")
+        self.site = Path(directory) / "site.env"
+
     def run(self, argv, stage, timeout=900, env=None):
         print("wx-notify: " + stage, flush=True)
         try:
@@ -154,6 +166,7 @@ class Rollout:
         # Comparisons only: not even a misplaced secret in one of these keys
         # can escape through diagnostics. No config write or message send.
         validate(self.values, self.admin)
+        self.resolve_site()
         current = file_values(self.site)
         backups = sorted(self.site.parent.glob("wx-notify-backup-*/site.env"), key=lambda p: p.stat().st_mtime)
         prior = file_values(backups[-1]) if backups else None
@@ -170,7 +183,7 @@ class Rollout:
                           "matches_requested": i < len(values) and values[i] == self.values[i],
                           "matches_latest_backup": prior is not None and i < len(values) and values[i] == prior[i]}
                     for i, key in enumerate(KEYS)}
-        print(json.dumps({"inspection": True, "backup_count": len(backups),
+        print(json.dumps({"inspection": True, "site_env_path": str(self.site), "backup_count": len(backups),
             "site_matches_requested": current == list(self.values),
             "site_matches_latest_backup": current == prior,
             "site_keys": matches(current),
@@ -184,6 +197,7 @@ class Rollout:
 
     def execute(self):
         validate(self.values, self.admin)
+        self.resolve_site()
         if self.site.is_symlink() or not self.site.is_file():
             raise RuntimeError("site.env must be an existing regular file")
         pods = self.pods()

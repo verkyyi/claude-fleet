@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -25,6 +26,9 @@ class FakeRollout(wx.Rollout):
         self.failure, self.applies, self.sends = failure, 0, 0
         self.initial_live = ["old", "", ""]
         self.live = list(self.initial_live)
+
+    def resolve_site(self):
+        pass
 
     def pods(self):
         return ["hub-a", "hub-b"]
@@ -62,6 +66,19 @@ class FakeRollout(wx.Rollout):
 
 
 class TransactionTests(unittest.TestCase):
+    def test_uses_bootstrap_configured_secrets_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            conf = Path(directory) / "deploy.env"
+            actual = Path(directory) / "actual secrets"
+            conf.write_text("SECRET=do-not-export\nSECRETS_DIR=" + shlex.quote(str(actual)) + "\n")
+            r = wx.Rollout(directory, conf, VALUES, "admin")
+            self.assertNotEqual(r.site, actual / "site.env")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                r.resolve_site()
+            self.assertEqual(r.site, actual / "site.env")
+            self.assertNotIn("do-not-export", output.getvalue())
+
     def test_rollback_checks_inherited_values_not_missing_file_keys(self):
         with tempfile.TemporaryDirectory() as directory:
             r = FakeRollout(directory, "send")
