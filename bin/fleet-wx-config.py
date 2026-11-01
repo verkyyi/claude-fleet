@@ -5,6 +5,7 @@ Invoked only by fleet-hub-aws-deploy.sh's wx-notify mode. The same host keeps a
 0600 backup. All process output is captured; only allowlisted receipts leave it.
 """
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -157,12 +158,29 @@ class Rollout:
         backups = sorted(self.site.parent.glob("wx-notify-backup-*/site.env"), key=lambda p: p.stat().st_mtime)
         prior = file_values(backups[-1]) if backups else None
         live = self.live_values()
+        deployment = json.loads(self.run(self.k + ["get", "deployment", "ccquota-hub", "-o", "json"], "read template setting sources"))
+        container = next(c for c in deployment["spec"]["template"]["spec"]["containers"] if c["name"] == "ccquota")
+        explicit = {e["name"]: e for e in container.get("env", []) if e["name"] in KEYS}
+        path = "".join('{.data.' + key + '}{"\\n"}' for key in KEYS)
+        encoded = self.run(self.k + ["get", "secret", "ccquota-site-env", "-o", "jsonpath=" + path], "compare three Secret keys").splitlines()
+        secret_values = [base64.b64decode(value, validate=True).decode() for value in encoded]
+        def matches(values):
+            return {key: {"present": i < len(values) and bool(values[i]),
+                          "matches_site": i < len(values) and values[i] == current[i],
+                          "matches_requested": i < len(values) and values[i] == self.values[i],
+                          "matches_latest_backup": prior is not None and i < len(values) and values[i] == prior[i]}
+                    for i, key in enumerate(KEYS)}
         print(json.dumps({"inspection": True, "backup_count": len(backups),
             "site_matches_requested": current == list(self.values),
             "site_matches_latest_backup": current == prior,
+            "site_keys": matches(current),
+            "secret_keys": matches(secret_values),
+            "explicit_env_keys": list(explicit),
+            "env_sources": container.get("envFrom", []),
             "pods": [{"name": pod, "matches_site": values == current,
                       "matches_requested": values == list(self.values),
-                      "matches_latest_backup": values == prior} for pod, values in live.items()]}), flush=True)
+                      "matches_latest_backup": values == prior, "value_count": len(values),
+                      "keys": matches(values)} for pod, values in live.items()]}), flush=True)
 
     def execute(self):
         validate(self.values, self.admin)
@@ -172,11 +190,16 @@ class Rollout:
         if not pods:
             raise RuntimeError("no running hub pods")
         self.probe(pods[0], dry=True, overrides=True)
+        before = list(self.live_values().values())
+        if not before or len(before[0]) != len(KEYS) or any(values != before[0] for values in before):
+            raise RuntimeError("running pods disagree before rollout; inspect configuration sources first")
+        # site.env is one source; absent keys can inherit a ConfigMap or an
+        # explicit Deployment env entry. Rollback must restore effective values.
+        original_live = before[0]
         original, owner = self.site.read_bytes(), self.site.stat()
         backup_dir = Path(tempfile.mkdtemp(prefix="wx-notify-backup-", dir=self.site.parent))
         backup = backup_dir / "site.env"
         atomic_write(backup, original, owner)
-        old_values = dict(line.split(b"=", 1) for line in original.splitlines() if b"=" in line)
         try:
             atomic_write(self.site, replace_keys(original, self.values), owner)
             self.apply()
@@ -187,7 +210,7 @@ class Rollout:
             try:
                 atomic_write(self.site, original, owner)
                 self.apply()
-                self.verify_env([old_values.get(k.encode(), b"").decode() for k in KEYS])
+                self.verify_env(original_live)
                 print("wx-notify: failed; original site.env restored and running pods verified", flush=True)
             except Exception as rollback_failure:
                 print("wx-notify: rollback failed: " + error_stage(rollback_failure), flush=True)

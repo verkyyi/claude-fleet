@@ -237,6 +237,10 @@ running pod and in the latest backup, printing boolean matches. It changes no
 files and sends no messages. Each apply/rollback stage is named in the log,
 including both the original failure and any rollback failure; raw command
 output remains captured on the host.
+The inspection also identifies explicit Deployment env keys and compares each
+key separately. A missing site.env key may inherit a ConfigMap value; rollback
+therefore checks the effective values captured from all pods before mutation,
+not just values present in the file. Disagreeing starting pods refuse a rollout.
 
 The role needs the same `ssm:SendCommand` permission on the target instance and
 `AWS-RunShellScript` document, plus `ssm:GetCommandInvocation` and

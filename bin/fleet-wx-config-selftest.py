@@ -23,10 +23,14 @@ class FakeRollout(wx.Rollout):
         self.site.parent.mkdir()
         self.site.write_bytes(ORIGINAL)
         self.failure, self.applies, self.sends = failure, 0, 0
-        self.live = ["old", "", ""]
+        self.initial_live = ["old", "", ""]
+        self.live = list(self.initial_live)
 
     def pods(self):
         return ["hub-a", "hub-b"]
+
+    def live_values(self):
+        return {pod: list(self.live) for pod in self.pods()}
 
     def probe(self, pod, dry, overrides=False):
         if dry:
@@ -46,7 +50,7 @@ class FakeRollout(wx.Rollout):
         if self.failure == "rollback" or (self.failure == "apply" and self.applies == 1):
             raise RuntimeError("apply failed")
         if self.site.read_bytes() == ORIGINAL:
-            self.live = ["old", "", ""]
+            self.live = list(self.initial_live)
         else:
             self.live = list(VALUES)
 
@@ -58,10 +62,22 @@ class FakeRollout(wx.Rollout):
 
 
 class TransactionTests(unittest.TestCase):
+    def test_rollback_checks_inherited_values_not_missing_file_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            r = FakeRollout(directory, "send")
+            r.initial_live = ["old", "inherited-fields", "inherited-subscription"]
+            r.live = list(r.initial_live)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), self.assertRaisesRegex(RuntimeError, "send failed"):
+                r.execute()
+            self.assertEqual(r.live, r.initial_live)
+            self.assertIn("restored and running pods verified", output.getvalue())
+
     def test_inspection_never_changes_or_sends(self):
         with tempfile.TemporaryDirectory() as directory:
             r = FakeRollout(directory)
             r.live_values = lambda: {"hub-a": ["old", "", ""], "hub-b": list(VALUES)}
+            r.run = lambda argv, *args, **kwargs: json.dumps({"spec": {"template": {"spec": {"containers": [{"name": "ccquota", "env": [{"name": wx.KEYS[0], "value": "do-not-export"}], "envFrom": []}]}}}}) if "deployment" in argv else "b2xk\n\n\n"
             backup = r.site.parent / "wx-notify-backup-test"
             backup.mkdir()
             (backup / "site.env").write_bytes(ORIGINAL)
@@ -73,6 +89,9 @@ class TransactionTests(unittest.TestCase):
             self.assertFalse(report["site_matches_requested"])
             self.assertTrue(report["pods"][0]["matches_site"])
             self.assertTrue(report["pods"][1]["matches_requested"])
+            self.assertEqual(report["explicit_env_keys"], [wx.KEYS[0]])
+            self.assertTrue(report["pods"][0]["keys"][wx.KEYS[0]]["matches_site"])
+            self.assertTrue(report["secret_keys"][wx.KEYS[0]]["matches_site"])
             self.assertEqual(r.site.read_bytes(), ORIGINAL)
             self.assertEqual((r.applies, r.sends), (0, 0))
             self.assertNotIn("do-not-export", output.getvalue())
