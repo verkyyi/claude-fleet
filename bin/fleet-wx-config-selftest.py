@@ -113,6 +113,27 @@ class TransactionTests(unittest.TestCase):
             self.assertEqual((r.applies, r.sends), (0, 0))
             self.assertNotIn("do-not-export", output.getvalue())
 
+    def test_review_check_sends_once_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            r = FakeRollout(directory)
+            calls = []
+            def run(argv, *args):
+                calls.append(argv)
+                return json.dumps({"template_id": VALUES[0], "sent": True, "errcode": 0, "data": "do-not-export"})
+            r.run = run
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                r.verify_review()
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][-2:], ["--probe-wx-review", "admin"])
+            self.assertEqual(r.applies, 0)
+            self.assertEqual(r.site.read_bytes(), ORIGINAL)
+            self.assertNotIn("do-not-export", output.getvalue())
+            self.assertTrue(json.loads(output.getvalue())["sent"])
+            r.run = lambda *args: '{"template_id":"invalid", "sent":false, "errcode":0}'
+            with self.assertRaises(RuntimeError):
+                r.verify_review()
+
     def test_whitelist_preserves_unrelated_bytes(self):
         out = wx.replace_keys(ORIGINAL, VALUES)
         unrelated = lambda b: b"".join(line for line in b.splitlines(keepends=True) if not any(line.startswith(k.encode() + b"=") for k in wx.KEYS))

@@ -25,6 +25,7 @@ func TestReviewSubscriptionDelivery(t *testing.T) {
 		{"accepted", true, true, 0, store.NotifyWeChat, viaSubscribe},
 		{"not-following", true, false, 0, store.NotifyWeChat, viaSubscribe},
 		{"not-authorized", false, true, 0, store.NotifyWeChat, viaTemplate},
+		{"not-authorized-mail", false, false, 0, store.NotifyWeChat, viaMail},
 		{"wechat-refused", true, true, 43101, store.NotifyWeChat, viaTemplate},
 		{"refused-mail", true, false, 43101, store.NotifyWeChat, viaMail},
 		{"email-preference", true, true, 0, store.NotifyEmail, viaMail},
@@ -46,6 +47,9 @@ func TestReviewSubscriptionDelivery(t *testing.T) {
 			h.srv.deliverNotice(context.Background(), n, time.Now())
 			if got := h.notice(t, n.ID); got.Channel != tc.via {
 				t.Fatalf("got %+v", got)
+			}
+			if !tc.grant && len(h.wb.sub) != 0 {
+				t.Fatal("subscription attempted without consent")
 			}
 			if tc.via == viaSubscribe {
 				b, _ := json.Marshal(h.wb.sub[0])
@@ -87,6 +91,9 @@ func TestApplySubscribeOwnershipAndPage(t *testing.T) {
 	resp.Body.Close()
 	if !strings.Contains(string(b), `template="sub-review"`) || !strings.Contains(resp.Header.Get("Content-Security-Policy"), "https://res.wx.qq.com") {
 		t.Fatalf("page %d %s", resp.StatusCode, b)
+	}
+	if resp, body := ac.do("GET", "/apply?lang=zh", nil); resp.StatusCode != 200 || strings.Contains(body, "wx-open-subscribe") {
+		t.Fatal("non-WeChat page exposed subscription entry")
 	}
 	form := url.Values{"id": {"rq-sub"}, "template": {"sub-review"}}
 	other := newApplyClient(t, h.ghHarness, store.IdentityWeChat, "other", "other", "")

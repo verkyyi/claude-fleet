@@ -1008,13 +1008,21 @@ for rolling upgrades. This template belongs to 软件/建站/技术开发 (1273)
 removing 预约/报名 (698) does not delete it. Verify a real send returns errcode 0
 before retiring the old category.
 
-**审批结果通知我**: after submitting a WeChat application, open `/apply` inside
-WeChat and tap this button, then accept WeChat's one-time authorization. A
-rejection or a closed authorization dialog leaves the existing notification
-method in place. The button needs `CCQUOTA_WX_SUB_REVIEW`, a registered
-subscription template ID, plus the page's hostname in the service account's
-JS-SDK security domains. Desktop browsers and SDK errors keep the ordinary
-page and fallback notifications. No authorization is required to submit.
+**审批结果通知我 — 以后登记域名后再开**: the current deployment uses the
+existing review template / email fallback. The service account's five JS-SDK
+security-domain slots are occupied; the operator chose not to register the
+application host or reallocate a slot (2026-11-01). The subscription entry stays
+hidden outside WeChat, while SDK/component readiness is pending, and after any
+SDK or open-tag error. Missing authorization never blocks submitting or reviewing
+an application.
+
+For future activation, register the actual `/apply` hostname in the service
+account's JS-SDK security domains and retain `CCQUOTA_WX_SUB_REVIEW` with its
+registered template ID. Then test on a real device inside WeChat: submit an
+application, tap “审批结果通知我”, accept once, and verify one approval-result
+subscription delivery. Rejection or closing the dialog keeps fallback delivery.
+Domain registration and device authorization are future activation checks, not
+requirements for the current fallback deployment.
 
 Use subscription public template **30803「审核结果通知」**, category **1273**,
 type **2** (one-time), registered with `kidList=[1,5,24,19]`. It carries
