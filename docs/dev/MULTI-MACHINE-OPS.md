@@ -196,6 +196,14 @@ linux-a）也连得上，认证仍是上面那张五分钟证书。fleet.conf �
 退回按需（只在有看台时连、看台走后 10 分钟关）。`fleet doctor` 的 `peerlink` 行逐台写 已连上 /
 重连中 / 连不上（原因），连不上报 WARN。
 
+网页创建的 Claude / Codex 容器会话也可以从终端列表直接进入（T1243）。路线带 `jump` 时，
+门的 SSH 服务不是容器的 SSH 服务：常开连接走 `GET /v1/node/peer-relay?node=<机器>`，
+用本登录的节点凭据通过与 `peer-cert` 相同的归属校验，流量只交给目标登录的 agent，
+容器须声明自己的 SSH 中转能力。SSH 仍使用五分钟证书并校验容器主机密钥；不借用人的
+设备密钥，也不关闭主机校验。doctor 显示路线 `peer-relay`；中转记在原 SSH relay 审计中。
+Hub 和终端所在家机器都更新后生效，目标会话无需重建；旧 Hub 不认识新入口时会明确拒绝。
+
+
 **每台托管机器备齐你的仓库（T673，节点选择 C）。** 放置只在托管了这个仓库的机器里挑，所以只有一台
 托管的仓库没有第二个候选。每个登录的 base-sync 拍（`bin/fleet-base-sync.sh` 末尾，
 `bin/fleet-repo-follow.py tick`，每 `FLEET_REPO_FOLLOW_SECS`=600 秒问一次）用节点令牌问入口

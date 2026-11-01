@@ -501,11 +501,12 @@ def sign_nonce(nonce):
     return {"type": "auth", "cert": cert, "sig": sig}
 
 
-def open_relay(node, hub, token, timeout=20):
+def open_relay(node, hub, token, timeout=20, *, path=RELAY_PATH, headers=None):
     """A relay to node's sshd, handshake done: the WS, ready for stream bytes."""
     q = urllib.parse.urlencode({"node": node})
-    headers = {"Authorization": "Bearer " + token} if token else {}
-    ws = WS(hub.rstrip("/") + RELAY_PATH + "?" + q, headers, timeout=timeout)
+    if headers is None:
+        headers = {"Authorization": "Bearer " + token} if token else {}
+    ws = WS(hub.rstrip("/") + path + "?" + q, headers, timeout=timeout)
     try:
         # The handshake: JSON text frames until "ready".
         while True:
@@ -521,6 +522,8 @@ def open_relay(node, hub, token, timeout=20):
             m = json.loads(data)
             t = m.get("type")
             if t == "challenge":
+                if path != RELAY_PATH:
+                    raise Refused("peer relay did not accept node authentication")
                 ws.send(0x1, json.dumps(sign_nonce(m.get("nonce", ""))).encode())
             elif t == "ready":
                 return ws
@@ -542,10 +545,10 @@ def ws_close_text(data):
     return "ws close %d%s" % (code, (": " + reason) if reason else "")
 
 
-def proxy(node, hub, token):
+def proxy(node, hub, token, *, opener=None):
     t0 = time.time()
     try:
-        ws = open_relay(node, hub, token)
+        ws = (opener or open_relay)(node, hub, token)
     except (Refused, OSError) as e:
         clog("relay-open", node, "relay", (time.time() - t0) * 1000, "fail", "%s%s" % (e, tls_hint(e)))
         die(str(e), 1)

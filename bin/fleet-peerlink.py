@@ -275,6 +275,11 @@ def route_candidates(machine, routes):
     h = ssh_host_set(machine)
     if h:
         return [(h, 0, h)]
+    # T1243: an entry with jump is a door, not this pod's sshd. The door
+    # accepts device keys, not our peer certificate. Reach the pod over the
+    # hub's owner-scoped peer relay; SSH still authenticates and checks its key.
+    if any(isinstance(r, dict) and r.get("jump") for r in routes or []):
+        return [(machine, 0, "peer-relay")]
     rows = [r for r in routes or [] if isinstance(r, dict) and safe(str(r.get("host") or "").strip("[]").replace(":", "."))
             and r.get("kind", "direct") == "direct"]
     fc = connect_mod()
@@ -726,6 +731,9 @@ class Keeper:
         self.hub_down = ""
         cands = route_candidates(l.machine, l.routes)
         l.host, l.port, l.route = cands[l.route_i % len(cands)]
+        if l.route == "peer-relay":
+            proxy = [sys.executable, os.path.abspath(__file__), "peer-proxy", l.machine]
+            opts += ["-o", "ProxyCommand=" + " ".join(shlex.quote(a) for a in proxy)]
         argv = ssh_cmd() + opts + (["-p", str(l.port)] if l.port else []) + ["-M", "-N", "-o", "ControlPersist=no", "-o", "ServerAliveInterval=2",
                                    "-o", "ServerAliveCountMax=3", "-o", "BatchMode=yes",
                                    "-o", "ConnectTimeout=%d" % max(1, int(CONNECT)),
@@ -1414,11 +1422,41 @@ def cmd_unfwd(args):
     return 0
 
 
+def peer_proxy(args):
+    """SSH ProxyCommand: node credential read in-process, never argv or environment.
+
+    The dedicated endpoint applies peer-cert's ownership rule. The ordinary
+    client relay still requires the person's device/session credential.
+    """
+    if len(args) != 1 or not safe(args[0]):
+        return 2
+    import urllib.parse
+    import fleet_node_http
+    pair = fleet_node_http.pair()
+    if not pair:
+        sys.stderr.write("fleet-peerlink: no node credential for peer relay\n")
+        return 1
+    hub, token = pair
+    fc = connect_mod()
+    if fc is None:
+        return 1
+
+    def opener(node, url, unused):
+        path = "/v1/node/peer-relay"
+        full = url.rstrip("/") + path + "?" + urllib.parse.urlencode({"node": node})
+        headers = {"Authorization": fleet_node_http.auth("GET", full, token)}
+        return fc.open_relay(node, url, "", path=path, headers=headers)
+
+    return fc.proxy(args[0], hub, "", opener=opener)
+
+
 def main(argv):
     if not argv:
         sys.stderr.write(__doc__)
         return 2
     cmd, args = argv[0], argv[1:]
+    if cmd == "peer-proxy":
+        return peer_proxy(args)
     if cmd == "run":
         return Keeper().run()
     if cmd == "sock":

@@ -575,4 +575,37 @@ PY' _ "$B/conf/peerlink/state.json" \
   WHAT="入口的对端名单列了只是客户端的笔记本：每拍去连、每次连不上、doctor 一直红；修好的入口不列它，下一拍那条连线从 state.json 消失、mac-b 照常已连上；${gohalf}"
 }
 
+drill_peerlink_pod_entry() {
+  CAP=30
+  local t0
+  t0=$(now)
+  python3 "$BIN/fleet-peerlink-pod-selftest.py" > "$WORK/pod-entry.out" 2>&1 \
+    || { WHY="$(cat "$WORK/pod-entry.out")"; return 1; }
+  pl_box p   # keep the Unix socket under macOS's 104-byte path limit
+  cat > "$B/peers.json" <<'EOF'
+{"peers":[{"hostname":"u-abcd","login":"alice","routes":[{"name":"entry","host":"203.0.113.9","port":22022,"jump":"fleet-jump","target":"u-abcd.fleet-workers.svc.cluster.local","target_port":22}]}]}
+EOF
+  # The old route fails exactly as on the real door. The fixed keeper must
+  # establish a master, verify its login, and open a channel over its socket.
+  cat > "$B/ssh.py" <<'PY'
+import os, sys
+args = sys.argv[2:]
+if "-M" in args and not any(a.startswith("ProxyCommand=") and " peer-proxy u-abcd" in a for a in args):
+    sys.stderr.write("Host key verification failed.\n")
+    sys.exit(255)
+os.execv(sys.executable, [sys.executable, sys.argv[1]] + args)
+PY
+  export FLEET_PEERLINK_SSH="python3 $B/ssh.py $BIN/fleet-peerlink-fake-ssh.py"
+  pl_start
+  until_ok 10 pl_up u-abcd@alice \
+    || { WHY="pod link never came up: $(cat "$B/run.err")"; pl_stop; return 1; }
+  [ "$(pl_ssh -S "$B/conf/peerlink/u-abcd@alice.sock" u-abcd id -un)" = alice ] \
+    || { WHY="pod link did not reach its owner login"; pl_stop; return 1; }
+  [ "$(pl_link u-abcd@alice 'l["route"]')" = peer-relay ] \
+    || { WHY="doctor still names the door as a direct route"; pl_stop; return 1; }
+  pl_stop
+  SECS=$(since "$t0")
+  WHAT="容器的 jump 路线不再把入口当成容器 sshd；常开连接经节点间中转，保留短期证书、目标密钥与登录"
+}
+
 cred_run_drills "$0"

@@ -988,6 +988,7 @@ func (s *Server) routes() *routeMux {
 		// last proven in-band, so outside the viewer gate), the agent by
 		// its enrollment token.
 		mux.HandleFunc(control.SSHRelayPath, s.handleSSHRelayConnect)
+		mux.HandleFunc("/v1/node/peer-relay", s.handleSSHRelayConnect)
 		mux.HandleFunc(control.SSHRelayDataPath, s.handleSSHRelayData)
 		// The data half of a chat relay (claude-fleet#3644): the agent, by
 		// its own signature or token, as for the SSH relay.
