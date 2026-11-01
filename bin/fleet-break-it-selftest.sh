@@ -25,6 +25,7 @@
 #   merged-then-commit                              bin/session-end-hook.sh --recycle, fleet_reap_ok
 #   last-window                                     fleet_server_resident (fleet-up.sh)
 #   kill-server / disk-full                         bin/fleet-restore.sh --auto, fleet-diskguard.sh --gate
+#   disk-gate-starves-park                          bin/fleet-cleanup-daemon.sh (park_fleet), fleet-cleanup-idle.sh --park-only
 #   wedged-socket                                   fleet_socket_heal (fleet-restore.sh, fleet-up.sh)
 #   no-claude-on-path                               bin/fleet-claude.sh, fleet_find_tool
 #   window-renamed                                  fleet_win_role (fleet-lib.sh), fleet-restore.sh
@@ -894,6 +895,20 @@ drill_disk_full() {
   auto                                            # space freed: the next tick
   until_ok "$CAP" nt has-session -t oc 2>/dev/null || { WHY="space freed, still not restored"; return 1; }
   SECS=$(since "$t0"); WHAT="盘满时只记 held 不拉起，腾出空间后下一拍拉起"
+}
+
+# disk-gate-starves-park (task T1253): a disk that stays under the diskguard floor
+# closed the cleanup daemon's gate every tick, and the whole tick was skipped — the
+# idle parker with it, so finished agents ran on for days. A closed gate now stops
+# the reaps only; the park pass still runs for every fleet.
+drill_disk_gate_starves_park() {
+  CAP=90; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-cleanup-daemon-selftest.sh" 2>&1) || { WHY=$(printf '%s' "$out" | grep -m1 'FAIL'); return 1; }
+  sed -n '/^park_fleet()/,/^) }/p' "$BIN/fleet-cleanup-daemon.sh" | grep -q -- '--park-only' \
+    || { WHY="fleet-cleanup-daemon.sh park_fleet no longer runs the park-only pass"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='磁盘门关着：一个也不回收，停放照跑（--park-only）'
 }
 
 # agent-file-broken (issue #3122, EPIC #3111 C11): a custom session is a standard

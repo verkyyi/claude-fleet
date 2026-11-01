@@ -141,10 +141,11 @@ export FLEET_REAP_IDLE_DONE_MIN="${FLEET_REAP_IDLE_DONE_MIN:-30}"
 # One pass per hosted repo (issues #791, #1941), each with THAT repo's MAIN/base,
 # sharing the caller's --limit. The pass only considers windows stamped with its
 # repo; a window whose repo is unknown or none is never closed here.
-limit=4; rest=()
+limit=4; rest=(); park_only=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --limit) shift; limit="${1:-4}" ;;
+    --park-only) park_only=1 ;;
     *) rest+=("$1") ;;
   esac
   shift
@@ -161,6 +162,8 @@ rc=$?
 [ -z "$out" ] || printf '%s\n' "$out"
 [ "$rc" = 75 ] && exit 75
 limit=$(( limit - $(printf '%s\n' "$out" | grep -c '^parked-web:') ))
+# --park-only: the daemon's closed-disk-gate tick (task T1253) — park, close nothing.
+[ "$park_only" = 1 ] && exit 0
 # Resolve every window's repo ONCE first — @repo is the only field the per-repo
 # pass reads. fleet_window_repo stamps it from the window's @worktree; a worktree
 # window it answers by the fleet's ONLY repo (a worktree with no origin) is
