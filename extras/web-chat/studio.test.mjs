@@ -9,7 +9,7 @@ const dir = mkdtempSync(join(tmpdir(), "fleet-studio-test-"));
 const fid = "12345678-1234-4234-8234-123456789abc";
 let starts = 0;
 try {
-  const dependencies = { previewOrigin: "https://space.example.com", helpers: resolve("bin"), env: { ...process.env, FLEET_WEBCHAT_STATE: dir },
+  const dependencies = { previewOrigin: "https://space.example.com", helpers: resolve("bin"), env: { ...process.env, FLEET_WEBCHAT_STATE: dir, BC_STUDIO_BACKUP: "0" },
     readJson: async req => req.body, send: (res, status, body) => Object.assign(res, { status, body }),
     spawn: async (text, agent, profile) => {
       assert.equal(profile, "livepage-studio"); assert.equal(agent, "codex"); assert.match(text, /hold/);
