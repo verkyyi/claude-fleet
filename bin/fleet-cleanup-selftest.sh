@@ -619,6 +619,15 @@ printf '%s' "$err" | grep -q "base $WORK/main is on ops/side, not master — not
   || st_fail "1b the wrong-branch base must be reported" "$err"
 st_pass "1b MERGED + base on a side branch → reaped, no base pull, reported"
 
+# --- 1c. MERGED under a closed disk gate (task T1253) → reaped, base NOT pulled
+: > "$LEDGER"
+tok="$(FLEET_CLEANUP_NO_PULL=1 run_clean merged)"; err="$(cat "$WORK/err")"
+[ "$tok" = "cleaned:deadbeef" ] || st_fail "1c expected cleaned:deadbeef, got '$tok'" "$err"
+[ -s "$PULL_LOG" ] && st_fail "1c a closed disk gate must not pull the base" "$err"
+printf '%s' "$err" | grep -q "base pull skipped (disk gate closed)" \
+  || st_fail "1c the skipped pull must be reported" "$err"
+st_pass "1c MERGED + FLEET_CLEANUP_NO_PULL=1 → reaped, no base pull, reported"
+
 }
 
 lane_3() {

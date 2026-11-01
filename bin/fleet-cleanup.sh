@@ -893,6 +893,16 @@ if [ -n "$BRANCH" ] && [ -n "$WT" ]; then
   fleet_reap_record "$REC_OUT" "$REPO" "$MAIN" "$ISSUE" "$WT" "$WIN" "$FLEET_SESSION" "$REC_PR" "$BRANCH" || true
 fi
 
+# A closed disk gate (task T1253): the daemon still reaps — a teardown only renames
+# the worktree into the trash, which is what frees the volume — but adds no bytes,
+# so the base pull waits for the next tick with room (base-sync does it then).
+if [ "${FLEET_CLEANUP_NO_PULL:-0}" = 1 ]; then
+  note "  base pull skipped (disk gate closed) — base-sync pulls once there is room."
+  teardown || exit 0
+  done_token "cleaned:${oid:-merged}"
+  exit 0
+fi
+
 # Base fast-forward under the SHARED land lease — serialize base movers. We take
 # the lease ONLY for the pull (a quick, bounded op), not a hold-through-green.
 LEASE="$LEASE_DIR/land-$(fleet_slug "$(fleet_norm_repo "$REPO")").lock"

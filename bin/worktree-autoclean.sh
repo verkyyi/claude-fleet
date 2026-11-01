@@ -29,6 +29,9 @@
 #   * for an `issue-<N>` worktree, the bound issue #N is no longer OPEN (issue
 #     #1156; a repo with no GitHub — FLEET_FORGE=none — has no issue to ask). A merged branch is not a finished task: a worker can ship a side-fix
 #     PR from its own branch while #N stays open. Unknown state (gh failed) KEEPs.
+# A Claude Code native worktree (CLAUDE_BASE, a subagent's `.claude/worktrees/agent-*`)
+# takes its own gate, native_process (task T1253): idle past FLEET_NATIVE_WORKTREE_IDLE,
+# clean, nothing running in it — its branch is kept unless its change is on the base.
 # The janitor never closes an issue (issue #1156 removed the old "auto-close #N
 # on prune" net): GitHub closes a properly linked issue on merge, and the only
 # issues that net ever closed were ones the PR did NOT claim to close.
@@ -222,12 +225,86 @@ process() {
   fleet_transition_lock_drop "$transition_wt"
 }
 
+# --- Claude Code native worktrees (task T1253) -----------------------------------
+# A subagent run with worktree isolation leaves `.claude/worktrees/agent-*` behind
+# whenever it committed anything: Claude Code removes only an unchanged one, and the
+# fleet never touched a CLAUDE_BASE worktree. One machine held 17 of them, 18 GB,
+# each clean and unused for days. Past FLEET_NATIVE_WORKTREE_IDLE (0 = never) a
+# native worktree goes when it is clean, no window, tmux server or process is in
+# it and no rotation holds it. Its branch stays unless git already finds its change
+# on the base, so a commit nobody merged is still there (`git log <branch>`).
+# Any process anchored here KEEPs it — native work is never swept for orphans.
+NATIVE_IDLE="${FLEET_NATIVE_WORKTREE_IDLE:-86400}"
+case "$NATIVE_IDLE" in ''|*[!0-9]*) NATIVE_IDLE=86400 ;; esac
+native_idle_secs() {   # $1=worktree-dir → seconds since its last commit / checkout / top-level write
+  # Not the index: any `git status` (this janitor's own, hourly) rewrites it.
+  local gd t=0 m f
+  gd=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 1
+  for f in "$1" "$gd/HEAD" "$gd/logs/HEAD"; do
+    [ -e "$f" ] || continue
+    m="$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)"
+    case "$m" in ''|*[!0-9]*) m=0 ;; esac
+    [ "$m" -gt "$t" ] && t="$m"
+  done
+  [ "$t" -gt 0 ] || return 1
+  printf '%s' $(( $(date +%s) - t ))
+}
+native_process() {
+  if [ "$NATIVE_IDLE" -le 0 ]; then
+    say "KEEP  $branch  (error:native-owned)"; kept=$((kept+1)); return
+  fi
+  if printf '%s\n' "$LIVE" | grep -qxF "$dir" || printf '%s\n' "$LIVE" | grep -qF "$dir/" \
+     || printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qxF "$dir" || printf '%s\n' "$LIVE_SERVER_CWDS" | grep -qF "$dir/"; then
+    say "KEEP  $branch  (native: live tmux session)"; kept=$((kept+1)); return
+  fi
+  if fleet_rotate_lease_held "$dir" >/dev/null; then
+    say "KEEP  $branch  (native: rotation in flight)"; kept=$((kept+1)); return
+  fi
+  local pids st age merged del=0 drop
+  pids="$(_fleet_worktree_anchored_pids "$dir" | tr '\n' ' ')"
+  if [ -n "${pids// /}" ]; then
+    say "KEEP  $branch  (native: in use — pids ${pids% })"; kept=$((kept+1)); return
+  fi
+  st=$(git -C "$dir" --no-optional-locks status --porcelain 2>/dev/null) || { say "KEEP  $branch  (native: unreadable)"; kept=$((kept+1)); return; }
+  if [ -n "$st" ]; then
+    say "KEEP  $branch  (native: dirty — uncommitted changes)"; kept=$((kept+1)); return
+  fi
+  if ! age="$(native_idle_secs "$dir")" || [ "$age" -lt "$NATIVE_IDLE" ]; then
+    say "KEEP  $branch  (native: idle ${age:-?}s < ${NATIVE_IDLE}s)"; kept=$((kept+1)); return
+  fi
+  merged="$(fleet_reap_ok "$dir" "$REPO_ROOT" "$branch" "$head" "$MASTER" "$MERGED_PRS")"
+  case "$merged" in ancestor|merged-pr|landed) del=1 ;; esac
+  # tip == base reads "unmerged" for a just-made branch (#565); an idle native one
+  # sitting there holds nothing the base lacks.
+  [ "$del" = 0 ] && [ -n "$head" ] && [ "$head" = "$MASTER" ] && { del=1; merged="at-$BASE"; }
+  if [ "$DRY" = 1 ]; then
+    echo "PRUNE $branch  (native idle $((age / 3600))h, $merged)  -> ${dir##*/}$([ "$del" = 1 ] || echo '  [branch kept]')"
+    removed=$((removed+1)); return
+  fi
+  if drop="$(fleet_worktree_drop "$REPO_ROOT" "$dir" --native)"; then
+    # The drop renamed it into `.claude/worktrees/.fleet-trash`, which no sweep
+    # reads: one more rename (same volume) hands it to the base checkout's trash.
+    local t="${drop#trashed:}" mt
+    if [ "$t" != "$drop" ] && mt="$(fleet_trash_dir "$REPO_ROOT")" && [ "${t%/*}" != "$mt" ] \
+       && mkdir -p "$mt" 2>/dev/null && mv "$t" "$mt/" 2>/dev/null; then
+      drop="trashed:$mt/${t##*/}"
+      rm -f "${t%/*}/.gitignore" 2>/dev/null; rmdir "${t%/*}" 2>/dev/null
+    fi
+    [ "$del" = 1 ] && git -C "$REPO_ROOT" branch -D "$branch" >/dev/null 2>&1
+    log "PRUNED $branch (native idle $((age / 3600))h, $merged) — ${dir##*/} $drop$([ "$del" = 1 ] && echo ' + deleted branch' || echo ' · branch kept')"
+    removed=$((removed+1))
+  else
+    log "FAIL  could not drop native $dir (branch $branch) — $drop"
+  fi
+}
+
 process_locked() {
   [ -z "$dir" ] && return
   # skip main worktree and detached / no-branch worktrees
   if [ "$dir" = "$REPO_ROOT" ] || [ -z "$branch" ]; then return; fi
   local retirement
   retirement=$(fleet_worktree_retire_metadata "$dir") || {
+    [ "$retirement" = error:native-owned ] && { native_process; return; }
     say "KEEP  $branch  ($retirement)"; kept=$((kept+1)); return
   }
   if printf '%s\n' "$branch" | grep -Eq "$PROTECTED_RE"; then

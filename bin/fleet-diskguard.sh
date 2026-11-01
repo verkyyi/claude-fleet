@@ -648,6 +648,26 @@ managed_cert_watch() {
       fi ) & ) 2>/dev/null
   return 0
 }
+# --- rebuildable tool caches (task T1253) ---------------------------------------
+# Under the warn line, at most once every 6 hours, hand back the disk that go-build,
+# old playwright browsers, yarn / npm / uv and the fleet's stale bytecode hold
+# (bin/fleet-cache-reclaim.py holds the list). Detached: emptying an npm cache can
+# take minutes and this tick must not. FLEET_DISK_CACHE_RECLAIM=0 turns it off.
+cache_watch() {
+  [ "${FLEET_DISK_CACHE_RECLAIM:-1}" = 0 ] && return 0
+  [ -f "$BIN/fleet-cache-reclaim.py" ] || return 0
+  local free st last nowt
+  free=$(free_gb); [ -n "$free" ] || return 0
+  [ "$free" -lt "$WARN_GB" ] || return 0
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  st="$GDIR/last-cache-reclaim"; nowt="$(now)"; last="$(cat "$st" 2>/dev/null || echo 0)"
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ $((nowt - last)) -ge 21600 ] || return 0
+  printf '%s\n' "$nowt" > "$st" 2>/dev/null
+  ( cd / && nohup sh -c 'printf "%s free=%sG " "$(date "+%Y-%m-%dT%H:%M:%S")" "$1"; python3 "$2" --run' _ \
+      "$free" "$BIN/fleet-cache-reclaim.py" >> "$GDIR/cache-reclaim.log" 2>&1 </dev/null & ) >/dev/null 2>&1
+  return 0
+}
 transcript_watch() {
   [ "${FLEET_TRANSCRIPT_ARCHIVE:-1}" = 0 ] && return 0
   [ -x "$BIN/fleet-transcript-archive.sh" ] || return 0
@@ -986,6 +1006,7 @@ EOF2
     crash_watch                                   # a metrics row every tick (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
     transcript_watch                              # daily transcript archive (#1299), budgeted
+    cache_watch                                   # under the warn line: rebuildable caches (T1253), detached
     home_watch                                    # a home pane left dead: respawn it (#1801)
     restore_watch                                 # a fleet that went down: pull it back up (#1784)
     resident_watch                                # spinner / webhook booted out: bootstrap it back (#1849)

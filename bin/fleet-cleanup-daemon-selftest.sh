@@ -84,6 +84,7 @@ if grep -qxF "\$pr" "$WORK/hang" 2>/dev/null; then
   wait "\$sp"
 fi
 printf '%s\n' "\$pr" >> "$CLEAN_LOG"
+[ "\${FLEET_CLEANUP_NO_PULL:-0}" = 1 ] && printf '%s\n' "\$pr" >> "$WORK/nopull"
 # T905: a PR named in $WORK/tok answers that error token instead (gh could not read it).
 t=\$(awk -v p="\$pr" '\$1 == p { print \$2; exit }' "$WORK/tok" 2>/dev/null)
 [ -n "\$t" ] && { printf '%s\n' "\$t"; exit 2; }
@@ -215,14 +216,23 @@ run s1
 [ -s "$CLEAN_LOG" ] && fail "FLEET_CLEANUP=0 must reap nothing"
 grep -q 'cleanup off' "$WORK/log" || fail "FLEET_CLEANUP=0 should log 'cleanup off'"
 
-# 4) DISK GATE closed → whole tick is a no-op (checked before the per-fleet loop).
+# 4) DISK GATE closed → the tick still reaps, but every cleanup skips its base pull
+#    (task T1253: a teardown only renames into the trash — what frees the volume —
+#    and skipping the tick kept a full machine full for a day and a half).
 reset
 conf
+rm -f "$WORK/nopull"
+run s1
+[ -s "$WORK/nopull" ] && fail "an open disk gate must keep the base pull"
+reset
 touch "$WORK/disk_closed"
 run s1
 rm -f "$WORK/disk_closed"
-[ -s "$CLEAN_LOG" ] && fail "a closed disk gate must reap nothing"
+[ "$(reaped_list)" = "101 102 105" ] || fail "a closed disk gate must still reap, got [$(reaped_list)]"
+[ "$(tr '\n' ' ' < "$WORK/nopull" 2>/dev/null)" = "101 102 105 " ] \
+  || fail "a closed disk gate must reap without a base pull" "$(cat "$WORK/nopull" 2>/dev/null)"
 grep -q 'disk gate closed' "$WORK/log" || fail "a closed disk gate should log 'disk gate closed'"
+rm -f "$WORK/nopull"
 
 # 5) DRY-RUN mutates nothing: no cleanup call, no lease left behind.
 reset
@@ -286,7 +296,7 @@ rm -f "$WORK/disk_closed"
 [ -e "$WORK/.fleet-trash/main-issue-99.1700000000.4242" ] \
   && fail "the trash sweep must run even with the disk gate closed (it is what frees the disk)"
 grep -q 'worktree trash swept:1 left:0' "$WORK/log" || fail "the sweep should log what it freed"
-[ -s "$CLEAN_LOG" ] && fail "a closed disk gate must still reap nothing"
+rm -f "$WORK/nopull"
 
 # 9b) SLOW PURGE (issue #893): the fleet's FLEET_TRASH_PURGE_PER_TICK reaches the
 #     sweep through the per-fleet conf read — one entry per tick with the gate open
@@ -388,19 +398,16 @@ run s1 s2
 grep -q 'rc=75' "$WORK/log" || fail 'rate limit stop must be visible'
 [ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail 'rate limit must stop before the second fleet'
 
-# T1253) a closed disk gate stops the reaps, never the park pass: one machine sat a day
-# and a half under the floor with 20+ finished agents still running.
-rm -f "$WORK/idle-rate"
+# T1253) a closed disk gate runs the idle pass too (park + reap), the pulls skipped.
+rm -f "$WORK/idle-rate" "$WORK/nopull"
 : > "$WORK/idle-calls"
 reset
 conf
 touch "$WORK/disk_closed"
 run s1
-rm -f "$WORK/disk_closed"
-[ -s "$CLEAN_LOG" ] && fail "T1253 a closed disk gate must still reap nothing"
-grep -q 's1 --park-only --limit 4' "$WORK/idle-calls" \
-  || fail "T1253 a closed disk gate must still run the park pass" "$(cat "$WORK/idle-calls")"
-[ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail "T1253 only the park pass runs under a closed gate"
+rm -f "$WORK/disk_closed" "$WORK/nopull"
+grep -q 's1 --limit 1' "$WORK/idle-calls" \
+  || fail "T1253 a closed disk gate must still run the idle pass" "$(cat "$WORK/idle-calls")"
 : > "$WORK/idle-calls"
 
 # T905) gh could not read a PR: backoff, a 3-times-gone tombstone, a limit stops the pass.
@@ -428,5 +435,5 @@ rm -f "$MISS"; printf '101 error:gh-rate-limit\n' > "$WORK/tok"; reset; run s1
 grep -q 'backing off' "$WORK/log" || fail "T905 the rate-limit stop must be logged"
 rm -f "$WORK/tok" "$MISS"
 
-printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate (parks) · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed · PR pass before idle · gh-miss backoff/tombstone\n'
+printf 'selftest PASS: reaps final+live · skips open+clean · cap · off-switch · disk-gate (reaps, no pull) · dry-run · single-writer · candidate-timeout · trash-sweep · scratch-heads off/armed · PR pass before idle · gh-miss backoff/tombstone\n'
 exit 0
