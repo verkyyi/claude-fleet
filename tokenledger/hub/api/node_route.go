@@ -214,7 +214,8 @@ func (s *Server) replicaNamesUp(now time.Time) (map[string]bool, bool) {
 type nodeForward struct {
 	// Kind: write (sendWrite) · read (NodeRead) · send (SendNodeWrite) ·
 	// relays (dispatchRelays) · oauth (a relayed token refresh) · svc (a
-	// service run's start / cancel, its ack returned — claude-fleet#4086).
+	// service run's start / cancel, its ack returned — claude-fleet#4086) ·
+	// cluster_op (a cluster op signed and sent on the holder's ops link — APVZ).
 	Kind     string `json:"kind"`
 	Endpoint string `json:"endpoint_id"`
 
@@ -230,6 +231,9 @@ type nodeForward struct {
 	Provider string            `json:"provider,omitempty"`
 	Form     map[string]string `json:"form,omitempty"`
 	Encoding string            `json:"encoding,omitempty"` // oauth: control.OAuthRefresh.Encoding
+
+	Cluster string                 `json:"cluster,omitempty"` // cluster_op (task APVZ): the cluster and its unsigned ticket
+	Ticket  *control.ClusterTicket `json:"ticket,omitempty"`
 }
 
 // nodeForwardReply is the holder's answer.
@@ -360,6 +364,18 @@ func (s *Server) handleNodeRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b, _ := json.Marshal(ack)
+		answer(http.StatusOK, nodeForwardReply{Data: b})
+	case "cluster_op":
+		if f.Ticket == nil || f.Cluster == "" {
+			httpError(w, http.StatusBadRequest, "a cluster_op forward needs its cluster and ticket")
+			return
+		}
+		res, err := s.clusterOpLocal(ctx, f.Cluster, *f.Ticket)
+		if err != nil {
+			refuse(fault("UNAVAILABLE", err.Error()))
+			return
+		}
+		b, _ := json.Marshal(res)
 		answer(http.StatusOK, nodeForwardReply{Data: b})
 	case "relays":
 		go s.dispatchRelays(f.Endpoint)

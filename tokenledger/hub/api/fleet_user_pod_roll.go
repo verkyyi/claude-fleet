@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -46,7 +47,49 @@ import (
 const (
 	UserPodRollKey      = "fleet.user_pod_roll"
 	UserPodRollBatchKey = "fleet.user_pod_roll_batch"
+	// UserPodRollWindowKey (task APVZ): "HH-HH", UTC hours a roll may start in
+	// (09-14 = 02:00–07:00 PDT, nobody at work), across midnight when the first is
+	// later ("22-05"); "" = any time, as before.
+	UserPodRollWindowKey = "fleet.user_pod_roll_window"
 )
+
+// parseRollWindow is "HH-HH" → (from, to) hours, ok false when malformed.
+func parseRollWindow(v string) (int, int, bool) {
+	a, b, found := strings.Cut(strings.TrimSpace(v), "-")
+	if !found {
+		return 0, 0, false
+	}
+	from, err1 := strconv.Atoi(strings.TrimSpace(a))
+	to, err2 := strconv.Atoi(strings.TrimSpace(b))
+	if err1 != nil || err2 != nil || from < 0 || from > 23 || to < 0 || to > 24 || from == to {
+		return 0, 0, false
+	}
+	return from, to, true
+}
+
+// inRollWindow says whether now (UTC) is inside window; "" or malformed = yes.
+func inRollWindow(window string, now time.Time) bool {
+	from, to, ok := parseRollWindow(window)
+	if !ok {
+		return true
+	}
+	h := now.UTC().Hour()
+	if from < to {
+		return h >= from && h < to
+	}
+	return h >= from || h < to
+}
+
+func checkRollWindow(_ *Server, v string) (string, string) {
+	if strings.TrimSpace(v) == "" {
+		return "", ""
+	}
+	from, to, ok := parseRollWindow(v)
+	if !ok {
+		return "", UserPodRollWindowKey + " is \"HH-HH\" in UTC hours (e.g. 09-14), or \"\" for any time"
+	}
+	return fmt.Sprintf("%02d-%02d", from, to), ""
+}
 
 // podRollEvery spaces two batches; podRollRetry is how long a failed roll
 // waits before it is asked again; podRuntimeFresh is how old a runtime
@@ -168,6 +211,9 @@ type podRollCandidate struct{ cluster, pod, from string }
 // (tests). It returns the pods it asked.
 func (s *Server) PodRollTick(now time.Time, force bool) []string {
 	if !s.Fleet || s.Store == nil || s.accountKey == nil || s.setting(UserPodRollKey) == "off" {
+		return nil
+	}
+	if !inRollWindow(s.setting(UserPodRollWindowKey), now) {
 		return nil
 	}
 	stable := s.podRollStableSHA()

@@ -142,7 +142,68 @@ var errNoOpsLink = errors.New("the cluster's ops link is not connected")
 // returning the provisioner's answer. A fresh nonce every call (a re-ask is a
 // new ticket) unless t brings one — a Job is named after its nonce, so its
 // caller mints it first (claude-fleet#3552).
+//
+// The ops link ends in ONE replica (task APVZ): a pass or a request on the other
+// one used to fail «the cluster's ops link is not connected» — a claim, a bind,
+// a roll that worked or not by which replica took it. With no link here, the op
+// is handed to the replica holding it (the node-route forward, kind cluster_op)
+// and its answer returned; the holder signs and sends it as its own.
 func (s *Server) clusterOp(ctx context.Context, cluster string, t control.ClusterTicket) (control.ClusterOpResult, error) {
+	if _, c := s.nodes.opsFor(cluster); c == nil && ctx.Value(localOnlyKey{}) == nil {
+		if peer, ok := s.peerOpsLink(cluster); ok {
+			return s.forwardClusterOp(ctx, peer, cluster, t)
+		}
+	}
+	return s.clusterOpLocal(ctx, cluster, t)
+}
+
+// peerOpsLink is the other replica's ops link of cluster (the lowest endpoint
+// id first); false when none holds one.
+func (s *Server) peerOpsLink(cluster string) (store.NodeConn, bool) {
+	peers := s.peerConns()
+	if len(peers) == 0 {
+		return store.NodeConn{}, false
+	}
+	nodes, err := s.Store.Nodes()
+	if err != nil {
+		log.Printf("fleet: read nodes for a cluster op: %v", err)
+		return store.NodeConn{}, false
+	}
+	var l []store.NodeConn
+	for _, n := range nodes {
+		pc, ok := peers[n.EndpointID]
+		if !ok || !sameMachine(n.Hostname, cluster) || !pc.HasCap(control.CapClusterOps) {
+			continue
+		}
+		l = append(l, pc)
+	}
+	if len(l) == 0 {
+		return store.NodeConn{}, false
+	}
+	sort.Slice(l, func(i, j int) bool { return l[i].EndpointID < l[j].EndpointID })
+	return l[0], true
+}
+
+// forwardClusterOp is clusterOp on the replica holding the ops link.
+func (s *Server) forwardClusterOp(ctx context.Context, peer store.NodeConn, cluster string, t control.ClusterTicket) (control.ClusterOpResult, error) {
+	var res control.ClusterOpResult
+	rep, err := s.forward(ctx, peer, nodeForward{Kind: "cluster_op", Endpoint: peer.EndpointID, Cluster: cluster, Ticket: &t}, clusterOpWait)
+	switch {
+	case errors.Is(err, errForwardNotSent):
+		return res, errNoOpsLink
+	case err != nil:
+		return res, fmt.Errorf("%s's ops link (on replica %s): %v", cluster, peer.Replica, err)
+	case rep.Error != nil:
+		return res, errors.New(rep.Error.Message)
+	}
+	if err := json.Unmarshal(rep.Data, &res); err != nil {
+		return res, fmt.Errorf("%s's ops link (on replica %s) answered %s with a malformed result", cluster, peer.Replica, t.Op)
+	}
+	return res, nil
+}
+
+// clusterOpLocal is clusterOp on this replica's own ops link.
+func (s *Server) clusterOpLocal(ctx context.Context, cluster string, t control.ClusterTicket) (control.ClusterOpResult, error) {
 	var res control.ClusterOpResult
 	_, c := s.nodes.opsFor(cluster)
 	if c == nil {
