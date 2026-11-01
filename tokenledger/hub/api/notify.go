@@ -23,6 +23,8 @@ import (
 // every replica — a notice is claimed with a lease, so it goes out once) sends
 // it down the first road that works:
 //
+//  0. a request's applicant accepted its one-time subscription notification ⇒
+//     try that grant once (CCQUOTA_WX_SUB_REVIEW), even without following;
 //  1. they follow the service account (an openid in hub_reach, followed) and
 //     the kind has a template (CCQUOTA_WX_TPL_REVIEW / _NEWREQ) ⇒ a template
 //     message;
@@ -48,8 +50,10 @@ import (
 // Templates (claude-fleet#4214): two of 「二四网络科技」's category templates —
 // a result is 「项目申请审核结果通知」 (申请项目 thing3 · 申请账号
 // character_string14 · 审核结果 thing5 · 审核时间 time6), new requests
-// 「用户注册申请审核提醒」 (平台名称 thing1 · 用户名称 thing2 · 申请时间 time6 ·
-// 待审批数 character_string10). WeChat holds a thing to 20 runes and a
+// 「软件注册申请待审核通知」 (61558, category 1273: 用户名称 thing1 · 申请人
+// thing2 · 申请时间 time4). NewReqFields maps the existing internal values
+// onto the registered fields, preserving old deployments during rollout.
+// WeChat holds a thing to 20 runes and a
 // character_string to 32 of letters, digits and symbols — no Chinese — and a
 // time to a bare time: reviewMsg / newReqMsg fill them within that. A refusal
 // for a reason has no field; tapping through to /apply shows it.
@@ -85,9 +89,10 @@ const (
 
 // The roads a notice went by (store.Notice.Channel).
 const (
-	viaTemplate = "wechat-tpl"
-	viaChat     = "wechat-kf"
-	viaMail     = "email"
+	viaTemplate  = "wechat-tpl"
+	viaSubscribe = "wechat-subscribe"
+	viaChat      = "wechat-kf"
+	viaMail      = "email"
 )
 
 // Recipient is who a notice is for.
@@ -349,10 +354,36 @@ func (s *Server) deliverNotice(ctx context.Context, n store.Notice, now time.Tim
 
 	var tried []string
 	down := false // a road that could not be reached: worth another try
+	if n.Kind == store.NotifyKindReview && n.Prefer != store.NotifyEmail && s.WxGW.ready() && s.WxGW.SubReview != "" && len(n.Refs) == 1 {
+		openid, err := s.Store.ClaimRequestSubscribe(n.Refs[0], s.WxGW.SubReview)
+		if err != nil {
+			s.retryNotice(n, now, about, []string{"subscription could not be read"})
+			return
+		}
+		if openid != "" {
+			// phrase values must fit five characters even for an English page.
+			result := "未通过"
+			if msg.Tpl["thing5"] == "已通过" || msg.Tpl["thing5"] == "Approved" {
+				result = "已通过"
+			}
+			data := map[string]string{"thing1": clipRunes(Brand+" 使用申请", 20), "phrase5": result,
+				"time24": msg.Tpl["time6"], "character_string19": clipRunes(n.Refs[0], 32)}
+			if err := s.WxGW.subscribeSend(ctx, openid, s.WxGW.SubReview, s.wechatNotice(msg.Link), data); err == nil {
+				finish(store.NoticeSent, viaSubscribe, viaSubscribe)
+				return
+			} else {
+				tried = append(tried, viaSubscribe+" "+wxWhy(wxCode(err)))
+			}
+		}
+	}
 	if n.Prefer != store.NotifyEmail && s.WxGW.ready() && reach.OpenID != "" && reach.Followed {
 		chat := true
 		if tpl := s.wxTemplate(n.Kind); tpl != "" {
-			err := s.WxGW.templateSend(ctx, reach.OpenID, tpl, s.wechatNotice(msg.Link), msg.Tpl)
+			data := msg.Tpl
+			if tpl == s.WxGW.TplNewReq {
+				data = s.newReqTemplateFields(data)
+			}
+			err := s.WxGW.templateSend(ctx, reach.OpenID, tpl, s.wechatNotice(msg.Link), data)
 			if err == nil {
 				finish(store.NoticeSent, viaTemplate, viaTemplate)
 				return

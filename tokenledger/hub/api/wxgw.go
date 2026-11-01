@@ -50,10 +50,15 @@ type WxGateway struct {
 
 	// TplReview / TplNewReq are the template messages a request's result and
 	// an admin's new-request notice go out as (CCQUOTA_WX_TPL_REVIEW /
-	// CCQUOTA_WX_TPL_NEWREQ): 「项目申请审核结果通知」 / 「用户注册申请审核提醒」,
+	// CCQUOTA_WX_TPL_NEWREQ): 「项目申请审核结果通知」 / 「软件注册申请待审核通知」,
 	// their fields filled by notify.go. Empty = no template for that kind; the
 	// notice falls back to a customer-service message, then a mail.
 	TplReview, TplNewReq string
+	// SubReview is a one-time subscription notification (public template 30803).
+	SubReview string
+	// NewReqFields remaps the legacy notice fields to a registered template.
+	// Empty preserves the old deployment during a rolling configuration change.
+	NewReqFields string
 	// TplNotice is the template an admin's service notice goes out as
 	// (CCQUOTA_WX_TPL_NOTICE, a 「系统维护通知」-like one, claude-fleet#4063);
 	// TplNoticeFields maps its fields to what fills them
@@ -69,10 +74,13 @@ type WxGateway struct {
 	// authorize host (empty means the real one; tests point it at a fake).
 	RelayURL, RelayTarget, ComponentAppID, AuthorizeBase string
 
-	mu      sync.Mutex
-	tok     string
-	tokExp  time.Time
-	nowFunc func() time.Time
+	mu          sync.Mutex
+	jsMu        sync.Mutex
+	tok         string
+	tokExp      time.Time
+	jsTicket    string
+	jsTicketExp time.Time
+	nowFunc     func() time.Time
 }
 
 // wxServiceAppID is the service account 「二四网络科技」 (hosted by the company's
@@ -197,6 +205,9 @@ func (g *WxGateway) call(ctx context.Context, path string, body any, out interfa
 		req, err := http.NewRequestWithContext(ctx, method, g.apiBase()+path+sep+"access_token="+url.QueryEscape(tok), rd)
 		if err != nil {
 			return errWxDown
+		}
+		if body != nil {
+			req.Header.Set("Content-Type", "application/json")
 		}
 		resp, err := g.client().Do(req)
 		if err != nil {

@@ -62,6 +62,7 @@ var routeAccess = map[string]string{
 	// The applicant note (ccq_applicant) is its own credential, read only
 	// here (claude-fleet#4051).
 	ApplyPath: accessSelf, ApplyEditPath: accessSelf, ApplyWithdrawPath: accessSelf, ApplicantPath: accessSelf,
+	applySubscribePath: accessSelf, applySubscribeJSPath: accessPublic,
 	"/healthz": accessPublic, "/version": accessPublic,
 	"/readyz": accessPublic, "/v1/deploy-probe": accessPublic,
 	"/install": accessPublic, "/install/": accessPublic,

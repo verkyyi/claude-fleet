@@ -2693,7 +2693,14 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 · _RELAY_TARGET (default fleet) · _COMPONENT_APPID (default the company's)
 #   CCQUOTA_WX_TPL_REVIEW / CCQUOTA_WX_TPL_NEWREQ             the notices' template messages (a request's
 #                                 result · new requests to the admins): 「项目申请审核结果通知」 /
-#                                 「用户注册申请审核提醒」 on 「二四网络科技」 · needs the pair above · unset = chat message, else mail
+#                                 「软件注册申请待审核通知」 (61558, category 1273, type 4) · needs the pair above
+#                                 · unset = chat message, else mail
+#   CCQUOTA_WX_TPL_NEWREQ_FIELDS  registered fields: thing1=platform,thing2=person,time4=time for 61558
+#                                 · values platform/person/time/count · unset preserves the legacy field mapping
+#   CCQUOTA_WX_SUB_REVIEW         one-time subscription 「审核结果通知」 (30803, category 1273, type 2)
+#                                 · addtemplate kidList [1,5,24,19]: thing1/phrase5/time24/character_string19
+#                                 · /apply in WeChat offers wx-open-subscribe after submission; JS-SDK domain required
+#                                 · no grant / send refused → _TPL_REVIEW, chat or email; needs gateway pair above
 #   CCQUOTA_WX_TPL_NOTICE         an admin's service notice to members (/admin/notices): a 「系统维护通知」-like
 #                                 template · _FIELDS names its fields (default thing1=title,thing2=body,time3=time;
 #                                 what: title · body · time · link) · unset = chat message, else mail
