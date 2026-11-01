@@ -249,9 +249,21 @@ The role needs the same `ssm:SendCommand` permission on the target instance and
 `AWS-RunShellScript` document, plus `ssm:GetCommandInvocation` and
 `ssm:CancelCommand` on `*` as below. `ec2:DescribeInstances` is needed only when
 `AWS_BOX_INSTANCE_ID` is unset. It does not need Secrets Manager or Parameter
-Store reads for this change. A valid SDK ticket does **not** prove the public
-platform's JS-SDK domain registration: confirm the domain used by `/apply` in
-the platform and exercise “审批结果通知我” inside WeChat separately.
+Store reads for this change. Use `operation=verify-review` after deploying a
+binary supporting `--probe-wx-review` to send one labelled approval-result test
+to the named admin through the configured `CCQUOTA_WX_TPL_REVIEW`. It reports the
+template ID and `errcode=0` without changing configuration, restarting pods,
+creating an application, or requiring an SDK ticket. Missing-consent selection
+and email fallback are covered by notification tests; this live check verifies
+the existing template transport.
+
+Current decision (2026-11-01): keep the application host outside the five occupied
+JS-SDK security-domain slots. The subscription entry remains hidden unless the
+SDK and open tag both work; approval results keep their template / email fallback.
+**以后登记域名后再开**: if the operator later registers the `/apply` host, exercise
+“审批结果通知我” and one-time delivery inside WeChat on a real device. A valid SDK
+ticket alone does not prove domain registration. These future activation checks
+do not block the current deployment.
 
 | Variable | Value |
 |---|---|

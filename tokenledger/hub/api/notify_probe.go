@@ -27,25 +27,9 @@ func (s *Server) ProbeWxNewRequest(ctx context.Context, login string, dryRun boo
 	if s.Store == nil || !s.WxGW.ready() || s.WxGW.TplNewReq == "" || s.WxGW.SubReview == "" || s.WxGW.NewReqFields == "" {
 		return out, errors.New("WeChat gateway, new-request mapping and review subscription must be configured")
 	}
-	users, err := s.Store.HubUsers()
+	reach, err := s.probeWxAdmin(login)
 	if err != nil {
-		return out, errors.New("could not read administrators")
-	}
-	var owner string
-	for _, u := range users {
-		if strings.EqualFold(u.Login, login) && u.Role == roleAdmin {
-			if owner != "" {
-				return out, errors.New("administrator is ambiguous")
-			}
-			owner = u.PrincipalID
-		}
-	}
-	if owner == "" {
-		return out, errors.New("named administrator not found")
-	}
-	reach, err := s.noticeReach(store.Notice{Owner: owner})
-	if err != nil || reach.OpenID == "" || !reach.Followed {
-		return out, errors.New("administrator has no followed service-account identity")
+		return out, err
 	}
 	m := newReqMsg([]store.AccessRequest{{ID: "template-probe", Display: "【测试】申请提醒", CreatedAt: time.Now()}}, false, s.humanURL(nil))
 	out.Template, out.Subscription = s.WxGW.TplNewReq, s.WxGW.SubReview
@@ -118,6 +102,56 @@ func (s *Server) ProbeWxNewRequest(ctx context.Context, login string, dryRun boo
 	}
 	err = s.WxGW.templateSend(ctx, reach.OpenID, out.Template, s.wechatNotice(s.humanURL(nil)+AdminPrefix+"/requests"), out.Fields)
 	if err != nil {
+		out.ErrCode = wxCode(err)
+		return out, err
+	}
+	out.Sent = true
+	return out, nil
+}
+
+// probeWxAdmin restricts deployment tests to an explicitly named, followed admin.
+func (s *Server) probeWxAdmin(login string) (reachOf, error) {
+	users, err := s.Store.HubUsers()
+	if err != nil {
+		return reachOf{}, errors.New("could not read administrators")
+	}
+	var owner string
+	for _, u := range users {
+		if strings.EqualFold(u.Login, login) && u.Role == roleAdmin {
+			if owner != "" {
+				return reachOf{}, errors.New("administrator is ambiguous")
+			}
+			owner = u.PrincipalID
+		}
+	}
+	if owner == "" {
+		return reachOf{}, errors.New("named administrator not found")
+	}
+	reach, err := s.noticeReach(store.Notice{Owner: owner})
+	if err != nil || reach.OpenID == "" || !reach.Followed {
+		return reachOf{}, errors.New("administrator has no followed service-account identity")
+	}
+	return reach, nil
+}
+
+// ProbeWxReview verifies the existing approval-result template road without
+// creating or approving an application, recording consent, or requiring JS-SDK.
+func (s *Server) ProbeWxReview(ctx context.Context, login string, dryRun bool) (WxNotifyProbe, error) {
+	out := WxNotifyProbe{}
+	if s.Store == nil || !s.WxGW.ready() || s.WxGW.TplReview == "" {
+		return out, errors.New("WeChat gateway and review template must be configured")
+	}
+	reach, err := s.probeWxAdmin(login)
+	if err != nil {
+		return out, err
+	}
+	m := reviewMsg(&store.AccessRequest{ID: "review-probe", State: store.RequestApproved, DecidedAt: time.Now()}, false, s.humanURL(nil))
+	m.Tpl["thing3"] = "【测试】审批结果通知"
+	out.Template, out.Fields = s.wxTemplate(store.NotifyKindReview), m.Tpl
+	if dryRun {
+		return out, nil
+	}
+	if err := s.WxGW.templateSend(ctx, reach.OpenID, out.Template, s.wechatNotice(m.Link), out.Fields); err != nil {
 		out.ErrCode = wxCode(err)
 		return out, err
 	}

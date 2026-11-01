@@ -162,9 +162,15 @@ func (s *Server) handleApplySubscribeJS(w http.ResponseWriter, r *http.Request) 
 
 const applySubscribeJS = `(function(){
 var box=document.getElementById('review-subscribe'),tag=document.getElementById('review-subscribe-tag');
-if(!box||!tag||!window.wx)return;
+if(!box||!tag)return;
+box.hidden=true;
+if(!/micromessenger/i.test(navigator.userAgent)||!window.wx)return;
+var failed=false,sdkReady=false,tagReady=false;
+function hide(){failed=true;box.hidden=true;}
+function show(){box.hidden=failed||!sdkReady||!tagReady;}
+try{
 var cfg=JSON.parse(box.dataset.config), status=document.getElementById('review-subscribe-status');
-function hide(){box.hidden=true;}
+tag.addEventListener('ready',function(){tagReady=true;show();});
 tag.addEventListener('error',hide);
 document.addEventListener('WeixinOpenTagsError',hide);
 tag.addEventListener('success',async function(e){
@@ -177,8 +183,9 @@ tag.addEventListener('success',async function(e){
  if(!res.ok)throw Error();status.textContent=box.dataset.ok;tag.hidden=true;
  }catch(_){status.textContent=box.dataset.failed;}
 });
-wx.ready(function(){box.hidden=false;});wx.error(hide);
+wx.ready(function(){sdkReady=true;show();});wx.error(hide);
 cfg.jsApiList=['updateAppMessageShareData'];cfg.openTagList=['wx-open-subscribe'];wx.config(cfg);
+}catch(_){hide();}
 })();`
 
 // The new-request template is also used by existing administrator alerts.

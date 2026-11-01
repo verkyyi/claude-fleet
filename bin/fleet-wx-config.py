@@ -134,6 +134,20 @@ class Rollout:
             raise RuntimeError("WeChat probe returned an unexpected receipt")
         return {k: receipt[k] for k in ("template_id", "subscription_id", "sent", "errcode")}
 
+    def verify_review(self):
+        # No configuration writes, restarts, subscription calls or SDK ticket.
+        validate(self.values, self.admin)
+        pods = self.pods()
+        if not pods:
+            raise RuntimeError("no running hub pods")
+        raw = self.run(self.k + ["exec", pods[0], "-c", "ccquota", "--",
+                       "ccquota", "hub", "--probe-wx-review", self.admin],
+                       "WeChat review fallback real send", 90)
+        receipt = json.loads(raw)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{20,100}", receipt.get("template_id", "")) or receipt.get("sent") is not True or receipt.get("errcode") != 0:
+            raise RuntimeError("review fallback probe returned an unexpected receipt")
+        print(json.dumps({k: receipt[k] for k in ("template_id", "sent", "errcode")}), flush=True)
+
     def apply(self):
         old = self.pods()
         env = os.environ.copy()
@@ -247,11 +261,18 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     for key in ("repo", "conf", "newreq", "fields", "review-sub", "admin"):
         p.add_argument("--" + key, required=True)
-    p.add_argument("--inspect", action="store_true", help="compare only the three keys and latest backup; never write or send")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--verify-review", action="store_true", help="send one labelled review fallback test; never change configuration")
+    mode.add_argument("--inspect", action="store_true", help="compare only the three keys and latest backup; never write or send")
     a = p.parse_args()
     try:
         rollout = Rollout(a.repo, a.conf, (a.newreq, a.fields, a.review_sub), a.admin)
-        rollout.inspect() if a.inspect else rollout.execute()
+        if a.verify_review:
+            rollout.verify_review()
+        elif a.inspect:
+            rollout.inspect()
+        else:
+            rollout.execute()
     except (ValueError, OSError, RuntimeError, subprocess.TimeoutExpired):
         # Exception details can contain subprocess output or JSON; never echo it.
         import sys

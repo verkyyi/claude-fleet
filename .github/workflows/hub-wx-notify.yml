@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: 'inspect compares disk, pods and latest backup; apply changes settings and sends one test'
+        description: 'inspect compares settings; apply changes settings; verify-review sends one review fallback test'
         type: choice
-        options: [inspect, apply]
+        options: [inspect, apply, verify-review]
         default: inspect
       newreq_template:
         description: 'Registered 61558 template ID (category 1273)'
@@ -60,12 +60,13 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Preflight, back up, apply, verify and send one test
+      - name: Run the selected configuration or notification check
         run: |
           case "$OPERATION" in
             inspect) mode=wx-notify-check ;;
             apply) mode=wx-notify ;;
-            *) echo 'Choose inspect or apply' >&2; exit 2 ;;
+            verify-review) mode=wx-review-check ;;
+            *) echo 'Choose inspect, apply or verify-review' >&2; exit 2 ;;
           esac
           bin/fleet-hub-aws-deploy.sh "$mode" \
             "$NEWREQ_TEMPLATE" "$NEWREQ_FIELDS" "$REVIEW_SUBSCRIPTION" "$ADMIN_LOGIN"

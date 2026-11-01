@@ -69,3 +69,52 @@ func TestWxNotifyDeploymentProbe(t *testing.T) {
 		})
 	}
 }
+
+func TestWxReviewDeploymentProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		role          string
+		followed, dry bool
+		code          int
+		wantErr       bool
+		wantSent      int
+	}{
+		{"send", store.RoleAdmin, true, false, 0, false, 1},
+		{"dry", store.RoleAdmin, true, true, 0, false, 0},
+		{"member", store.RoleUser, true, false, 0, true, 0},
+		{"unfollowed", store.RoleAdmin, false, false, 0, true, 0},
+		{"refused", store.RoleAdmin, true, false, 43004, true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newNotifyHarness(t)
+			// No subscription configuration or JS-SDK required for fallback.
+			h.srv.WxGW.SubReview = ""
+			pid, _ := newPersonPrincipal()
+			if err := h.srv.Store.UpsertHubUser(store.HubUser{PrincipalID: pid, Login: "admin", Role: tc.role, AddedBy: "test", AddedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.srv.Store.SetHubReach(store.HubReach{Owner: pid, Channel: store.ReachWeChatMP, Addr: "private-openid", Followed: tc.followed, UpdatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			h.wb.set(func(f *fakeWxNotify) { f.tplErr, f.echo = tc.code, true })
+			result, err := h.srv.ProbeWxReview(context.Background(), "ADMIN", tc.dry)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v", err)
+			}
+			if tpl, kf := h.wb.sent(); tpl != tc.wantSent || kf != 0 || len(h.wb.sub) != 0 || result.Sent != (tc.wantSent == 1) {
+				t.Fatalf("unexpected delivery: %+v", result)
+			}
+			if tc.wantSent == 1 {
+				if result.Template != h.srv.WxGW.TplReview || result.Fields["thing3"] != "【测试】审批结果通知" || result.Fields["character_string14"] != "review-probe" {
+					t.Fatalf("wrong review payload: %+v", result)
+				}
+			}
+			b, _ := json.Marshal(result)
+			for _, private := range []string{"private-openid", "gate-secret", "wxtok-"} {
+				if strings.Contains(string(b), private) || (err != nil && strings.Contains(err.Error(), private)) {
+					t.Fatal("probe leaked private data")
+				}
+			}
+		})
+	}
+}
