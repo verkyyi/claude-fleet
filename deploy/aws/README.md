@@ -204,6 +204,42 @@ running after 30 minutes is cancelled). BREAK-IT `train-aws-ssm-fails`.
 
 ### Repo variables
 
+To change Tokenman's WeChat application notifications, first deploy a hub that
+supports `ccquota hub --probe-wx-newreq`, then run **Actions → hub-wx-notify →
+Run workflow** on `master`. Supply the registered category 1273 template 61558
+ID, `thing1=platform,thing2=person,time4=time`, the registered one-time 30803
+subscription ID, and one existing administrator's GitHub login. The administrator
+must have a followed service-account identity. This sends one labelled test.
+
+The workflow uses the same `prod` OIDC role, instance and production concurrency
+lane as hub-deploy. It calls `bin/fleet-hub-aws-deploy.sh wx-notify`; no local AWS
+keys are needed. The embedded `fleet-wx-config.py` first checks the live binary,
+recipient, registered template fields and JS-SDK ticket without sending. It then
+backs up `/etc/fleet-core/secrets/site.env` in a mode-0700 `wx-notify-backup-*`
+directory on the same host (file mode 0600), and atomically changes only:
+
+- `CCQUOTA_WX_TPL_NEWREQ`
+- `CCQUOTA_WX_TPL_NEWREQ_FIELDS`
+- `CCQUOTA_WX_SUB_REVIEW`
+
+It runs `bootstrap.sh apply`, explicitly restarts the hub (Secret env changes
+alone do not restart pods), waits for the old pods to disappear, and verifies
+all current pods use the requested values. Finally it sends one real new-request
+template message through the existing gateway. Success prints a receipt with
+`sent: true` and `errcode: 0`. Failures restore the original file, apply/restart
+again and verify the original live values; a failed rollback is explicitly red.
+Backups stay on the box; neither site.env nor credentials enter job logs or
+artifacts. Do not hard-cancel a running transaction: forced termination or host
+loss can interrupt rollback; use the retained backup on that host to recover.
+
+The role needs the same `ssm:SendCommand` permission on the target instance and
+`AWS-RunShellScript` document, plus `ssm:GetCommandInvocation` and
+`ssm:CancelCommand` on `*` as below. `ec2:DescribeInstances` is needed only when
+`AWS_BOX_INSTANCE_ID` is unset. It does not need Secrets Manager or Parameter
+Store reads for this change. A valid SDK ticket does **not** prove the public
+platform's JS-SDK domain registration: confirm the domain used by `/apply` in
+the platform and exercise “审批结果通知我” inside WeChat separately.
+
 | Variable | Value |
 |---|---|
 | `FLEET_HUB_TARGET` | `aws-k3s` (the switch; unset = ACK) |
