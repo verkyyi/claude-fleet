@@ -152,7 +152,7 @@ class H(BaseHTTPRequestHandler):
         if via == "direct-anthropic":
             if has("region-direct"):
                 return self.reply(403, {"type": "error", "error": {"type": "forbidden", "message": "Request not allowed"}})
-            # accts.json {token: {"u7": %, "full": bool}}: each account's windows on every
+            # accts.json {token: {"u7": %, "full": bool, "no5h": bool}}: each account's windows on every
             # answer, and a quota 429 from a full one (issue #2412's drills)
             tok = h.get("authorization", "")[7:]
             a = json.load(open(os.path.join(D, "accts.json"))).get(tok) if has("accts.json") else None
@@ -161,6 +161,8 @@ class H(BaseHTTPRequestHandler):
                 rl = {"anthropic-ratelimit-unified-5h-utilization": "0.1",
                       "anthropic-ratelimit-unified-7d-utilization": str(a["u7"] / 100.0),
                       "anthropic-ratelimit-unified-7d-reset": str(now + 86400)}
+                if a.get("no5h"):   # an account with no 5-hour cap (Ultra): the weekly window only
+                    del rl["anthropic-ratelimit-unified-5h-utilization"]
                 if a.get("full"):
                     rl["anthropic-ratelimit-unified-status"] = "rejected"
                     rl["anthropic-ratelimit-unified-reset"] = str(now + 86400)
