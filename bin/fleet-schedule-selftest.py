@@ -141,6 +141,16 @@ class RunnerTests(unittest.TestCase):
         for agent in ('', 'claude', 'codex'):
             with self.subTest(agent=agent):self.check_replay(agent)
 
+    def test_mark_over_writes_the_ids_result(self):
+        from unittest.mock import patch
+        run=module('fleet_schedule_run')
+        with patch.object(run.subprocess,'run') as sp:
+            run.mark_over('','x');sp.assert_not_called()
+            run.mark_over('fid-1','done')
+            argv=sp.call_args.args[0]
+            self.assertTrue(argv[0].endswith('fleet-id.sh'))
+            self.assertEqual(argv[1:],['result','fid-1','--state','succeeded','--summary','done'])
+
     def test_run_title_is_readable(self):
         run=module('fleet_schedule_run')
         t=1793350000  # 2026-10-30 Asia/Shanghai
@@ -176,9 +186,10 @@ class RunnerTests(unittest.TestCase):
                 if path=='finish' and fail[0]:raise run.Unreachable('offline')
                 return {'run':{'id':'one','state':'running','started':time.time()}}
             spawn=Mock(return_value=subprocess.CompletedProcess([],0,'@1\tname\t\tfid\n',''))
-            with patch.dict(os.environ,env),patch.object(run.Path,'home',return_value=home),patch.object(run,'http',side_effect=http),patch.object(run,'attempt_window',return_value=''),patch.object(run.subprocess,'run',spawn),patch.object(run,'native',return_value={'fid':'fid','sid':'sid','state':'idle','path':'p'}),patch.object(run,'conclusion',return_value='the final answer'),patch.object(run,'busy',return_value=False),patch.object(run,'tmux',return_value='') as stamp:
+            with patch.dict(os.environ,env),patch.object(run.Path,'home',return_value=home),patch.object(run,'http',side_effect=http),patch.object(run,'attempt_window',return_value=''),patch.object(run.subprocess,'run',spawn),patch.object(run,'native',return_value={'fid':'fid','sid':'sid','state':'idle','path':'p'}),patch.object(run,'conclusion',return_value='the final answer'),patch.object(run,'busy',return_value=False),patch.object(run,'mark_over') as over,patch.object(run,'tmux',return_value='') as stamp:
                 with self.assertRaises(run.Unreachable):run.run()
                 self.assertEqual(spawn.call_count,1)
+                over.assert_called_once_with('fid','the final answer')  # its window can close (done:15m)
                 stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_id','schedule-a')
                 stamp.assert_any_call('test','set-option','-w','-t','@1','@schedule_run_id','one')
                 key=hashlib.sha256(b'schedule-a:manual-one:1').hexdigest()[:24]
@@ -193,5 +204,6 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(run.run(),0)
                 self.assertEqual(spawn.call_count,1)
                 self.assertEqual(calls,['admit','finish','finish'])
+                over.assert_called_once()  # a replayed upload does not write the result twice
 
 if __name__ == '__main__': unittest.main()

@@ -137,6 +137,15 @@ def attempt_window(session,name,rec):
     if len(matches)>1:raise ValueError('ambiguous attempt session')
     return next(iter(matches),'')
 
+def mark_over(fid,summary):
+    """The run's own ID says its work is over (fleet-id.sh result, T680): the
+    session never reports itself, so without this its window reads 'unreported'
+    to the reaper and stays in the list long after its done:15m. Best effort."""
+    if not fid:return
+    try:subprocess.run([str(BIN/'fleet-id.sh'),'result',fid,'--state','succeeded','--summary',summary[:2000]],
+                       stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=60)
+    except (OSError,subprocess.SubprocessError):pass
+
 def busy(session,wid):
     loop=tmux(session,'display-message','-p','-t',wid,'#{@loop}')
     if loop:
@@ -225,6 +234,7 @@ def run():
         result={'run_id':ans['id'],'state':'succeeded' if summary else 'failed','summary':summary[:32000],
                 'error':why or ('' if summary else 'no final answer'),'session_id':rec.get('fid','')}
         rec['result']=result;atomic(local,rec)
+        if summary:mark_over(rec.get('fid',''),summary)
         http('finish',result)
         print('schedule: '+result['state']+' — '+(summary.splitlines()[-1][:160] if summary else result['error']))
         return 0 if summary else 13
