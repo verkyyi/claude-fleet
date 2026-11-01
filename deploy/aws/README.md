@@ -215,7 +215,7 @@ The workflow uses the same `prod` OIDC role, instance and production concurrency
 lane as hub-deploy. It calls `bin/fleet-hub-aws-deploy.sh wx-notify`; no local AWS
 keys are needed. The embedded `fleet-wx-config.py` first checks the live binary,
 recipient, registered template fields and JS-SDK ticket without sending. It then
-backs up `/etc/fleet-core/secrets/site.env` in a mode-0700 `wx-notify-backup-*`
+backs up `$SECRETS_DIR/site.env` (default `/etc/fleet-core/secrets/site.env`) in a mode-0700 `wx-notify-backup-*`
 directory on the same host (file mode 0600), and atomically changes only:
 
 - `CCQUOTA_WX_TPL_NEWREQ`
@@ -241,6 +241,9 @@ The inspection also identifies explicit Deployment env keys and compares each
 key separately. A missing site.env key may inherit a ConfigMap value; rollback
 therefore checks the effective values captured from all pods before mutation,
 not just values present in the file. Disagreeing starting pods refuse a rollout.
+The helper resolves `SECRETS_DIR` from the same root-owned `deploy.env` that
+bootstrap sources, and inspection reports that resolved path. Changing a file
+under the default path has no effect when bootstrap uses another directory.
 
 The role needs the same `ssm:SendCommand` permission on the target instance and
 `AWS-RunShellScript` document, plus `ssm:GetCommandInvocation` and
