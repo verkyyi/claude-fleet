@@ -388,7 +388,7 @@ run s1 s2
 grep -q 'rc=75' "$WORK/log" || fail 'rate limit stop must be visible'
 [ "$(wc -l < "$WORK/idle-calls" | tr -d ' ')" = 1 ] || fail 'rate limit must stop before the second fleet'
 
-# T1253) a closed disk gate stops the reaps, never the park pass: mini2 sat a day
+# T1253) a closed disk gate stops the reaps, never the park pass: one machine sat a day
 # and a half under the floor with 20+ finished agents still running.
 rm -f "$WORK/idle-rate"
 : > "$WORK/idle-calls"

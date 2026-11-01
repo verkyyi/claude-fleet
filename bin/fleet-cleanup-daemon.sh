@@ -467,7 +467,7 @@ EOF
 # --- a closed disk gate still parks (task T1253) -------------------------------------
 # Parking ends an idle agent's process in its own window: no worktree teardown, no
 # base pull, a few KB of screen. A gate that stayed closed for a day and a half on
-# mini2 (8 GB < 12 GB) left 20+ finished agents running — the very memory a full
+# one machine (8 GB < 12 GB) left 20+ finished agents running — the very memory a full
 # box needs back. So a closed gate stops the reaps above, never the park pass.
 park_fleet() { (
   sess="$1"
