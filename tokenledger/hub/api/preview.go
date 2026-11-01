@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +23,6 @@ import (
 
 const previewCookie = "__Host-fleet-preview"
 const previewStateCookie = "__Host-fleet-preview-state"
-const previewNextCookie = "__Host-fleet-preview-next"
 const previewCallback = "/.fleet-preview/callback"
 const previewAuthorize = "/preview/authorize"
 const previewAPI = "/v1/fleet/previews"
@@ -175,36 +173,6 @@ func (s *Server) previewSessionOK(hash string, p store.Preview, now time.Time) b
 func previewSetCookie(w http.ResponseWriter, name, value string, max int) {
 	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/", Secure: true, HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: max})
 }
-
-// previewNext is the same-origin path+query a sign-in returns to. Only a
-// rooted path on this preview host is accepted: no scheme, no host, no
-// protocol-relative "//", no backslash or control bytes, never the callback.
-func previewNext(v string) string {
-	if len(v) == 0 || len(v) > 2048 || v[0] != '/' || strings.HasPrefix(v, "//") {
-		return ""
-	}
-	for i := 0; i < len(v); i++ {
-		if v[i] < 0x21 || v[i] == 0x7f || v[i] == '\\' {
-			return ""
-		}
-	}
-	u, e := url.Parse(v)
-	if e != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Path == previewCallback {
-		return ""
-	}
-	return v
-}
-func previewNextFrom(r *http.Request) string {
-	c, e := r.Cookie(previewNextCookie)
-	if e != nil {
-		return "/"
-	}
-	b, e := base64.RawURLEncoding.DecodeString(c.Value)
-	if next := previewNext(string(b)); e == nil && next != "" {
-		return next
-	}
-	return "/"
-}
 func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, id string) {
 	now := time.Now()
 	p, e := s.Store.Preview(id, now)
@@ -230,9 +198,7 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, id string)
 		}
 		previewSetCookie(w, previewCookie, session, 7200)
 		previewSetCookie(w, previewStateCookie, "", -1)
-		next := previewNextFrom(r)
-		previewSetCookie(w, previewNextCookie, "", -1)
-		http.Redirect(w, r, next, http.StatusSeeOther)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 	c, e := r.Cookie(previewCookie)
@@ -247,12 +213,6 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, id string)
 			return
 		}
 		previewSetCookie(w, previewStateCookie, state, int(store.PreviewAuthTTL.Seconds()))
-		// Remember the deep link the sign-in interrupted, on this host only.
-		// A bare "/" keeps an earlier one: the expired-state restart lands on
-		// "/" and must still return the person to the page they asked for.
-		if next := previewNext(r.URL.RequestURI()); next != "" && next != "/" {
-			previewSetCookie(w, previewNextCookie, base64.RawURLEncoding.EncodeToString([]byte(next)), int(store.PreviewAuthTTL.Seconds()))
-		}
 		http.Redirect(w, r, strings.TrimRight(s.FleetPublicURL, "/")+previewAuthorize+"?preview="+id+"&state="+state, http.StatusFound)
 		return
 	}

@@ -74,12 +74,6 @@ try {
 
   await page.goto('http://127.0.0.1:18964/app/studio?profile=bc&project=new-bc');
   await page.getByTestId('bubble-cloud-studio').waitFor();
-  // chat and canvas first: config and script / publish start closed and open from the header
-  assert.equal(await page.getByRole('region', {name:'配置'}).count(), 0, 'config hidden by default');
-  assert.equal(await page.getByRole('complementary', {name:'讲稿与发布'}).count(), 0, 'side panel hidden by default');
-  if (shots) await page.screenshot({path:`${shots}/bc-1440-focus.png`});
-  await page.getByRole('button', {name:'配置', exact:true}).click();
-  await page.getByRole('button', {name:/^讲稿与发布/}).click();
   await page.getByText('方案 Agent 在线', {exact:true}).waitFor({timeout:10000});
   for (const name of ['配置', '与 Agent 对话', '画布', '讲稿与发布']) assert.ok(await page.getByRole('region', {name}).or(page.getByRole('complementary', {name})).isVisible(), name);
   await page.getByText('This arch greets 300 guests.').waitFor();

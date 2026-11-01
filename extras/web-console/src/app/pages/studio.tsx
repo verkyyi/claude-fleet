@@ -259,13 +259,6 @@ function BubbleCloudStudio(p: BcProps) {
   const [canvas, setCanvas] = useState("deck");
   const [slideAsk, setSlideAsk] = useState({ slide: "1", text: "" });
   const [sent, setSent] = useState("");
-  // The chat and the canvas are the work; the config and the script / publish panels open on demand
-  // (remembered per browser). The publish confirmation opens the right panel by itself.
-  const [panels, setPanels] = useState<{ config: boolean; side: boolean }>(() => {
-    try { return { config: false, side: false, ...JSON.parse(localStorage.getItem("bc-panels") || "{}") }; } catch { return { config: false, side: false }; }
-  });
-  const toggle = (k: "config" | "side") => setPanels(x => { const n = { ...x, [k]: !x[k] }; try { localStorage.setItem("bc-panels", JSON.stringify(n)); } catch { /* storage off */ } return n; });
-  const cols = [panels.config ? "300px" : "", "minmax(340px,0.8fr)", "minmax(520px,1.9fr)", panels.side ? "300px" : ""].filter(Boolean).join(" ");
   const clientName = (id?: string) => bcState?.config.clients.find(c => c.id === id)?.name || "";
   if (!p.loaded) return <div role="status" className="p-6 text-sm">{syncError ? "暂时连不上家机器，正在重新连接；项目和版本会保留。" : "正在恢复工作台…"}</div>;
   return <div className="flex h-full min-h-0 flex-col bg-background" data-testid="bubble-cloud-studio">
@@ -275,19 +268,17 @@ function BubbleCloudStudio(p: BcProps) {
       <label className="min-w-0 flex-1 sm:max-w-80"><span className="sr-only">方案</span>
         <select aria-label="方案" className="h-9 w-full rounded-lg border bg-background px-2 text-sm" value={session?.key || ""} onChange={e => p.nav({ project: e.target.value })}>
           <option value="">选择一份方案</option>{sessions.map(s => <option key={s.key} value={s.key}>{s.title || clientName(s.client) || s.key}</option>)}</select></label>
-      <Button variant={panels.config ? "secondary" : "ghost"} size="sm" aria-pressed={panels.config} onClick={() => toggle("config")}>配置</Button>
-      <Button variant={panels.side ? "secondary" : "ghost"} size="sm" aria-pressed={panels.side} onClick={() => toggle("side")}>讲稿与发布{version?.status === "hold" ? " ·待发" : ""}</Button>
       <Button variant="outline" size="sm" onClick={() => p.nav({ project: "" })}><Plus className="size-4" />新方案</Button>
       <Link to="/studio" className="text-xs text-muted-foreground underline">增长运营 Agent</Link>
     </header>
     {error || syncError || bcError ? <div role="alert" className="border-b bg-destructive/5 px-4 py-2 text-sm text-destructive">{error || syncError || bcError}{retry ? <button className="ml-3 underline" disabled={busy} onClick={() => void p.send(retry)}>重试同一操作</button> : null}</div> : null}
     {notice || sent ? <p role="status" className="border-b px-4 py-2 text-xs text-muted-foreground">{notice || sent}</p> : null}
     <div className="p-6 text-sm xl:hidden" role="status">方案工作台只做了电脑版，请在宽度 1280 以上的电脑浏览器里打开。发给客户的 Deck 在手机上照常能看。</div>
-    <div className="hidden min-h-0 flex-1 xl:grid" style={{ gridTemplateColumns: cols }}>
-      {panels.config ? <section aria-label="配置" className="flex min-h-0 flex-col border-r">
+    <div className="hidden min-h-0 flex-1 xl:grid xl:grid-cols-[300px_minmax(320px,0.85fr)_minmax(460px,1.7fr)_300px]">
+      <section aria-label="配置" className="flex min-h-0 flex-col border-r">
         <div className="flex h-11 shrink-0 items-center border-b px-3 text-sm font-medium">配置</div>
         <BcConfigPanel bcState={bcState} reload={read} busy={busy} onNew={(client, template) => void p.open(undefined, undefined, false, { client, template })} />
-      </section> : null}
+      </section>
       <section aria-label="与 Agent 对话" className="flex min-h-0 flex-col border-r">
         <div className="flex h-11 shrink-0 items-center justify-between border-b px-3 text-sm"><span className="font-medium">对话</span>
           {session ? <span className="text-xs text-muted-foreground">{clientName(session.client) ? `${clientName(session.client)} · ` : ""}{session.agent === "codex" ? "Codex" : "Claude Code"} · <Link className="underline" to={`/s/${encodeURIComponent(worker || "fid:" + session.fid)}`}>会话详情</Link></span>
@@ -295,7 +286,7 @@ function BubbleCloudStudio(p: BcProps) {
         </div>
         <div className="min-h-0 flex-1">{session ? (worker ? <ChatThread source={{ kind: "session", worker, machine: row?.live?.machine || row?.board?.machine || "", key: session.key, agent: session.agent }} />
           : <div className="p-5 text-sm text-muted-foreground" role="status">正在连接会话…</div>) : <div className="flex h-full flex-col gap-4 overflow-auto p-5">
-          <div className="pt-4"><p className="text-lg font-semibold">新建一份方案</p><p className="mt-2 text-sm leading-6 text-muted-foreground">点右上「配置」→「客户」选一张客户卡新建，或直接写需求。Agent 读公司资料、客户卡和模板，出 13 页英文 Deck、每页讲稿和中文内部说明；每次改动先存待发版本。</p></div>
+          <div className="pt-4"><p className="text-lg font-semibold">新建一份方案</p><p className="mt-2 text-sm leading-6 text-muted-foreground">左边「客户」里选一张客户卡点「用这个客户新建方案」，或直接写需求。Agent 读公司资料、客户卡和模板，出 13 页英文 Deck、每页讲稿和中文内部说明；每次改动先存待发版本。</p></div>
           <div className="mt-auto rounded-xl border p-2"><Textarea aria-label="需求" placeholder="例：给 Google 湾区办公室做年终派对方案，12/14，约 300 人，主题 Winter Wonderland…" value={p.draft} onChange={e => p.setDraft(e.target.value)} className="min-h-28 resize-none border-0 shadow-none" />
             <div className="flex justify-end"><Button disabled={busy || !p.draft.trim()} onClick={() => void p.open()}><ArrowUp className="size-4" />{busy ? "正在开始…" : "开始"}</Button></div></div>
         </div>}</div>
@@ -322,7 +313,7 @@ function BubbleCloudStudio(p: BcProps) {
           </div> : null}
         </> : session ? <BcImageBench proposal={proposal} bcState={bcState} reload={read} say={p.say} /> : <p className="p-6 text-sm text-muted-foreground">先新建或选择一份方案，效果图按方案归档。</p>}
       </section>
-      {panels.side ? <aside aria-label="讲稿与发布" className="flex min-h-0 flex-col overflow-y-auto">
+      <aside aria-label="讲稿与发布" className="flex min-h-0 flex-col overflow-y-auto">
         <div className="flex h-11 shrink-0 items-center border-b px-3 text-sm font-medium">讲稿与发布</div>
         <div className="space-y-5 p-3">
           <div className="space-y-2"><h2 className="text-sm font-semibold">讲稿</h2><BcScripts scripts={version?.scripts || []} say={p.say} /></div>
@@ -335,7 +326,7 @@ function BubbleCloudStudio(p: BcProps) {
           <div className="space-y-2 border-t pt-3"><h2 className="text-sm font-semibold">链接</h2>{session?.url ? <a href={session.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 break-all text-xs text-clay">打开正式链接<ExternalLink className="size-3" /></a> : <p className="text-xs text-muted-foreground">尚未读取</p>}{session?.url ? <PageQR url={session.url} /> : null}<Button size="sm" variant="outline" disabled={!p.canAct} onClick={() => p.action("links")}>读取链接与二维码</Button></div>
           <div className="space-y-2 border-t pt-3"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold">客户阅读</h2><Button size="icon" variant="ghost" aria-label="刷新阅读" disabled={!p.canAct} onClick={() => p.action("analytics")}><RefreshCw className="size-3.5" /></Button></div><p className="whitespace-pre-wrap text-xs leading-5 text-muted-foreground">{session?.analytics?.summary || "尚未读取，不代表为零"}</p></div>
         </div>
-      </aside> : null}
+      </aside>
     </div>
     <AlertDialog open={!!p.confirmation} onOpenChange={o => { if (!o) p.setConfirmation(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{p.confirmation ? `确认${LABEL[p.confirmation.action]}` : "确认操作"}</AlertDialogTitle><AlertDialogDescription>{p.confirmation?.action === "publish" ? `将当前预览版本（${p.confirmation.version_id}）发给客户可见。其它待发版本不会发布。` : `将这份方案改为「${p.visibility === "public" ? "公开，任何人可访问" : p.visibility === "passcode" ? "口令访问" : "仅自己"}」。`}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => { if (p.confirmation) void p.send(p.confirmation); p.setConfirmation(null); }}>确认执行</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </div>;
