@@ -131,6 +131,10 @@ the hub's credentials.
   HTTP warm forwarder (`hub.sock`); the node token remains inside the broker.
   A 426 with an empty `Connection` header on this route means the broker must
   be updated, even if a direct public-hub WebSocket succeeds (T1270).
+  On the hub, the ownership gate names a machine and login; the SSH stream
+  uses a capable connection of that login. A pod's management connection may
+  share its login name but cannot carry SSH, so its roster row must not hide
+  the tenant's usable connection. Other logins are never substituted.
 - **Probe**: `fleet-node-probe.sh` hands each new verdict to the proxy (`probe`).
 - **Control socket**: `/var/run/fleet-cred/<login>/ctl.sock`, mode 0666, and
   the proxy answers ONE peer uid (`LOCAL_PEERCRED` / `SO_PEERCRED`): the login's

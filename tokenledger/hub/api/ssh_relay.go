@@ -367,14 +367,10 @@ func (s *Server) handleSSHRelayConnect(w http.ResponseWriter, r *http.Request) {
 
 	epID, nc, err := s.sshRelayNode(id, host)
 	if peerTarget != nil {
-		// Never substitute a sibling login's agent for the authorized one.
-		epID, nc = peerTarget.EndpointID, s.nodes.get(peerTarget.EndpointID)
-		err = nil
-		if nc == nil || nc.hostname() != host || nc.user() != peerTarget.OSUser ||
-			!nc.canSSHRelay || !control.Compatible(int(nc.proto.Load())) ||
-			(s.podBehindDoor(host) && !nc.canPodRelay) {
-			err = sshRelayRefusal("NODE_OFFLINE", "target login has no SSH relay to its own machine")
-		}
+		// Ownership resolves a machine/login, not a particular connection:
+		// a pod's machine lane can have the same login as its tenant but
+		// offers no SSH relay. Never substitute a different login.
+		epID, nc, err = s.peerSSHRelayNode(peerTarget.Hostname, peerTarget.OSUser)
 	}
 	if err != nil {
 		refuse(err)
@@ -585,6 +581,29 @@ func (s *Server) sshRelayNode(id sshRelayIdentity, host string) (string, *nodeCo
 	}
 	if best == "" {
 		return "", nil, sshRelayRefusal("NODE_OFFLINE", "no agent on %s is connected and able to relay", host)
+	}
+	return best, s.nodes.conns[best], nil
+}
+
+// peerSSHRelayNode selects a capable connection for the authorized login.
+// Multiple enrollments (including a pod's machine lane) may name that login;
+// peerTarget's first roster row is not necessarily the one carrying SSH.
+func (s *Server) peerSSHRelayNode(host, login string) (string, *nodeConn, error) {
+	pod := s.podBehindDoor(host)
+	s.nodes.mu.Lock()
+	defer s.nodes.mu.Unlock()
+	var best string
+	for epID, c := range s.nodes.conns {
+		if c.hostname() != host || c.user() != login || !c.canSSHRelay ||
+			!control.Compatible(int(c.proto.Load())) || (pod && !c.canPodRelay) {
+			continue
+		}
+		if best == "" || epID < best {
+			best = epID
+		}
+	}
+	if best == "" {
+		return "", nil, sshRelayRefusal("NODE_OFFLINE", "target login has no SSH relay to its own machine")
 	}
 	return best, s.nodes.conns[best], nil
 }
