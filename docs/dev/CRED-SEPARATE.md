@@ -125,6 +125,12 @@ the hub's credentials.
   never forwards `POST /v1/node/credentials` (in any spelling): a session can
   place and move, it cannot lease the pool (EPIC route ④). fleet-mcp's worker
   assertion asks the proxy for the token's hash (`node-hash`) instead.
+  Pod peer links use the same broker at `/hub/v1/node/peer-relay`: after the
+  credential and path checks, it forwards an HTTP/1.1 WebSocket upgrade and
+  carries the 101 stream in both directions. This stream skips the ordinary
+  HTTP warm forwarder (`hub.sock`); the node token remains inside the broker.
+  A 426 with an empty `Connection` header on this route means the broker must
+  be updated, even if a direct public-hub WebSocket succeeds (T1270).
 - **Probe**: `fleet-node-probe.sh` hands each new verdict to the proxy (`probe`).
 - **Control socket**: `/var/run/fleet-cred/<login>/ctl.sock`, mode 0666, and
   the proxy answers ONE peer uid (`LOCAL_PEERCRED` / `SO_PEERCRED`): the login's

@@ -614,6 +614,16 @@ EOF
   WHAT="sudo 下照提示敲 install：凭据进的是登录 ${me} 自己的存储，不是 root 的；root 没 SUDO_USER 又没 --login 直接拒"
 }
 
+drill_cred_peer_websocket() {
+  CAP=15
+  local t0 out rc
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cred-proxy-websocket-selftest.py" 2>&1); rc=$?
+  SECS=$(since "$t0")
+  [ "$rc" = 0 ] || { WHY="broker WebSocket: $out"; return 1; }
+  WHAT="隔离登录经 broker 升级、双向字节、空闲与断连；鉴权和凭据池拒绝照旧"
+}
+
 # ================================================================ run ===========
 # cred_run_drills <file> — every drill_* in <file>, each checked for its row.
 # BREAK_PART=K/N (unset = all) runs the K-th of N contiguous slices of them, in the

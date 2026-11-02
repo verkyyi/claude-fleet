@@ -2746,9 +2746,18 @@ class Proxy(BaseHTTPRequestHandler):
             return self.fail(403, "hub URL %s refused: %s" % (hub, why), "permission_error")
         out = {k: v for k, v in self.headers.items() if k.lower() not in HOP and k.lower() != "authorization"}
         out["Authorization"] = "Bearer " + ntok
+        # T1270: the peer relay is a WebSocket, including on a separated
+        # login. Rebuild only the upgrade headers after the broker's existing
+        # identity/path checks; the node credential stays inside this process.
+        websocket = (self.command == "GET" and body is None
+                     and inbound.get("upgrade", "").lower() == "websocket"
+                     and "upgrade" in [v.strip().lower() for v in inbound.get("connection", "").split(",")])
+        if websocket:
+            out["Connection"], out["Upgrade"] = "Upgrade", "websocket"
         # the warm road (T672): only for a remote https hub, named as the
-        # forwarder knows it (before any in-cluster dial)
-        fs = hub_fwd_sock()
+        # forwarder knows it (before any in-cluster dial). That forwarder
+        # deliberately carries ordinary HTTP only, never an upgrade.
+        fs = None if websocket else hub_fwd_sock()
         self.hub_fwd = (fs, hub) if fs and (hub.startswith("https://") or env("CCQUOTA_HUB_SOCK")) else None
         hub = hub_dial(hub)
         self.upstream(hub, urlsplit(hub).path.rstrip("/") + path, out, body, "hub", "node", "-", "node",
@@ -2961,6 +2970,52 @@ class Proxy(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def hub_websocket(self, conn, response):
+        """101 changes framing: raw, full-duplex bytes, never HTTP chunks.
+
+        Keep the HTTP readers: either may already hold the first frame. A
+        closed peer shuts down both sockets to wake the other copy thread.
+        """
+        self.close_connection = True
+        upstream = conn.sock
+        try:
+            upstream.settimeout(None)
+            self.connection.settimeout(None)
+            self.send_response_only(101, response.reason)
+            for k, v in response.getheaders():
+                if k.lower() not in HOP:
+                    self.send_header(k, v)
+            self.send_header("Connection", "Upgrade")
+            self.send_header("Upgrade", "websocket")
+            self.end_headers()
+            self.wfile.flush()
+
+            def copy(reader, dest):
+                try:
+                    while True:
+                        data = reader.read1(65536)
+                        if not data:
+                            break
+                        dest.sendall(data)
+                except OSError:
+                    pass
+                finally:
+                    for sock in (upstream, self.connection):
+                        try:
+                            sock.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+
+            upload = threading.Thread(target=copy, args=(self.rfile, upstream), daemon=True)
+            upload.start()
+            copy(response.fp, self.connection)
+            upload.join()
+        except OSError:
+            pass  # the client may leave while its 101 is being written
+        finally:
+            response.close()
+            conn.close()
+
     def upstream(self, base, upath, out, body, route, sid, acct, cred, seen, t0, provider, can_switch, tried=()):
         """Send one request. None = answered (the response went to the client);
         a reason string = switch routes (only when can_switch). On the LAST
@@ -3020,6 +3075,21 @@ class Proxy(BaseHTTPRequestHandler):
             return None
         ttfb = time.time() - t0
         self.ustat(route, acct, sid, up_status_class(r.status), t1, r.status)
+        if r.status == 101:
+            # Do not turn an unsolicited or malformed upstream 101 into a
+            # tunnel. The ordinary broker refusal path below stays HTTP.
+            key = next((v for k, v in out.items() if k.lower() == "sec-websocket-key"), "")
+            accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+            if (provider != "hub" or out.get("Upgrade") != "websocket" or not key
+                    or r.getheader("Upgrade", "").lower() != "websocket"
+                    or "upgrade" not in [v.strip().lower() for v in r.getheader("Connection", "").split(",")]
+                    or r.getheader("Sec-WebSocket-Accept") != accept):
+                r.close()
+                conn.close()
+                return self.fail(502, "invalid upstream WebSocket upgrade", "api_error")
+            self.log(ev="fwd", sid=sid, route=route, provider=provider, m=self.command,
+                     path=self.path.split("?")[0], status=101, ttfb_ms=int(ttfb * 1000))
+            return self.hub_websocket(conn, r)
         if provider in ("claude", "codex"):
             self.t.note_quota(sid, provider, acct, route, r.getheaders())
         first = b""
