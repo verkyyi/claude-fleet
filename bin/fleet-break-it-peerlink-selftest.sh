@@ -608,4 +608,16 @@ PY
   WHAT="容器的 jump 路线不再把入口当成容器 sshd；常开连接经节点间中转，保留短期证书、目标密钥与登录"
 }
 
+drill_peerlink_relay_endpoint() {
+  CAP=30
+  local t0
+  t0=$(now)
+  grep -q '^func TestPeerRelaySkipsNonRelayEndpoint(' "$ROOT/tokenledger/hub/api/fleet_peer_relay_test.go" \
+    || { WHY="the two-endpoint regression test is missing"; return 1; }
+  go_half '^TestPeerRelay(SkipsNonRelayEndpoint|OwnerGate|StreamTargetsOwnerLogin)$' ./hub/api
+  case $? in 1) return 1 ;; esac
+  SECS=$(since "$t0")
+  WHAT="同登录的非 relay 登记不挡住可用连接；其他登录仍拒绝（Go 门验证）"
+}
+
 cred_run_drills "$0"

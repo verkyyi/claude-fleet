@@ -31,6 +31,12 @@ func peerRelayDial(t *testing.T, h *harness, token, host string) (*websocket.Con
 
 func TestPeerRelayOwnerGate(t *testing.T) {
 	h, _, nodes := peerHarness(t)
+	// A capable sibling is not the authorized login's relay.
+	bob := nodes["bob4"]
+	bob.c.CloseNow()
+	bob.tnode = dialAdminCaps(t, h, bob.token, false, control.CapSSHRelay, control.CapPodRelay)
+	beat(t, bob.c, control.Proto, control.Heartbeat{Hostname: "mac-e-mac-c", OSUser: "bob"})
+	waitFor(t, 3*time.Second, "sibling relay ready", func() bool { return h.srv.podRelayReady("mac-e-mac-c") })
 	for _, tc := range []struct {
 		token, host string
 		status      int
@@ -60,8 +66,36 @@ func TestPeerRelayOwnerGate(t *testing.T) {
 }
 
 func TestPeerRelayStreamTargetsOwnerLogin(t *testing.T) {
+	testPeerRelayStream(t, false)
+}
+
+func TestPeerRelaySkipsNonRelayEndpoint(t *testing.T) {
+	testPeerRelayStream(t, true)
+}
+
+func testPeerRelayStream(t *testing.T, managementFirst bool) {
+	t.Helper()
 	h, _, nodes := peerHarness(t)
 	n := nodes["alice4"]
+	if managementFirst {
+		// A pod's machine connection and tenant lane have the same host
+		// and login. The older, non-relay endpoint wins peerTarget's row
+		// lookup, but only the tenant can carry the SSH stream.
+		management := n
+		n = connectNode(t, h, "alice4-relay", "mac-e-mac-c", "alice", false)
+		waitFor(t, 3*time.Second, "second endpoint on roster", func() bool {
+			row := h.srv.nodeRow(n.id)
+			return row != nil && row.Hostname == "mac-e-mac-c"
+		})
+		ep, err := h.srv.Store.EndpointByTokenHash(HashToken(nodes["alice5"].token))
+		if err != nil {
+			t.Fatal(err)
+		}
+		picked, err := h.srv.peerTarget(ep, "mac-e-mac-c")
+		if err != nil || picked.EndpointID != management.id {
+			t.Fatalf("fixture must resolve the non-relay row first: %+v %v", picked, err)
+		}
+	}
 	// Reconnect with the actual capability negotiation, rather than mutating
 	// the server's connection flags under its reader.
 	n.c.CloseNow()
