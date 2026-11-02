@@ -49,6 +49,8 @@ curl -fsSL https://hub.example.com/i/<邀请码> | sh
 
 浏览器的 **⌘P / Ctrl+P** 仍是打印，**⌘W / Ctrl+W** 仍是关闭标签页。需要原生 Agent 的终端交互、端口转发、文件传送或本地登录回调时，使用 iTerm2 等本地终端。
 
+网页新会话会根据家机器支持的助手提供选项：仅支持 Codex 的托管机器会把 Claude 置灰并说明原因，默认用 Codex 打开。旧页面仍提交 Claude 时，入口会改用 Codex，并提示「这台托管机器只能用 Codex，已用 Codex 打开」。DeepSeek 仍按可用模型在对应区域启动。
+
 ## 下一步
 
 网页里的 Claude 会话用完订阅额度后，会在能安全交接时自动换 Codex 接着做，并显示一句提示。

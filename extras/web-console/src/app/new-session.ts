@@ -35,7 +35,24 @@ export function readChoice(raw: string | null, defaultAgent?: Agent): Choice {
 }
 
 // The home, as /v1/chat/home answers it.
-export type Home = { machine?: string; login?: string; state: string; why?: string; models?: ChatModel[] };
+export type Home = { machine?: string; login?: string; state: string; why?: string; models?: ChatModel[]; agents?: string[] | null };
+
+// Older hubs omit agents; an explicit empty list means none can run at home.
+export function agentsOf(home: Home | null): ("claude" | "codex")[] {
+  return (["claude", "codex"] as const).filter((a) => home?.agents == null || home.agents.includes(a));
+}
+export function chatPick(agent: "claude" | "codex", model: string, home: Home | null): string {
+  const pickedModel = fixModel(model, home);
+  if (pickedModel) return pickedModel;
+  const agents = agentsOf(home);
+  return agents.includes(agent) ? agent : agents.includes("codex") ? "codex" : agents[0] || "";
+}
+export function homeAgentWhy(home: Home | null): string {
+  const agents = agentsOf(home);
+  if (agents.length === 2) return "";
+  if (agents.length === 1 && agents[0] === "codex") return tr("这台托管机器只能用 Codex。", "This hosted machine only supports Codex.");
+  return tr("这台托管机器不支持置灰的助手。", "This hosted machine does not support the disabled assistants.");
+}
 
 // A model a chat may ask for besides its agent's own (task J7BN): DeepSeek,
 // the mainland region's — offered only when /v1/chat/home lists it (the person
