@@ -47,6 +47,8 @@ The separate **personal Shell** remains available at `/app/s/shell?view=term`. I
 
 **Cmd/Ctrl+P** still prints and **Cmd/Ctrl+W** still closes the browser tab. Use iTerm2 or another local terminal for native agent terminal interactions, port forwarding, file transfer and local sign-in callbacks.
 
+New web sessions offer the assistants supported by your home machine. On a Codex-only hosted machine, Claude is disabled with an explanation and the session opens with Codex. If an older page still requests Claude, the entry switches to Codex and includes a notice in the receipt. Available DeepSeek models continue to start in their designated region.
+
 ## Next
 
 When a web Claude session exhausts its subscription quota, it automatically

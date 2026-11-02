@@ -7792,6 +7792,12 @@ drill_chat_first_open_cold() {
 # the holder (chatRelayPeer) and a data half is handed on BEFORE it is verified
 # (claimedEndpoint). Go (hub/api + e2e chat_relay_replica_test.go: two replicas, a
 # front splitting the halves, a real signing agent), run when a toolchain is here.
+drill_chat_open_pod_provider() {
+  local t0; t0=$(now); CAP=180
+  term_go 'TestChatOpenPodProvider' './hub/api' 'Codex-only 家将显式、空和省略的 Claude 请求改为 Codex 并回执；正文保留，开放 Claude 的家不改，无可用 Codex 时拒绝；home 返回允许的 agents' || return 1
+  SECS=$(since "$t0")
+}
+
 drill_chat_pod_no_ensure() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/fleet-node-supervisor-selftest.py" U_OnDemand.test_pod_ensure >"$WORK/chat-pod.log" 2>&1 || {

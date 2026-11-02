@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -107,6 +108,8 @@ type ChatHome struct {
 	// (task J7BN: DeepSeek, the mainland region's — chat_open_region.go);
 	// absent when this person may not.
 	Models []ChatModel `json:"models,omitempty"`
+	// Agents are native providers allowed on this home, independently of Models.
+	Agents []string `json:"agents"`
 }
 
 // handleChatHome answers the person's home and whether a turn could reach it
@@ -141,7 +144,9 @@ func (s *Server) handleChatHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := ChatHome{Machine: home.Machine, Login: home.Login, State: "ok", Unified: unified, Models: s.chatModelsFor(person)}
+	out.Agents = []string{}
 	if settings, err := s.Store.FleetSettings(); err == nil {
+		out.Agents = s.chatHomeAgents(settings, home.Machine)
 		if _, flagged := maintenanceOf(home.Machine, settings); flagged {
 			out.State = "maintenance"
 		}
@@ -360,6 +365,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.chatRefuse(w, person, name, http.StatusForbidden, "forbidden", "X-Fleet-Webchat: 1 is required")
 		return
 	}
+	var openBody map[string]json.RawMessage
 	if name == "open" {
 		settings, err := s.Store.FleetSettings()
 		if err != nil {
@@ -378,6 +384,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		openBody = body
 		if model != "" {
 			s.chatOpenRegion(w, r, person, model, body)
 			return
@@ -440,6 +447,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.proxyRelay(w, r, peer, "a chat relay to "+where)
 		return
 	}
+	var openNotice string
+	if name == "open" {
+		var allowed bool
+		openNotice, allowed = s.chatOpenProvider(w, r, person, home.Machine, openBody)
+		if !allowed {
+			return
+		}
+	}
+
 	if settings, err := s.Store.FleetSettings(); err == nil {
 		if _, flagged := maintenanceOf(home.Machine, settings); flagged {
 			s.chatRefuse(w, person, name+" "+where, http.StatusServiceUnavailable, "home_down", "你的机器在维护中，现在连不上")
@@ -582,6 +598,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 			if (name == "open" || name == "studio/open") && resp.StatusCode == http.StatusOK {
 				s.chatOpenWorker(resp, home.Machine, home.Login)
+				chatOpenNotice(resp, openNotice)
 			}
 			if refund == nil {
 				return nil

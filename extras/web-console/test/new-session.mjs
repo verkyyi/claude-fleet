@@ -5,7 +5,7 @@
 // worker_start with or without words; the row it became is found by its key.
 // Run: node --experimental-strip-types test/new-session.mjs
 import assert from 'node:assert/strict';
-import { blocker, chatBlocker, fixChoice, fixModel, modelsOf, openBody, rowForOpen, machinesOf, readChoice, rowForRequest, sendsOnEnter, startArgs, targetOf } from '../src/app/new-session.ts';
+import { agentsOf, chatPick, homeAgentWhy, blocker, chatBlocker, fixChoice, fixModel, modelsOf, openBody, rowForOpen, machinesOf, readChoice, rowForRequest, sendsOnEnter, startArgs, targetOf } from '../src/app/new-session.ts';
 
 // the five, and nothing else
 const five = [['chat', 'claude'], ['chat', 'codex'], ['term', 'claude'], ['term', 'codex'], ['term', 'shell']];
@@ -119,3 +119,15 @@ assert.equal(chatBlocker({ state: 'no_home', models: ds }, 'deepseek'), '');
 assert.equal(chatBlocker({ machine: 'home-1', state: 'offline', models: ds }, 'deepseek-pro'), '');
 assert.ok(chatBlocker({ state: 'no_home' }, 'deepseek').length > 0, 'a model not offered is no way around the home');
 console.log('new-session: ok');
+
+// Home provider policy: stale/default Claude choices resolve to Codex, while
+// DeepSeek remains a separate regional choice even when native Claude is off.
+const pod = { machine: 'u-example', state: 'ok', agents: ['codex'] };
+assert.deepEqual(agentsOf(pod), ['codex']);
+assert.equal(chatPick('claude', '', pod), 'codex');
+assert.equal(chatPick('codex', '', pod), 'codex');
+assert.match(homeAgentWhy(pod), /Codex/);
+assert.deepEqual(agentsOf({ state: 'ok' }), ['claude', 'codex']);
+assert.equal(chatPick('claude', '', { state: 'ok', agents: [] }), '');
+assert.equal(chatPick('claude', 'deepseek', { ...pod, models: [{ id: 'deepseek', label: 'DeepSeek' }] }), 'deepseek');
+assert.equal(chatPick('claude', 'removed-model', pod), 'codex');

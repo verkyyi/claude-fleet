@@ -34,8 +34,8 @@ import { sessionPath, WEB_CHAT_PATH } from "./SessionList";
 import { shellPath } from "./legacy";
 import { CopyLine, useInstallLine } from "./cli";
 import {
-  CHOICE_KEY, chatBlocker, fixChoice, fixModel, modelsOf, openBody, readChoice, rowForOpen, sendsOnEnter, TOUCH_PRIMARY,
-  type Agent, type Choice, type Home, type Mode,
+  CHOICE_KEY, agentsOf, chatPick, homeAgentWhy, chatBlocker, fixChoice, fixModel, modelsOf, openBody, readChoice, rowForOpen, sendsOnEnter, TOUCH_PRIMARY,
+  type Choice, type Home, type Mode,
 } from "./new-session";
 import { useWorkRows } from "./work-rows";
 import { clockOpened } from "./start-clock";
@@ -44,9 +44,6 @@ import { clockOpened } from "./start-clock";
 // many times, this far apart, while the entry answers 502 relay
 const OPEN_RETRIES = 8;
 const OPEN_RETRY_MS = 10_000;
-
-// the model switch's "the agent's own" item (a ToggleGroup value cannot be "")
-const DEFAULT_MODEL = "default";
 
 const AGENT_NAME: Record<"claude" | "codex", string> = { claude: "Claude Code", codex: "Codex" };
 
@@ -62,11 +59,11 @@ function saveChoice(c: Choice) {
 }
 
 // 对话 | 终端, 「Claude Code | Codex」: one small segmented switch each
-const Seg: FC<{ value: string; items: [string, string][]; onChange: (v: string) => void; label: string; disabled?: boolean }> = ({ value, items, onChange, label, disabled }) => (
+const Seg: FC<{ value: string; items: [string, string][]; onChange: (v: string) => void; label: string; disabled?: boolean; disabledItems?: string[] }> = ({ value, items, onChange, label, disabled, disabledItems }) => (
   <ToggleGroup type="single" variant="outline" size="sm" value={value} onValueChange={(v) => v && onChange(v)} aria-label={label} disabled={disabled}
-    className="w-max">
+    className="w-fit max-w-full flex-wrap">
     {items.map(([v, words]) => (
-      <ToggleGroupItem key={v} value={v} className="data-[state=on]:bg-foreground data-[state=on]:text-background h-9 px-3.5 md:h-8">{words}</ToggleGroupItem>
+      <ToggleGroupItem key={v} value={v} disabled={disabledItems?.includes(v)} className="data-[state=on]:bg-foreground data-[state=on]:text-background h-9 px-3.5 md:h-8">{words}</ToggleGroupItem>
     ))}
   </ToggleGroup>
 );
@@ -122,14 +119,18 @@ export default function NewSession() {
   const [waiting, setWaiting] = useState<{ fid: string; worker: string; t0: number; openAt: number } | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
 
-  const agent: "claude" | "codex" = choice.agent === "codex" ? "codex" : "claude";
+  const chosenAgent = choice.agent === "codex" ? "codex" : "claude";
   // a model besides the agent's own (J7BN: DeepSeek, the mainland region's) —
   // offered only when the home read lists it; never remembered, "" by default
   const models = modelsOf(homeRead.data);
   const [modelPick, setModelPick] = useState("");
-  const model = agent === "claude" ? fixModel(modelPick, homeRead.data) : "";
+  const pick = chatPick(chosenAgent, modelPick, homeRead.data);
+  const agent = choice.mode === "term" ? chosenAgent : pick === "codex" ? "codex" : "claude";
+  const model = fixModel(pick, homeRead.data);
+  const agentWhy = homeAgentWhy(homeRead.data);
+  const unavailable = ["claude", "codex"].filter((a) => !agentsOf(homeRead.data).includes(a as "claude" | "codex"));
   const loading = homeRead.loading || defaults.loading || unified === null;
-  const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data, model);
+  const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data, model) || (!pick ? agentWhy : "");
   const canStart = !loading && !why && !busy && !waiting;
 
   // the session page's code fetched while the person types (task PNWW): after
@@ -206,9 +207,10 @@ export default function NewSession() {
         : tr(`没能开始：${j.error || (r ? `HTTP ${r.status}` : "连不上")}`, `Couldn't start it: ${j.error || (r ? `HTTP ${r.status}` : "offline")}`));
       return;
     }
+    if (typeof j.notice === "string" && j.notice) toast.info(j.notice);
     setWords("");
     const worker = String(j.worker || j.worker_id || "");
-    clockOpened(worker, t0, agent);
+    clockOpened(worker, t0, j.agent === "codex" || j.agent === "claude" ? j.agent : agent);
     // its own page reads it by its worker at once (task PNWW): no wait for the list
     if (worker) { reload(); go(`/s/${encodeURIComponent(worker)}`, { replace: true }); return; }
     setWaiting({ fid: String(j.fid || ""), worker, t0, openAt: Date.now() });
@@ -242,13 +244,13 @@ export default function NewSession() {
                   className="max-h-60 min-h-20 resize-none border-0 bg-transparent px-0 py-1.5 text-base shadow-none focus-visible:ring-0 dark:bg-transparent" />
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Seg value={agent} label={tr("选助手", "Pick the assistant")} disabled={!!viewAs || !!waiting}
-                      items={(["claude", "codex"] as Agent[]).map((a) => [a, AGENT_NAME[a as "claude" | "codex"]])} onChange={(v) => setChoice({ agent: v as Agent })} />
-                    {models.length > 0 && agent === "claude" ? (
-                      <Seg value={model || DEFAULT_MODEL} label={tr("选模型", "Pick the model")} disabled={!!viewAs || !!waiting}
-                        items={[[DEFAULT_MODEL, tr("默认", "Default")], ...models.map((m): [string, string] => [m.id, m.label])]}
-                        onChange={(v) => setModelPick(v === DEFAULT_MODEL ? "" : v)} />
-                    ) : null}
+                    <Seg value={pick} label={tr("选助手", "Pick the assistant")} disabled={!!viewAs || !!waiting || loading}
+                      disabledItems={unavailable}
+                      items={[["claude", AGENT_NAME.claude], ["codex", AGENT_NAME.codex], ...models.map((m): [string, string] => [m.id, m.label])]}
+                      onChange={(v) => {
+                        setModelPick(v === "claude" || v === "codex" ? "" : v);
+                        setChoice({ agent: v === "codex" ? "codex" : "claude" });
+                      }} />
                   </div>
                   <Button size="icon" className="size-11 shrink-0 rounded-full md:size-9" disabled={!canStart} onClick={() => void start()} data-testid="new-start"
                     aria-label={tr("开始", "Start")} title={tr("开始", "Start")}>
@@ -256,6 +258,7 @@ export default function NewSession() {
                   </Button>
                 </div>
               </div>
+              {agentWhy && !loading ? <p data-testid="new-agent-why" className="text-muted-foreground mt-2 text-[13px]">{agentWhy}</p> : null}
               {why ? <p role="status" data-testid="new-why" className="text-muted-foreground mt-2 text-[13px]">{why}</p>
                 : waiting ? <p role="status" className="text-muted-foreground mt-2 text-[13px]">{tr("正在开 —— 开好就进入它。", "Opening — it opens once it is up.")}</p>
                 : <p className="text-muted-foreground mt-2 text-[13px]">{tr("关掉网页也不停，随时回来接着说。", "Keeps going when you close the page; come back any time.")}</p>}

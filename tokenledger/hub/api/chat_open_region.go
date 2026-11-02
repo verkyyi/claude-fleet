@@ -66,7 +66,7 @@ func (s *Server) chatModelsFor(person string) []ChatModel {
 // as written. ok false: the body was refused here.
 func (s *Server) chatOpenModel(w http.ResponseWriter, r *http.Request, person string) (model string, body map[string]json.RawMessage, ok bool) {
 	if r.Body == nil {
-		return "", nil, true
+		return "", map[string]json.RawMessage{}, true
 	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, chatBodyMax))
 	_ = r.Body.Close()
@@ -76,8 +76,11 @@ func (s *Server) chatOpenModel(w http.ResponseWriter, r *http.Request, person st
 	}
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	r.ContentLength = int64(len(raw))
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "", map[string]json.RawMessage{}, true
+	}
 	if json.Unmarshal(raw, &body) != nil || body == nil {
-		return "", nil, true // the home's open says what is wrong with it
+		return "", nil, true // the open provider validator refuses a non-object body
 	}
 	v, has := body["model"]
 	if !has || string(v) == "null" {
