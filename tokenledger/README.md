@@ -2205,6 +2205,21 @@ Point any MCP client at `https://your-hub/mcp` with the viewer token as a bearer
 }}}
 ```
 
+The protocol is served by the official Go MCP SDK
+(`github.com/modelcontextprotocol/go-sdk`), so version negotiation, the
+Streamable HTTP transport and each client's quirks are the SDK's. It runs
+stateless with plain JSON answers: every `POST` is a whole exchange,
+`initialize` is optional, no session id is handed out, any replica answers, and
+`GET /mcp` is 405 (no stream is ever opened). A POST must be
+`Content-Type: application/json`; an `Accept` that names nothing in particular
+is taken as JSON. Who may call stays outside the SDK, in the hub's own door
+(viewer token, sign-in, a connected agent's key or OAuth). Each listed tool
+carries `annotations` (`readOnlyHint`, `destructiveHint`) and, as OpenAI's MCP
+auth asks, `_meta.securitySchemes` with the OAuth scope it needs; a call a
+connected agent's grant lacks the scope for is a tool error whose
+`_meta["mcp/www_authenticate"]` is an `insufficient_scope` challenge naming the
+scope and the protected-resource metadata.
+
 Twenty-six read-only tools: `list_accounts`, `get_limits`, `get_limits_history`,
 `list_endpoints`, `usage_by_source`,
 `usage_by_account`, `list_account_switches`, `list_endpoint_accounts`,
@@ -2231,7 +2246,7 @@ the dashboard draws both on one axis, and splitting that into two round-trips
 would let the halves straddle a refresh.
 
 What stays deliberately one-sided: `/v1/live/stream` is a stream, which this
-server does not open (see the GET handler). MCP is read-only throughout — the
+server does not open (`GET /mcp` is 405). MCP is read-only throughout — the
 hub's viewer-facing write, `POST /v1/accounts/label`, has no tool and will not
 grow one.
 

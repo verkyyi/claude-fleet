@@ -170,7 +170,9 @@ func (s *Server) authorize(p fleetPrincipal, scope, configKey string) error {
 		return fault("FORBIDDEN", "Operation is outside this caller's Fleet grant ("+scope+")")
 	}
 	if p.Grant != nil && !hasString(p.Grant, scope) {
-		return fault("FORBIDDEN", "This connected agent was not given "+scope+"; the person can widen it on the console (已连接的 Agent)")
+		f := fault("FORBIDDEN", "This connected agent was not given "+scope+"; the person can widen it on the console (已连接的 Agent)")
+		f.Scope = scope
+		return f
 	}
 	if configKey != "" && !hasString(s.FleetPersonConfigKeys, configKey) {
 		return fault("FORBIDDEN", "Configuration key is outside this caller's grant")

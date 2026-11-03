@@ -10,28 +10,33 @@
 // spent". If that is ever wanted it should be a separate, separately
 // authorised service.
 //
-// Transport is Streamable HTTP: a single POST endpoint carrying JSON-RPC 2.0.
-// It is implemented directly rather than through an SDK to keep the binary
-// dependency-free.
+// The protocol is the official Go MCP SDK's (github.com/modelcontextprotocol/
+// go-sdk, task T4DN): protocol-version negotiation, the Streamable HTTP
+// transport, JSON-RPC framing and the quirks of each client (ChatGPT, Claude,
+// Codex, Gemini) are the SDK's to keep up with, not ours. It runs STATELESS
+// with plain JSON answers — every POST is a whole exchange, initialize is
+// optional, any hub replica can answer and no stream is ever held open (GET is
+// 405). This package only decides what each caller is shown and serves the
+// tools; who the caller is stays outside, in the api's HTTP middleware
+// (viewerOnly, the agent door, OAuth), which also answers the 401 challenge.
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/api"
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
-
-// protocolVersion is the MCP revision this server implements.
-const protocolVersion = "2025-06-18"
 
 // caveat is repeated in every tool description. An agent relaying these
 // numbers to a person will otherwise present an estimate with the confidence
@@ -51,123 +56,139 @@ const costCaveat = "Cost is reported PER SOURCE: claude and codex figures are NO
 	"carries its own kind. Real spend is the subscription invoices; the notional figure is " +
 	"not part of it and adding it in invents spending that never happened."
 
-// Handler returns the /mcp handler.
+// Handler returns the /mcp handler: the SDK's Streamable HTTP handler, with a
+// server built per request whose tools are exactly the ones that caller may
+// see (a server is a few maps; building one is cheap).
 func Handler(srv *api.Server) http.Handler {
 	s := &mcpServer{api: srv}
-	return http.HandlerFunc(s.serve)
+	h := sdkmcp.NewStreamableHTTPHandler(func(r *http.Request) *sdkmcp.Server {
+		if v, ok := r.Context().Value(serverKey{}).(*sdkmcp.Server); ok {
+			return v
+		}
+		return s.serverFor(r)
+	}, &sdkmcp.StreamableHTTPOptions{
+		Stateless:    true,
+		JSONResponse: true,
+		// Who may call is decided before this handler (viewerOnly and the
+		// agent door); a hub reached through a local reverse proxy must not be
+		// refused for the public Host it was asked by.
+		DisableLocalhostProtection: true,
+		MaxRequestBodyBytes:        maxRPCBody,
+	})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lenientAccept(r)
+		if r.Method == http.MethodPost {
+			// One server per request, built once (the SDK asks for it twice).
+			r = r.WithContext(context.WithValue(r.Context(), serverKey{}, s.serverFor(r)))
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 type mcpServer struct{ api *api.Server }
 
-// --- JSON-RPC plumbing ---------------------------------------------------
-
-type request struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-}
-
-type response struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      json.RawMessage `json:"id,omitempty"`
-	Result  any             `json:"result,omitempty"`
-	Error   *rpcError       `json:"error,omitempty"`
-}
-
-type rpcError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-const (
-	codeInvalidRequest = -32600
-	codeMethodNotFound = -32601
-	codeInvalidParams  = -32602
-	codeInternal       = -32603
-)
+type serverKey struct{}
 
 const maxRPCBody = 1 << 20
 
-func (s *mcpServer) serve(w http.ResponseWriter, r *http.Request) {
+// lenientAccept lets a POST that asks for nothing in particular (no Accept,
+// or */*) through: the spec has a client list both application/json and
+// text/event-stream, and the SDK refuses one that does not, but this server
+// only ever answers application/json — a plain `curl -d` is a fine client.
+func lenientAccept(r *http.Request) {
 	if r.Method != http.MethodPost {
-		// GET on a Streamable HTTP endpoint opens a server-initiated stream.
-		// This server never initiates anything, so declining is correct and
-		// clearer than holding a connection open forever.
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "this MCP server does not open server-initiated streams; use POST", http.StatusMethodNotAllowed)
 		return
 	}
-
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRPCBody))
-	if err != nil {
-		writeRPC(w, &response{JSONRPC: "2.0", Error: &rpcError{codeInvalidRequest, "unreadable body"}})
-		return
+	acc := strings.TrimSpace(r.Header.Get("Accept"))
+	if acc == "" || acc == "*/*" || acc == "application/json" {
+		r.Header.Set("Accept", "application/json, text/event-stream")
 	}
-
-	var req request
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeRPC(w, &response{JSONRPC: "2.0", Error: &rpcError{codeInvalidRequest, "malformed JSON-RPC: " + err.Error()}})
-		return
-	}
-
-	resp := s.dispatch(r, &req)
-	if resp == nil {
-		// A notification (no id) gets no body, per JSON-RPC.
-		w.WriteHeader(http.StatusAccepted)
-		return
-	}
-	writeRPC(w, resp)
 }
 
-func writeRPC(w http.ResponseWriter, resp *response) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
-}
+// instructions is what initialize tells every client.
+const instructions = "Reports Claude Code subscription usage collected from every enrolled " +
+	"endpoint." + caveat
 
-func (s *mcpServer) dispatch(hr *http.Request, req *request) *response {
-	out := &response{JSONRPC: "2.0", ID: req.ID}
-
-	switch req.Method {
-	case "initialize":
-		out.Result = map[string]any{
-			"protocolVersion": protocolVersion,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "ccquota", "version": "1"},
-			"instructions": "Reports Claude Code subscription usage collected from every enrolled " +
-				"endpoint." + caveat,
-		}
-	case "notifications/initialized", "notifications/cancelled":
-		return nil
-	case "ping":
-		out.Result = map[string]any{}
-	case "tools/list":
-		tools := toolSpecs()
-		if s.api.Fleet {
-			tools = append(tools, fleetToolSpecs()...)
-			tools = append(tools, sessionToolSpecs()...)
-		}
-		// A user is shown only what they may call (claude-fleet#1985).
-		if who, err := s.api.UserScope(hr); err != nil || who != nil {
-			mine := []toolSpec{}
-			for _, t := range tools {
-				if err == nil && (api.IsUserTool(t.Name) || api.IsSessionTool(t.Name)) {
-					mine = append(mine, t)
-				}
+// serverFor builds the MCP server one request is answered by: the tools hr's
+// caller may see, each handler closing over hr so the fleet and session tools
+// get the caller's identity, grant and headers unchanged.
+func (s *mcpServer) serverFor(hr *http.Request) *sdkmcp.Server {
+	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "tokenman", Title: "Tokenman", Version: "1"},
+		&sdkmcp.ServerOptions{
+			Instructions: instructions,
+			// Tools only: no logging, prompts or resources, and the list never
+			// changes within a (stateless) exchange.
+			Capabilities: &sdkmcp.ServerCapabilities{Tools: &sdkmcp.ToolCapabilities{}},
+		})
+	listed := map[string]bool{}
+	for _, t := range s.visibleTools(hr) {
+		listed[t.Name] = true
+		name := t.Name
+		srv.AddTool(t.sdkTool(), func(_ context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+			return s.callTool(hr, name, req.Params.Arguments), nil
+		})
+	}
+	// A tool this caller is not shown still answers as before — a tool error
+	// that says why (an admin's tool, a hub without the fleet module) rather
+	// than the SDK's bare "unknown tool" protocol error.
+	srv.AddReceivingMiddleware(func(next sdkmcp.MethodHandler) sdkmcp.MethodHandler {
+		return func(ctx context.Context, method string, req sdkmcp.Request) (sdkmcp.Result, error) {
+			if ct, ok := req.(*sdkmcp.CallToolRequest); ok && method == "tools/call" && ct.Params != nil && !listed[ct.Params.Name] {
+				return s.callTool(hr, ct.Params.Name, ct.Params.Arguments), nil
 			}
-			tools = mine
+			return next(ctx, method, req)
 		}
-		out.Result = map[string]any{"tools": tools}
-	case "tools/call":
-		out.Result, out.Error = s.callTool(hr, req.Params)
-	default:
-		out.Error = &rpcError{codeMethodNotFound, "unknown method " + req.Method}
-	}
+	})
+	return srv
+}
 
-	if out.Error != nil {
-		out.Result = nil
+// visibleTools is what hr's caller is shown: the usage tools, plus the fleet
+// and session tools when the hub runs the fleet module — and a user only what
+// they may call (claude-fleet#1985).
+func (s *mcpServer) visibleTools(hr *http.Request) []toolSpec {
+	tools := toolSpecs()
+	if s.api.Fleet {
+		tools = append(tools, fleetToolSpecs()...)
+		tools = append(tools, sessionToolSpecs()...)
 	}
-	return out
+	if who, err := s.api.UserScope(hr); err != nil || who != nil {
+		mine := []toolSpec{}
+		for _, t := range tools {
+			if err == nil && (api.IsUserTool(t.Name) || api.IsSessionTool(t.Name)) {
+				mine = append(mine, t)
+			}
+		}
+		tools = mine
+	}
+	return tools
+}
+
+// sdkTool is the tool as it is listed: its schema as written, annotations
+// that say whether it reads or writes, and — as OpenAI's MCP auth asks, per
+// tool — the OAuth scope it needs in _meta.securitySchemes.
+func (t toolSpec) sdkTool() *sdkmcp.Tool {
+	writes := api.MCPToolWrites(t.Name)
+	open := strings.HasPrefix(t.Name, "gh_") // reaches GitHub, beyond the hub
+	ann := &sdkmcp.ToolAnnotations{Title: t.Title, ReadOnlyHint: !writes, OpenWorldHint: &open}
+	if writes {
+		d := destructiveTools[t.Name]
+		ann.DestructiveHint = &d
+	}
+	return &sdkmcp.Tool{
+		Name: t.Name, Title: t.Title, Description: t.Description, InputSchema: t.InputSchema,
+		Annotations: ann,
+		Meta: sdkmcp.Meta{"securitySchemes": []any{
+			map[string]any{"type": "oauth2", "scopes": []string{api.MCPToolScope(t.Name)}},
+		}},
+	}
+}
+
+// destructiveTools are the writes that end or take away something — a turn,
+// a session, a setting, a service's run; every other write only adds (a
+// line, a start, an answer, a name).
+var destructiveTools = map[string]bool{
+	"worker_stop": true, "worker_reap": true, "worker_switch": true, "worker_transfer": true,
+	"session_archive": true, "session_stop": true, "config_set": true, "service_control": true,
 }
 
 // --- tools ---------------------------------------------------------------
@@ -522,49 +543,53 @@ func toolSpecs() []toolSpec {
 	}
 }
 
-type callParams struct {
-	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments"`
-}
-
-func (s *mcpServer) callTool(hr *http.Request, raw json.RawMessage) (any, *rpcError) {
-	var p callParams
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, &rpcError{codeInvalidParams, "malformed tool call: " + err.Error()}
+// callTool runs one tool for hr's caller. Every failure is a tool result with
+// isError, never a protocol error: the model should see the message and adapt
+// (usually by calling list_accounts first). A connected agent refused for a
+// scope its grant lacks also gets the insufficient_scope challenge in
+// _meta["mcp/www_authenticate"], so its client can ask the person for it.
+func (s *mcpServer) callTool(hr *http.Request, name string, rawArgs json.RawMessage) *sdkmcp.CallToolResult {
+	var args map[string]any
+	if len(rawArgs) > 0 && string(rawArgs) != "null" {
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return errorResult("malformed tool arguments: " + err.Error())
+		}
 	}
 
 	var payload any
 	var err error
-	if s.api.Fleet && api.IsSessionTool(p.Name) {
+	if s.api.Fleet && api.IsSessionTool(name) {
 		// The console's session tools (task T4DN): the caller's own, through
 		// the console's roads — scoped by the request, like the fleet tools.
-		payload, err = s.api.CallSessionTool(hr, p.Name, p.Arguments)
-	} else if s.api.Fleet && isFleetTool(p.Name) {
+		payload, err = s.api.CallSessionTool(hr, name, args)
+	} else if s.api.Fleet && isFleetTool(name) {
 		// Scoped to the caller, so it needs the request's identity — which
 		// is why it is not one more case in run.
-		payload, err = s.api.CallFleetTool(hr, p.Name, p.Arguments)
+		payload, err = s.api.CallFleetTool(hr, name, args)
 	} else if who, serr := s.api.UserScope(hr); serr != nil {
 		err = serr
 	} else if who != nil {
-		payload, err = s.runUser(who, p.Name, p.Arguments)
+		payload, err = s.runUser(who, name, args)
 	} else {
-		payload, err = s.run(p.Name, p.Arguments)
+		payload, err = s.run(name, args)
 	}
 	if err != nil {
-		// A tool-level failure is reported inside the result with isError, not
-		// as a protocol error: the model should see the message and adapt
-		// (usually by calling list_accounts first).
-		return map[string]any{
-			"isError": true,
-			"content": []any{map[string]any{"type": "text", "text": err.Error()}},
-		}, nil
+		res := errorResult(err.Error())
+		if challenge, ok := s.api.MCPInsufficientScope(hr, err); ok {
+			res.Meta = sdkmcp.Meta{"mcp/www_authenticate": []string{challenge}}
+		}
+		return res
 	}
 
 	pretty, _ := json.MarshalIndent(payload, "", "  ")
-	return map[string]any{
-		"content":           []any{map[string]any{"type": "text", "text": string(pretty)}},
-		"structuredContent": payload,
-	}, nil
+	return &sdkmcp.CallToolResult{
+		Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: string(pretty)}},
+		StructuredContent: payload,
+	}
+}
+
+func errorResult(msg string) *sdkmcp.CallToolResult {
+	return &sdkmcp.CallToolResult{IsError: true, Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: msg}}}
 }
 
 // runUser is run for a user (claude-fleet#1985): only the tools IsUserTool

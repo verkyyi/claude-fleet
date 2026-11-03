@@ -46,11 +46,16 @@ import (
 type FleetFault struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Scope is set only when a connected agent's grant lacks the scope the
+	// call needs (authorize): the one refusal the person can cure by granting
+	// more, which /mcp answers with an insufficient_scope challenge
+	// (MCPInsufficientScope, task T4DN). Never sent on the wire.
+	Scope string `json:"-"`
 }
 
 func (f *FleetFault) Error() string { return f.Code + ": " + f.Message }
 
-func fault(code, msg string) *FleetFault { return &FleetFault{code, msg} }
+func fault(code, msg string) *FleetFault { return &FleetFault{Code: code, Message: msg} }
 
 // fleetReadTimeout bounds one live read over the control channel. Past it the
 // answer comes from the last heartbeat, labelled as such.
