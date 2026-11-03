@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS operations (
 def cold_repo(fleet, worktree):
     """The repo a cold park's worktree belongs to, for a record written before it
     kept one (PV5W): the one hosted repo whose name the worktree's basename starts
-    with (`24haowan-monorepo-scratch-70` → owner/24haowan-monorepo), else none."""
+    with (`web-app-scratch-70` → owner/web-app), else none."""
     base = re.sub(r"-(?:scratch|issue)-[0-9]+$", "", (worktree or "").rstrip("/").rsplit("/", 1)[-1])
     hits = [r for r in fleet.get("repos") or [] if r.rsplit("/", 1)[-1] == base]
     return hits[0] if len(hits) == 1 else ""

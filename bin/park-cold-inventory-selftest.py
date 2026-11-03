@@ -48,7 +48,7 @@ fleet_park_cold.write(A, dict(session="fleet", agent="codex", name="Tokenman Opt
                               worktree="/p/claude-fleet-scratch-12", repo="verkyyi/claude-fleet", raw="1",
                               born="1793000000", from_fid=OPENER, source="agent", pin="1"))
 fleet_park_cold.write(B, dict(session="fleet", agent="claude", name="old record",
-                              worktree="/p/24haowan-monorepo-scratch-70", since="1793500000"))
+                              worktree="/p/web-app-scratch-70", since="1793500000"))
 fleet_park_cold.write(C, dict(session="other", name="another fleet", worktree="/p/x-scratch-1"))
 with open(os.path.join(os.environ["FLEET_ID_DIR"], B + ".ndjson"), "w") as f:
     f.write(json.dumps({"ev": "opened", "id": B, "seq": 1, "ts": 1792000000}) + "\n")
@@ -62,15 +62,15 @@ spec = importlib.util.spec_from_file_location("fleet_control_t", os.path.join(BI
 fc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fc)
 fleet = dict(name="fleet", fleet_id="11111111-2222-4333-8444-555555555555", agent="claude",
-             repos=["verkyyi/claude-fleet", "GuangZhouShanyouGame/24haowan-monorepo"])
+             repos=["verkyyi/claude-fleet", "acme/web-app"])
 ws = {w["identity"]: w for w in fc.cold_workers(fleet)}
 a, b = ws.get(A, {}), ws.get(B, {})
 check("B: another fleet's record is not listed", set(ws) == {A, B})
 check("B: a parked, window-less, cold row", a.get("state") == "parked" and a.get("window_id") == ""
       and a.get("cold") is True and a.get("can_talk") is False)
 check("B: its key from its repo", a.get("key") == "verkyyi-claude-fleet:scratch-12")
-check("B: an older record's repo from its worktree", b.get("key") == "GuangZhouShanyouGame-24haowan-monorepo:scratch-70"
-      and b.get("repo") == "GuangZhouShanyouGame/24haowan-monorepo")
+check("B: an older record's repo from its worktree", b.get("key") == "acme-web-app:scratch-70"
+      and b.get("repo") == "acme/web-app")
 check("B: born from the record, else the ID ledger (never the park time)",
       a.get("born") == 1793000000 and b.get("born") == 1792000000)
 check("B: opener, source and pin passed on", a.get("from") == OPENER and a.get("source") == "agent"
