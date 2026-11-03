@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
@@ -26,6 +27,15 @@ import (
 
 // DoorKey names the door's machines (comma-separated; its replicas share one).
 const DoorKey = "fleet.door"
+
+// DoorClusterPrefix + <door> names the cluster a door stands in (task P0D4):
+// a door reaches the pods of its own cluster only (it dials
+// u-<nonce>.<ns>.svc.cluster.local), so a pod goes through a door of the
+// cluster its fleet_cluster_pods row says it is in. The operator's word on
+// the hub, never the door's own: the door is the one part facing the
+// internet, and must not choose whom it lets in. No door named with a
+// cluster ⇒ every pod through every door, byte for byte as before.
+const DoorClusterPrefix = "fleet.door_cluster."
 
 // userPodNameRE is render.py's USER_POD_RE: a person's pod is named
 // u-<nonce>, a generic name, never the person's.
@@ -75,9 +85,74 @@ func (s *Server) isDoor(host string) bool {
 	return false
 }
 
+// doorSettings is the settings table for the door's per-cluster reading;
+// nil when it cannot be read (every door then reads as no cluster said).
+func (s *Server) doorSettings() map[string]string {
+	if s.Store == nil {
+		return nil
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return nil
+	}
+	return settings
+}
+
+// doorClusterOf is the cluster fleet.door_cluster.<door> names, "" = none.
+func doorClusterOf(settings map[string]string, door string) string {
+	return strings.ToLower(strings.TrimSpace(settings[DoorClusterPrefix+strings.ToLower(firstLabel(door))]))
+}
+
+// podDoors is the doors that may carry pod, in fleet.door's order: its own
+// cluster's doors when some door names that cluster, else every door (the
+// old rule) — why says why it fell back, "" when no door names a cluster at
+// all (byte for byte as before) or the pod has its cluster's doors.
+func (s *Server) podDoors(settings map[string]string, doors []string, pod string) (out []string, cluster, why string) {
+	labeled := false
+	for _, d := range doors {
+		if doorClusterOf(settings, d) != "" {
+			labeled = true
+			break
+		}
+	}
+	if !labeled {
+		return doors, "", ""
+	}
+	cluster = s.podCluster(settings, pod)
+	if cluster == "" {
+		return doors, "", "its cluster is not known (no fleet_cluster_pods row): any door"
+	}
+	for _, d := range doors {
+		if doorClusterOf(settings, d) == cluster {
+			out = append(out, d)
+		}
+	}
+	if len(out) == 0 {
+		return doors, cluster, "no door names cluster " + cluster + " (" + DoorClusterPrefix + "<door>): any door"
+	}
+	return out, cluster, ""
+}
+
+// doorPickWhy is the last reason logged per pod (noteDoorPick).
+var doorPickWhy sync.Map
+
+// noteDoorPick logs why pod's door is not a reachable door of its own
+// cluster — once per pod until the reason changes.
+func noteDoorPick(pod, door, why string) {
+	if prev, loaded := doorPickWhy.Swap(pod, why); (loaded && prev == why) || (!loaded && why == "") {
+		return
+	}
+	if why == "" {
+		log.Printf("door: %s through %s, a reachable door of its own cluster", pod, door)
+		return
+	}
+	log.Printf("door: %s through %s: %s", pod, door, why)
+}
+
 // entryAddrMachine is the machine whose address a home is reached at: a
-// person's pod is reached through the door (the first one the outside can
-// reach, else the first named); any other home is its own.
+// person's pod is reached through a door of its own cluster (podDoors; the
+// first one the outside can reach, else the first named); any other home is
+// its own.
 func (s *Server) entryAddrMachine(machine string, now time.Time) string {
 	if !isUserPodName(machine) {
 		return machine
@@ -86,10 +161,21 @@ func (s *Server) entryAddrMachine(machine string, now time.Time) string {
 	if len(doors) == 0 {
 		return machine
 	}
+	doors, cluster, why := s.podDoors(s.doorSettings(), doors, machine)
 	for _, d := range doors {
 		if reach, err := s.EntryReachable(d, now); err == nil && len(reach) > 0 {
+			if cluster != "" || why != "" {
+				noteDoorPick(machine, d, why)
+			}
 			return d
 		}
+	}
+	if cluster != "" && why == "" {
+		// another cluster's door cannot reach it: its own, though down for now
+		why = "no door of cluster " + cluster + " is reachable from outside lately: its first named"
+	}
+	if why != "" {
+		noteDoorPick(machine, doors[0], why)
 	}
 	return doors[0]
 }
@@ -137,7 +223,7 @@ func (s *Server) handleNodeEntryRoutes(w http.ResponseWriter, r *http.Request) {
 	// its pull is the one beat every door has: keep its reach fresh (#4149)
 	s.doorReachKeep(host, time.Now())
 	s.noteJump(r, host, true, time.Now())
-	out, err := s.entryRouteList()
+	out, err := s.entryRouteListFor(host)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -152,10 +238,17 @@ func (s *Server) handleNodeEntryRoutes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// entryRouteList is the door's table: every person whose home is a pod —
+// entryRouteList is the doors' table: every person whose home is a pod —
 // never a fleet admin's login. A login two pods claim goes to NEITHER (the
 // door must never guess whose pod a name is): the table drops it and says so.
 func (s *Server) entryRouteList() (control.EntryRouteList, error) {
+	return s.entryRouteListFor("")
+}
+
+// entryRouteListFor is door's own table (task P0D4): entryRouteList's routes
+// whose pod podDoors may send through door — never another cluster's pod.
+// door "" (or no door naming a cluster) = every route.
+func (s *Server) entryRouteListFor(door string) (control.EntryRouteList, error) {
 	out := control.EntryRouteList{Routes: []control.EntryRoute{}, Logins: map[string]control.EntryNodeLogin{}}
 	v, err := s.Store.EntryVersion()
 	if err != nil {
@@ -187,6 +280,11 @@ func (s *Server) entryRouteList() (control.EntryRouteList, error) {
 		logins = append(logins, l)
 	}
 	sort.Strings(logins)
+	var settings map[string]string
+	var doors []string
+	if door != "" {
+		settings, doors = s.doorSettings(), s.doorMachines()
+	}
 	for _, l := range logins {
 		rs := byLogin[l]
 		if len(rs) > 1 {
@@ -198,6 +296,9 @@ func (s *Server) entryRouteList() (control.EntryRouteList, error) {
 			continue
 		}
 		r := rs[0]
+		if door != "" && !s.doorCarries(settings, doors, door, r.Service) {
+			continue
+		}
 		keys, err := s.Store.EntryKeys(r.Principal, false)
 		if err != nil {
 			return out, err
@@ -210,4 +311,15 @@ func (s *Server) entryRouteList() (control.EntryRouteList, error) {
 		out.Logins[l] = nl
 	}
 	return out, nil
+}
+
+// doorCarries says door is one podDoors may send pod through.
+func (s *Server) doorCarries(settings map[string]string, doors []string, door, pod string) bool {
+	may, _, _ := s.podDoors(settings, doors, pod)
+	for _, d := range may {
+		if sameMachine(door, d) || sameMachine(d, door) {
+			return true
+		}
+	}
+	return false
 }
