@@ -23,7 +23,11 @@
 #
 # fleet-window-carry.sh --heal [socket label]: undo that label — a window marked a
 # panel that still carries a session (@fleet_id) and its own wrapper pane gets
-# @fleet_role worker back and loses the `-shell` suffix. Run on the cleanup tick.
+# @fleet_role worker back and loses the `-shell` suffix — and drop every
+# @wrap_win no live wrapper stands behind (its @session_wrap pid gone, or
+# @wrap_gone): the source of the stale stamps. Run on the cleanup tick. The
+# wrapper unsets its own stamp when it exits; the carry ignores a stamp whose
+# wrapper is not running.
 set -u
 if [ "${1:-}" = --heal ]; then
   tm() { if [ -n "${2:-}" ]; then tmux -L "$2" "${@:3}"; else tmux "${@:3}"; fi; }
@@ -37,6 +41,14 @@ if [ "${1:-}" = --heal ]; then
     case "$n" in *-shell) tm x "$L" rename-window -t "$w" "${n%-shell}" 2>/dev/null ;; esac
     printf 'healed %s %s\n' "$w" "$fid"
   done
+  # …and a stamp no live wrapper stands behind is dropped at its source
+  tm x "$L" list-panes -a -F '#{pane_id}|#{@wrap_win}|#{@session_wrap}|#{@wrap_gone}' 2>/dev/null | sort -u |
+  while IFS='|' read -r p ww wp gone; do
+    [ -n "$ww" ] || continue
+    if [ -n "$gone" ] || ! { [ -n "$wp" ] && kill -0 "$wp" 2>/dev/null; }; then
+      tm x "$L" set-option -pu -t "$p" @wrap_win 2>/dev/null && printf 'dropped stale @wrap_win %s on %s\n' "$ww" "$p"
+    fi
+  done
   exit 0
 fi
 W="${1:-}"
@@ -44,6 +56,13 @@ case "$W" in @[0-9]*) ;; *) exit 0 ;; esac
 P=$(tmux display-message -p -t "$W" '#{pane_id}' 2>/dev/null) || exit 0
 S=$(tmux show-options -pqv -t "$P" @wrap_win 2>/dev/null)
 [ -n "$S" ] && [ "$S" != "$W" ] || exit 0
+# Only a pane that runs a wrapper NOW is a session that moved (task PV5W): its
+# @session_wrap pid alive, no @wrap_gone. A stamp a wrapper left behind is
+# dropped here, where it would otherwise strip the window it names.
+wp=$(tmux show-options -pqv -t "$P" @session_wrap 2>/dev/null)
+if [ -n "$(tmux show-options -pqv -t "$P" @wrap_gone 2>/dev/null)" ] || ! { [ -n "$wp" ] && kill -0 "$wp" 2>/dev/null; }; then
+  tmux set-option -pu -t "$P" @wrap_win 2>/dev/null; exit 0
+fi
 # A grouped (view) session links the window once per session: one carry only.
 sk=${TMUX:-}; sk=${sk%%,*}; sk=${sk##*/}
 lock="${TMPDIR:-/tmp}/fleet-carry.$(id -u).${sk:-x}.${P#%}"

@@ -1055,13 +1055,15 @@ drill_stale_wrap_strips_live() {
   out="$(tmux -L "$L" display -p -t "$a" '#{@fleet_role}|#{window_name}|#{@fleet_id}')"
   [ "$out" = "worker|live|1f0e0000-0000-4000-8000-0000000000aa" ] \
     || { tmux -L "$L" kill-server; WHY="a live window was stripped: [$out]"; return 1; }
+  [ -z "$(tmux -L "$L" show-options -pqv -t "$b" @wrap_win)" ] \
+    || { tmux -L "$L" kill-server; WHY="a stamp no wrapper stands behind was kept on the other pane"; return 1; }
   tmux -L "$L" set-option -w -t "$a" @fleet_role panel; tmux -L "$L" rename-window -t "$a" live-shell
   bash "$BIN/fleet-window-carry.sh" --heal "$L" >/dev/null
   out="$(tmux -L "$L" display -p -t "$a" '#{@fleet_role}|#{window_name}')"
   tmux -L "$L" kill-server 2>/dev/null
   [ "$out" = "worker|live" ] || { WHY="--heal left [$out]"; return 1; }
   SECS=$(since "$t0")
-  WHAT='留着自己 wrapper 窗格的窗口不被搬走身份；已被标成 panel / -shell 的活会话由 --heal 改回'
+  WHAT='没有活 wrapper 的窗格上的 @wrap_win 被丢掉、不再搬身份；留着自己 wrapper 窗格的窗口不被搬走；已被标成 panel / -shell 的活会话由 --heal 改回'
 }
 
 drill_break_pane() {
