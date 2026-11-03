@@ -154,8 +154,11 @@ EOF
       noagent=$(printf '%s\n' "$rows" | awk 'NF == 2 && $2 == "0" {print $1}')
     fi
     # A cold park (fleet_park_cold.py) is an open session with no window: live,
-    # with no agent — so the hub keeps its ID and a wake can reopen it.
-    if [ -n "$scanned" ]; then
+    # with no agent — so the hub keeps its ID and a wake can reopen it. Only the
+    # hub's report counts it: reopen / continue / close read the same list as
+    # "a window carries this ID", and a cold park's wake IS its reopen (BREAK-IT
+    # park-cold-reopen-refused — every cold park answered «still open in a window»).
+    if [ -n "$scanned" ] && [ "$1" = live ]; then
       for _cold in "${FLEET_GATE_DIR:-$FLEET_CONF_DIR/session-gate}"/*/cold.json; do
         [ -f "$_cold" ] || continue
         _cold=${_cold%/cold.json}; _cold=${_cold##*/}

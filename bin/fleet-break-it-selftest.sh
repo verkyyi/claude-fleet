@@ -6898,6 +6898,17 @@ drill_park_cold_wake() {
 # A cold park forgotten by everything that used to read windows: the hub closed
 # its ID as gone, the history wrote it closed-unlanded, the list dropped its row,
 # and its retention never ran — so it could never wake, or never end.
+# A cold park's wake reopens its ID, and reopen refused it as «still open in a
+# window»: the live list it reads had counted the cold park (for the hub's sake),
+# so every cooled session answered no_session and could not come back.
+drill_park_cold_reopen_refused() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-cold-selftest.py" Kept.test_reopen_of_a_cold_park_is_not_refused_as_open Kept.test_id_live_keeps_a_cold_park_open 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='冷停放的唤醒就是它的重开：重开不把它当「还开在窗口里」拒绝；hub 的存活上报照样带它'
+}
+
 drill_park_cold_forgotten() {
   CAP=30; local t0 out
   t0=$(now)
