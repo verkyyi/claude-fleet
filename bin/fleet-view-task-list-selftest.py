@@ -129,7 +129,8 @@ class TaskList(unittest.TestCase):
                              sec="gone" if r["group"] == "gone" else "", gone=r["group"] == "gone",
                              running=r["state"] == "working", lost=r["state"] == "unknown") for r in c["rows"]]
                 projected = v.compact_task_list(items, c.get("current", ""), c.get("preferences"), c["now"])
-                sessions = [e for e in projected if e["kind"] == "sess"]
+                # a schedule's own row (synthetic, one per schedule) is not one of the fixture's rows
+                sessions = [e for e in projected if e["kind"] == "sess" and not e.get("sched_parent")]
                 # a session's own rows are ordinary rows now (the session tree): no
                 # 「会话派出的」 section — read past them where the fixture still folds them
                 spawned = set(c["sources"].get("agent", []))
@@ -141,30 +142,22 @@ class TaskList(unittest.TestCase):
                 self.assertEqual([e["target"] for e in sessions if v.needs_attention(e)], c["attention"])
                 for k in v.SECTION_SOURCES:
                     at = next((i for i, e in enumerate(projected) if e.get("sec") == "src-" + k and e["kind"] == "sec"), None)
-                    members = [e["target"] for e in projected[at + 1:at + 1 + len(c["sources"].get(k, []))]] if at is not None else []
+                    nxt = next((i for i, e in enumerate(projected) if i > (at or 0) and e["kind"] == "sec"), len(projected))
+                    members = [e["target"] for e in projected[at + 1:nxt] if e["kind"] == "sess" and not e.get("sched_parent")
+                               ][:len(c["sources"].get(k, []))] if at is not None else []
                     self.assertEqual(members, c["sources"].get(k, []), k)
                     self.assertTrue(all(e.get("sec") == "src-" + k or e["target"] in c.get("shown_in_group", [])
                                         for e in sessions if e["target"] in c["sources"].get(k, [])), k)
                 self.assertEqual(len({e["target"] for e in sessions}), len(items))
                 self.assertEqual([e.get("sec") for e in items], ["gone" if r["group"] == "gone" else "" for r in c["rows"]], "folding never mutates source lifecycle")
 
-    def test_schedule_runs_fold_per_schedule(self):
-        # X24T: inside 定时任务 one schedule is one line — session-list.ts scheduleRuns
+    def test_schedule_label(self):
         self.assertEqual(v.schedule_label("LivePage 模板工厂 10-30 #2"), "LivePage 模板工厂")
         self.assertEqual(v.schedule_label("daily-2026-10-31"), "daily")
+        self.assertEqual(v.schedule_label("daily-2026-11-03"), "daily")
+        self.assertEqual(v.schedule_label("group-brief-2026-11-03-2"), "group-brief")
+        self.assertEqual(v.schedule_label("group-brief-2026-11-03(-2)"), "group-brief")
         self.assertEqual(v.schedule_label("10-30"), "10-30")
-        run = lambda t, title, at, **x: row(t, text=title, name=title, source="schedule", activity_at=at, **x)
-        items = [run("a3", "Brief 10-31", 9, schedule_id="s1"), run("d2", "daily-2026-10-31", 8),
-                 run("a2", "Brief 10-30", 7, schedule_id="s1", state="needs"), run("a1", "Brief 10-29", 6, schedule_id="s1"),
-                 run("d1", "daily-2026-10-30", 5), run("b1", "Brief 10-28", 4, schedule_id="s2")]
-        targets = lambda opened: [e.get("target") or e["text"] for e in v.visible(items, "", opened) if e.get("sec", "").startswith(("src-", "sched-")) or e["kind"] == "sess"]
-        self.assertEqual(targets(set()), ["定时任务 · 6"])
-        self.assertEqual(targets({"src-schedule"}), ["定时任务 · 6", "a3", "a2", "  Brief · 1 次更早运行",
-                                                     "d2", "  daily · 1 次更早运行", "b1"])
-        self.assertEqual(targets({"src-schedule", "sched-s1"})[:5], ["定时任务 · 6", "a3", "a2", "  Brief · 1 次更早运行", "a1"])
-        self.assertNotIn("a1", targets({"sched-s1"}), "a run folds with its group too")
-        self.assertIn("a1", [e["target"] for e in v.visible(items, "", set(), current="a1") if e["kind"] == "sess"],
-                      "the run open now is never folded")
 
     def test_history_and_search_preserve_fold(self):
         items = [row("old", sec="gone", gone=True), row("exited", state="exited", sec="gone", shut=True),
@@ -709,6 +702,125 @@ class SessionTree(unittest.TestCase):
         items[1]["tree_at"] = 0
         items[0]["tree_at"] = self.now - 1      # the hub's tree_at wins over the rows here
         self.assertEqual([e["target"] for e in self.sess(items, folds=folds)][2], "old")
+
+
+class Schedules(unittest.TestCase):
+    """定时任务: one row per schedule (a synthetic parent), its runs under it —
+    shut by default, the last ended run's ✓ / ✗ and time on its row."""
+
+    def setUp(self):
+        v._TASK_ORDER.clear()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = patch.dict(os.environ, {"FLEET_UI_LANG": "zh", "FLEET_CONF_DIR": self.tmp.name})
+        self.env.start()
+        for k in ("FLEET_GLYPHS", "NO_COLOR", "FLEET_COLOR"):
+            os.environ.pop(k, None)
+        v.caches_words_reset()
+        self.now = time.time()
+
+    def tearDown(self):
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def run_(self, t, title, ago, **x):
+        x.setdefault("activity_at", self.now - ago)
+        return row(t, text=title, name=title, source="schedule", fid=t, **x)
+
+    def items(self):
+        return [self.run_("a3", "Brief 10-31", 100, schedule_id="s1", state="working", running=True),
+                self.run_("d2", "daily-2026-10-31", 200, gone=True, sym="done"),
+                self.run_("a2", "Brief 10-30", 300, schedule_id="s1", tag="completed", act=int(self.now - 300)),
+                self.run_("a1", "Brief 10-29", 400, schedule_id="s1", tag="failed"),
+                self.run_("d1", "daily-2026-10-30", 500, gone=True, sym="done"),
+                self.run_("g2", "group-brief-2026-11-03-2", 600, ended=True, sym="fail"),
+                self.run_("g1", "group-brief-2026-11-03", 700, gone=True),
+                self.run_("b1", "Brief 10-28", 3 * 86400, schedule_id="s2", tag="ended_no_result")]
+
+    def shown(self, items, opened=("src-schedule",), query="", **kw):
+        return [e for e in v.visible(items, query, set(opened), **kw) if e["kind"] in ("sess", "sec")]
+
+    def test_one_row_per_schedule_shut_by_default(self):
+        shown = self.shown(self.items())
+        self.assertEqual([e.get("target") or e["text"] for e in shown],
+                         ["定时任务 · 4", "sched:s1", "sched:title:daily", "sched:title:group-brief", "sched:s2"],
+                         "grouped by schedule_id, else by the title without its day; newest schedule first")
+        self.assertEqual(self.shown(self.items(), opened=())[0]["text"], "定时任务 · 4", "the heading counts schedules")
+        self.assertEqual(len(self.shown(self.items(), opened=())), 1)
+        by = {e["target"]: e for e in shown if e["kind"] == "sess"}
+        s1 = by["sched:s1"]
+        self.assertEqual((s1["text"], s1["tree_twisty"], s1["tree_hidden_n"]), ("Brief", "shut", 3))
+        self.assertEqual(by["sched:title:group-brief"]["text"], "group-brief")
+        self.assertFalse(any(e["kind"] == "sec" and "更早运行" in e["text"] for e in v.visible(self.items(), "", {"src-schedule"})))
+
+    def test_last_result_and_time(self):
+        by = {e["target"]: e for e in self.shown(self.items()) if e["kind"] == "sess"}
+        hm = time.strftime("%H:%M", time.localtime(self.now - 300))
+        self.assertEqual(by["sched:s1"]["sched_tail"], "✓ " + hm, "the last ENDED run, not the running one")
+        line = "".join(t for t, _ in v.row_segs(by["sched:s1"], 100, qo.cells, qo.clip))
+        self.assertIn("▸ Brief (3)  ✓ " + hm, line)
+        st = next(st for t, st in v.row_segs(by["sched:s1"], 100, qo.cells, qo.clip) if t == "  ✓ " + hm)
+        self.assertIn("dim", st)
+        self.assertEqual(by["sched:title:daily"]["sched_tail"][0], "✓")
+        self.assertEqual(by["sched:title:group-brief"]["sched_tail"][0], "✗", "the newest ended run failed")
+        md = time.strftime("%m-%d", time.localtime(self.now - 3 * 86400))
+        self.assertEqual(by["sched:s2"]["sched_tail"], "✗ " + md, "an older day shows MM-DD")
+        self.assertEqual(v.sched_result(row("x", tag="cancelled")), "bad")
+        self.assertEqual(v.sched_result(row("x", tag="refused")), "bad")
+        self.assertEqual(v.sched_result(row("x", state="working", running=True, tag="working")), "")
+        self.assertEqual(v.sched_result(row("x")), "", "an idle live run is not over")
+        # no Agent word on a schedule's own row; widths hold
+        for w in (100, 60, 45):
+            self.assertEqual(qo.cells("".join(t for t, _ in v.row_segs(by["sched:s1"], w, qo.cells, qo.clip))), w)
+        self.assertNotIn("未知", line)
+
+    def test_status_slot_and_twisty_colour(self):
+        items = self.items()
+        s1 = next(e for e in self.shown(items) if e.get("target") == "sched:s1")
+        self.assertEqual(v.row_status(s1), "work")
+        self.assertEqual(v.row_segs(s1, 100, qo.cells, qo.clip)[1][0], v.TASK_GLYPHS["work"])
+        self.assertEqual(s1["tree_tone"], "work")
+        items[2].update(state="needs", tag="")
+        s1 = next(e for e in self.shown(items) if e.get("target") == "sched:s1")
+        self.assertEqual(v.row_status(s1), "needs", "asking > working")
+        self.assertEqual(s1["tree_tone"], "ask")
+        twisty = next(st for t, st in v.row_segs(s1, 100, qo.cells, qo.clip) if t == "▸ ")
+        self.assertIn("c1", twisty)
+        self.assertNotIn("a2", [e.get("target") for e in self.shown(items)], "a shut schedule hides an asking run too")
+        self.assertNotIn("个在问你", self.shown(items)[0]["text"])
+        heading = v.paint([dict(self.shown(items, opened=())[0], closed=True)], -1, 60, qo.cells, qo.clip)[0]
+        self.assertEqual(heading[1], ("▸", ("c1", "bold")))
+        pend = [self.run_("p1", "nightly 10-31", 10, pending_start=True), self.run_("p0", "nightly 10-30", 20, tag="completed")]
+        self.assertEqual(v.row_status(next(e for e in self.shown(pend) if e.get("target") == "sched:title:nightly")), "pending")
+
+    def test_fold_keys_and_search(self):
+        folds = {"sched:s1": True}
+        shown = self.shown(self.items(), folds=folds)
+        self.assertEqual([e.get("target") for e in shown[1:5]], [ "sched:s1", "a3", "a2", "a1"], "runs newest first")
+        a2 = next(e for e in shown if e.get("target") == "a2")
+        self.assertEqual((a2["tree_prefix"], a2["agent"]), ("  ├ ", "codex"))
+        self.assertIn("Codex", "".join(t for t, _ in v.row_segs(a2, 100, qo.cells, qo.clip)), "runs draw as ordinary rows")
+        self.assertEqual(v.tree_arrow(a2, False), ("sched:s1", False))
+        self.assertEqual(v.tree_arrow(shown[1], False), ("sched:s1", False))
+        # remembered in tree-open, kept while its runs are listed
+        got = v.tree_toggle({}, "fx", "sched:s1", True, self.items())
+        self.assertEqual(v.tree_toggle(got, "fx", "sched:s2", True, self.items()), {"sched:s1": True, "sched:s2": True})
+        # search finds the runs, never the schedule's own row
+        hits = [e["target"] for e in v.visible(self.items(), "Brief", set()) if e["kind"] == "sess"]
+        self.assertTrue({"a1", "a2", "a3", "b1"} <= set(hits), hits)
+        self.assertFalse([t for t in hits if t.startswith("sched:")], hits)
+        # ↵ / Tab on the schedule's row: its newest run
+        items = self.items()
+        self.assertEqual(v.sched_run(items, shown[1])["target"], "a3")
+        self.assertIs(v.sched_run(items, a2), a2)
+        # the cursor landing on a hidden run opens its schedule
+        self.assertEqual(v.tree_reveal({}, "fy", items, "a1"), {"sched:s1": True})
+
+    def test_board_tag_kept(self):
+        board = dict(rows=[dict(id="r1", title="daily-2026-11-03", group="gone", tag="failed", source="schedule"),
+                           dict(id="r2", title="daily-2026-11-02", group="gone", tag="completed", source="schedule")])
+        _, gone = v.board_apply(board, {g: [] for g in v.GROUPS}, [], [], "node", "user")
+        self.assertEqual({e["fid"]: e["tag"] for e in gone}, {"r1": "failed", "r2": "completed"})
+        self.assertEqual(v.sched_result(gone[0]), "bad")
 
 
 if __name__ == "__main__":
