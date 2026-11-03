@@ -178,12 +178,14 @@ export function boardRows(board: Board, tasks: Task[], live: SessionRow[], _ende
         running: state === "working", loop: false, pending_start: false,
         lost: !l, can_talk: !!l && l.canTalk !== false, history: undefined };
     }
+    // no `at` (a row the hub could not date): its last activity dates it, ages too
+    const at = (b.at || b.activity_at || 0) * 1000;
     // The hub resolves the closed generation by FID, never by a recycled key.
     const h = !l ? b.history : undefined;
     const e: SessionRow | undefined = h?.resume_id ? {
       id: h.resume_id, ident: h.id, wid: `fid:${h.id}`, key: "", title: b.title,
       repo: b.repo || "", machine: b.machine || "", state: "ended", group: "ended",
-      ask: null, born: 0, ended: new Date(b.at * 1000).toISOString(), tokens: 0,
+      ask: null, born: 0, ended: at ? new Date(at).toISOString() : "", tokens: 0,
     } : undefined;
     const state = l?.state || b.state;
     const asking = state === "needs" || state === "blocked";
@@ -198,7 +200,7 @@ export function boardRows(board: Board, tasks: Task[], live: SessionRow[], _ende
       id: t?.fid || b.id, code: t ? codes.get(t) || writtenCode(t) : b.code || "", title: b.title, group: b.group,
       tag: quiet ? ["空闲", "Idle"] : b.words, glyph: quiet ? "idle" : GLYPH_OF[b.tag] || "idle", tone: quiet ? "muted" : TONE_OF[b.tag] || "muted",
       line, quote: asking && !!line,
-      task: t, live: l, ended: e, parent: b.parent || undefined, kids: [], at: b.at * 1000, board: b,
+      task: t, live: l, ended: e, parent: b.parent || undefined, kids: [], at, board: b,
       why: quiet ? undefined : why, whyTone: why && !quiet ? b.why_tone || "grey" : undefined,
       ...(origin ? { origin } : {}), ...(typeof canTalk === "boolean" ? { canTalk } : {}),
     };

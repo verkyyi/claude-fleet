@@ -1,4 +1,4 @@
-import { SchedulesProvider, ScheduleGroup, NewScheduleButton, useSchedules, schedulePath } from "./schedules";
+import { SchedulesProvider, NewScheduleButton, useSchedules, schedulePath } from "./schedules";
 // Shell.tsx — the member side's frame (EPIC #3923 C3): on a phone (< 768) a
 // top bar (the mark, what is left of the person's limit, on the list its search,
 // the avatar into 我的); on a computer shadcn's Sidebar — the session list
@@ -162,7 +162,6 @@ const Side: FC = () => (
     <SidebarContent>
       <div className="flex gap-2 px-2 group-data-[collapsible=icon]:hidden"><NewButton label className="flex-1" /><NewScheduleButton /></div>
       <StudioLink />
-      <ScheduleGroup />
       <SidebarGroup className="px-1.5">
         <SidebarGroupContent><SessionRows variant="side" chatHome /></SidebarGroupContent>
       </SidebarGroup>
