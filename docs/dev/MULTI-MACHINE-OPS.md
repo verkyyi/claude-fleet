@@ -196,6 +196,18 @@ linux-a）也连得上，认证仍是上面那张五分钟证书。fleet.conf �
 退回按需（只在有看台时连、看台走后 10 分钟关）。`fleet doctor` 的 `peerlink` 行逐台写 已连上 /
 重连中 / 连不上（原因），连不上报 WARN。
 
+**断线的账、重试的规矩、退路（FQAR）。** 每次转换（`up` · `down` · `retry` · 每分钟一次的 `probe`）
+写一行 `$FLEET_CONF_DIR/logs/peerlink.ndjson`：`{ts, machine, login, route, event, cause, detail, gap_s, rtt_ms}`，
+`route` 是 tailnet · lan · entry · peer-relay · hub-relay，`cause` 是 ok · auth · hostkey · http4xx · http5xx ·
+dns · timeout · network · check · unknown（`classify`），满 5 MB 挪成 `.1`；管理者自己的 launchd / systemd 日志每行带时间。
+失败按类：4xx / 认证 / 主机钥匙整圈都试过后等 `FLEET_PEERLINK_REFUSED_BACKOFF`（60 s）翻倍到 600 s，
+看台的请求不提前它；网络和超时照旧 1 → 30 s，请求最多提前到上一次之后 5 s。连续
+`FLEET_PEERLINK_RELAY_AFTER`（3）次失败、入口能中转时，入口的节点间中转（`peer-proxy`，路线 `hub-relay`）
+成了多出来的一条路，连上后下次重建先试直连；`FLEET_PEERLINK_RELAY_FALLBACK=0` 关掉。主机钥匙对不上时先带
+`FLEET_PEER_CERT_FRESH=1` 向入口重要一次（pod 重建换了钥匙），仍不对才按拒绝退避。断开两分钟（拒绝类一分钟）
+在「✦ 消息」留一条带原因的提醒（tag `peerlink:<机器>@<登录>:…`），恢复后改成已恢复。`state.json` 每条连线另记
+`cause` · `err_ts` · `down_since` · `up_since` · `route_kind` · `streak` · `next_try` · `check_ms`。
+
 网页创建的 Claude / Codex 容器会话也可以从终端列表直接进入（T1243）。路线带 `jump` 时，
 门的 SSH 服务不是容器的 SSH 服务：常开连接走 `GET /v1/node/peer-relay?node=<机器>`，
 用本登录的节点凭据通过与 `peer-cert` 相同的归属校验，流量只交给目标登录的 agent，

@@ -547,6 +547,7 @@ fleet doctor --json
 
 - **是什么**：机器之间的链路（看别的机器上的会话用）通不通。
 - **WARN / FAIL 怎么办**：`fleet-peerlink.py status` 看最近几次重建和原因。
+- **断了多久、为什么**：每次连上、断开、重试和每分钟一次的探测都记在 `~/.config/claude-fleet/logs/peerlink.ndjson`（一行一条，带原因类别和往返毫秒）。入口拒绝（4xx、认证、主机钥匙）不会每秒重拨，按分钟退避；断开超过两分钟（拒绝类一分钟）会在「✦ 消息」里留一条写明原因的提醒。
 
 #### `releasekey`
 

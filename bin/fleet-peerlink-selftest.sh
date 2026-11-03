@@ -48,6 +48,10 @@
 #                 pid, `probe_strikes`), cleared by the next; PROBE_STRIKES=1 is the old
 #                 rule; `sock` with every check late: the socket while the keeper runs,
 #                 nothing once its state is stale, nothing once the master is killed
+#   O. fqar     — (task FQAR) a direct route down and the hub relaying: the link rides
+#                 the relay after FLEET_PEERLINK_RELAY_AFTER failures; logs/peerlink.ndjson
+#                 holds down … up in the hub's schema; the keeper's log lines carry a
+#                 timestamp; a 426 everywhere is tried once or twice, then left for minutes
 #
 # No network: bin/fleet-peerlink-fake-ssh.py plays ssh, a script plays
 # fleet-peer-cert.sh.
@@ -278,8 +282,9 @@ leg_H() {
 box h 0
 # BACKOFF_MAX=4: the dead route's tries stay at 0 · 1 · 3 · 7 s (1 → 2 → 4), only the
 # 8 s gap after them is cut, so mac-l comes back sooner once its route does
+# FLEET_PEERLINK_RELAY_FALLBACK=0: the dead route's own cadence (leg O drills the relay)
 export FLEET_PEERLINK_LINGER=1 FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WARN=1 FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24 \
-  FLEET_PEERLINK_BACKOFF_MAX=4
+  FLEET_PEERLINK_BACKOFF_MAX=4 FLEET_PEERLINK_RELAY_FALLBACK=0
 mkdir -p "$B/fs/down"; : > "$B/fs/down/203.0.113.7"
 peers mac-a:bob:entry=203.0.113.4/22022 mac-l:bob:entry=203.0.113.7/22022 "home:$ME"
 start
@@ -319,7 +324,7 @@ p2=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.ar
 peers mac-a:bob:entry=203.0.113.4/22022
 until_ok 8 links_is "mac-a@bob:up" && st_count || st_miss "H: a login the hub dropped is still held: $(links)"
 grep -q 'mac-l@bob 关闭：已不是你的登录' "$B/run.err" && st_count || st_miss "H: no close record for the dropped login"
-stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_BACKOFF_MAX
+stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_BACKOFF_MAX FLEET_PEERLINK_RELAY_FALLBACK
 }
 
 # --- I. switch: FLEET_PEERLINK_MODE=demand in fleet.conf -------------------------
@@ -518,6 +523,50 @@ grep -q '第 1/1 次' "$B/run.err" && st_miss "N: FLEET_PEERLINK_PROBE_STRIKES=1
 stop; unset FLEET_PEERLINK_PROBE_SECS FLEET_PEERLINK_PROBE_STRIKES FAKESSH_HANG_SECS
 }
 
+# ---- O. FQAR: the relay fallback, the ledger, the refusal's backoff ---------------
+leg_O() {
+box o 0
+export FLEET_PEERLINK_RELAY_AFTER=2 FLEET_PEERLINK_BACKOFF_MAX=1 FLEET_PEERLINK_REFUSED_BACKOFF=30
+mkdir -p "$B/fs/down" "$B/fs/relay"; : > "$B/fs/down/203.0.113.7"; : > "$B/fs/relay/mac-r"
+peers mac-r:bob:entry=203.0.113.7/22022
+start
+until_ok 12 links_is "mac-r@bob:up" && st_count || st_miss "O: the direct route is down, the hub relays — yet no link: $(links) · $(tail -3 "$B/run.err")"
+grep -q '^relay mac-r' "$B/fs/log" && st_count || st_miss "O: the link did not ride the hub's relay"
+L="$B/conf/logs/peerlink.ndjson"
+python3 - "$L" <<'PY2' && st_count || st_miss "O: the ledger: $(cat "$L" 2>/dev/null | head -5)"
+import json, sys
+rows = [json.loads(x) for x in open(sys.argv[1])]
+keys = ["ts", "machine", "login", "route", "event", "cause", "detail", "gap_s", "rtt_ms"]
+assert all(list(r) == keys for r in rows), rows
+ev = [r["event"] for r in rows]
+assert ev[0] == "down" and rows[0]["cause"] == "network" and rows[0]["gap_s"] is None, rows[0]
+up = [r for r in rows if r["event"] == "up"]
+assert up and up[0]["route"] == "hub-relay" and up[0]["cause"] == "ok" and up[0]["gap_s"] > 0, up
+PY2
+grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[-+][0-9]{4} fleet-peerlink: mac-r@bob ' "$B/run.err" && st_count \
+  || st_miss "O: the keeper's log lines carry no timestamp: $(tail -2 "$B/run.err")"
+stop
+# a refusal everywhere (the relay answers 426, the direct route too): tried, then left
+# alone for REFUSED_BACKOFF — not every beat
+box o2 0
+rm -f "$B/fs/relay/mac-q"
+cat > "$B/ssh" <<EOS
+#!/bin/sh
+case "\$*" in *" -M "*) echo 'fleet connect: hub refused the connection: 426 Upgrade Required' >&2; exit 255 ;; esac
+exec python3 "$BIN/fleet-peerlink-fake-ssh.py" "\$@"
+EOS
+chmod +x "$B/ssh"
+export FLEET_PEERLINK_SSH="$B/ssh"
+peers mac-q:bob:entry=203.0.113.8/22022
+start
+sleep 5
+n=$(grep -c '"event": "\(down\|retry\)"' "$B/conf/logs/peerlink.ndjson" 2>/dev/null || echo 0)
+[ "$n" -ge 1 ] && [ "$n" -le 3 ] && st_count || st_miss "O: a 426 everywhere was tried $n times in 5 s — want once or twice, then minutes"
+c=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["links"][0]["cause"])' "$B/conf/peerlink/state.json" 2>/dev/null)
+[ "$c" = http4xx ] && st_count || st_miss "O: state.json cause [$c], want http4xx"
+stop; unset FLEET_PEERLINK_RELAY_AFTER FLEET_PEERLINK_BACKOFF_MAX FLEET_PEERLINK_REFUSED_BACKOFF
+}
+
 group() {   # group <name> <leg>… — in the background, its result in $WORK/res.<name>
   local g="$1"; shift
   (
@@ -530,7 +579,7 @@ group() {   # group <name> <leg>… — in the background, its result in $WORK/r
 }
 group 1 A B D E
 group 2 H
-group 3 G I
+group 3 G I O
 group 4 L
 group 5 C        # three whole fleet-doctor.sh runs
 group 6 M

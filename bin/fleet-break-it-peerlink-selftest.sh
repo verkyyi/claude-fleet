@@ -37,6 +37,11 @@
 #   peerlink-dials-client  tokenledger/hub/api/fleet_peer_list.go handleNodePeers (T608,
 #                          #4886): the hub lists a login typed client (a person's
 #                          terminal) — the keeper dials it every beat and fails
+#   peerlink-refused-hammer bin/fleet-peerlink.py fail()/on_wake (task FQAR): every
+#                          master is refused (the hub's 426) while a 看台 waits and asks
+#                          every second — not redialled each time; a notice names it
+#   peerlink-pod-rekeyed   bin/fleet-peerlink.py + fleet-peer-cert.sh FLEET_PEER_CERT_FRESH
+#                          (task FQAR): a pod rebuilt with a new host key — re-pinned once
 #   peer-window-ssh-killed bin/fleet-peerlink.py pane (C4, issue #2751): the ssh under a
 #                          看台's window onto another machine dies with its link
 #   peer-window-left-behind bin/fleet-remote-view.sh rv_peer_sweep (C4): a 看台 reaped
@@ -264,7 +269,7 @@ drill_peerlink_two_keepers() {
   # first sees the file it holds is no longer the path's and quits
   rm -f "$B/conf/peerlink/.lock"
   pl_start; k2=$KP; t0=$(now)
-  until_ok 6 sh -c '! kill -0 "$1" 2>/dev/null' _ "$k1" || { WHY="two keepers both alive (pids $k1 $k2)"; KP=$k1; pl_stop; KP=$k2; pl_stop; return 1; }
+  until_ok 6 sh -c '! kill -0 "$1" 2>/dev/null' _ "$k1" || { WHY="two keepers both alive (pids $k1 $k2; $(ps -o pid=,stat= -p "$k1" -p "$k2" 2>/dev/null | tr '\n' ' '); lock pid $(head -1 "$B/conf/peerlink/.lock" 2>/dev/null); log: $(tail -4 "$B/run.err" | tr '\n' ' '))"; KP=$k1; pl_stop; KP=$k2; pl_stop; return 1; }
   SECS=$(since "$t0")
   kill -0 "$k2" 2>/dev/null || { WHY="the new keeper died too"; pl_stop; return 1; }
   until_ok 6 pl_up mac-a@bob || { WHY="the new keeper did not hold the link"; pl_stop; return 1; }
@@ -596,6 +601,7 @@ if "-M" in args and not any(a.startswith("ProxyCommand=") and " peer-proxy u-abc
 os.execv(sys.executable, [sys.executable, sys.argv[1]] + args)
 PY
   export FLEET_PEERLINK_SSH="python3 $B/ssh.py $BIN/fleet-peerlink-fake-ssh.py"
+  mkdir -p "$B/fs/relay" && : > "$B/fs/relay/u-abcd"   # the hub relays to the pod
   pl_start
   until_ok 10 pl_up u-abcd@alice \
     || { WHY="pod link never came up: $(cat "$B/run.err")"; pl_stop; return 1; }
@@ -606,6 +612,80 @@ PY
   pl_stop
   SECS=$(since "$t0")
   WHAT="容器的 jump 路线不再把入口当成容器 sshd；常开连接经节点间中转，保留短期证书、目标密钥与登录"
+}
+
+drill_peerlink_refused_hammer() {
+  CAP=20
+  local t0 n
+  t0=$(now)
+  pl_box rh mac-q:bob
+  cat > "$B/peers.json" <<'EOF'
+{"peers":[{"hostname":"mac-q","login":"bob","routes":[{"name":"entry","host":"203.0.113.8","port":22022}]}]}
+EOF
+  # every master is refused as the hub's 426 refused the relay that day (FQAR)
+  cat > "$B/ssh.py" <<'PY2'
+import os, sys
+args = sys.argv[2:]
+if "-M" in args:
+    with open(os.environ["FAKESSH_DIR"] + "/tries", "a") as f:
+        f.write("x\n")
+    sys.stderr.write("fleet connect: hub refused the connection: 426 Upgrade Required\n"
+                     "kex_exchange_identification: Connection closed by remote host\n")
+    sys.exit(255)
+os.execv(sys.executable, [sys.executable, sys.argv[1]] + args)
+PY2
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notices"\n' "$B" > "$B/notice.sh"; chmod +x "$B/notice.sh"
+  export FLEET_PEERLINK_SSH="python3 $B/ssh.py $BIN/fleet-peerlink-fake-ssh.py" \
+    FLEET_PEERLINK_NOTICE_CMD="$B/notice.sh" FLEET_PEERLINK_ALERT_REFUSED_SECS=3
+  pl_start
+  # a 看台 window waiting on 「正在连…」 asks every second — here as fast as it can
+  for _ in $(seq 1 8); do python3 "$PL" sock mac-q bob >/dev/null 2>&1; sleep 0.2; done
+  n=$(wc -l < "$B/fs/tries" 2>/dev/null | tr -d ' ')
+  [ "${n:-0}" -ge 1 ] && [ "${n:-0}" -le 3 ] \
+    || { WHY="a 426 everywhere was dialled ${n:-0} times under a stream of requests — want once or twice, then minutes"; pl_stop; return 1; }
+  [ "$(pl_link mac-q@bob 'l["cause"]')" = http4xx ] \
+    || { WHY="state.json names the cause [$(pl_link mac-q@bob 'l["cause"]')], want http4xx"; pl_stop; return 1; }
+  until_ok 8 grep -q '^notify error 到 mac-q（bob）的连接断了 .*入口拒绝（4xx）' "$B/notices" \
+    || { WHY="no notice naming the refusal: $(cat "$B/notices" 2>/dev/null)"; pl_stop; return 1; }
+  grep -q '"event": "down", "cause": "http4xx"' "$B/conf/logs/peerlink.ndjson" \
+    || { WHY="the ledger has no down/http4xx line"; pl_stop; return 1; }
+  pl_stop
+  unset FLEET_PEERLINK_NOTICE_CMD FLEET_PEERLINK_ALERT_REFUSED_SECS
+  SECS=$(since "$t0")
+  WHAT="入口 426 拒绝时不再每秒重拨（连串请求下只拨 ${n} 次，之后按分钟退避）；state.json 记 http4xx，一分钟内一条提醒，台账记 down"
+}
+
+drill_peerlink_pod_rekeyed() {
+  CAP=12
+  local t0
+  t0=$(now)
+  pl_box pk u-abcd:alice
+  cat > "$B/peers.json" <<'EOF'
+{"peers":[{"hostname":"u-abcd","login":"alice","routes":[{"name":"entry","host":"203.0.113.9","port":22022}]}]}
+EOF
+  # the pod was rebuilt: its new host key matches only once the hub was asked again
+  # (fleet-peer-cert.sh with FLEET_PEER_CERT_FRESH=1 re-pins peer/known_hosts)
+  sed -i.bak 's|^echo "\$1" >> |[ "${FLEET_PEER_CERT_FRESH:-0}" = 1 ] \&\& : > "'"$B"'/repinned"; echo "$1" >> |' "$B/cert.sh"
+  cat > "$B/ssh.py" <<PY2
+import os, sys
+args = sys.argv[2:]
+if "-M" in args and not os.path.exists("$B/repinned"):
+    sys.stderr.write("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n"
+                     "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\n"
+                     "Host key verification failed.\n")
+    sys.exit(255)
+os.execv(sys.executable, [sys.executable, sys.argv[1]] + args)
+PY2
+  export FLEET_PEERLINK_SSH="python3 $B/ssh.py $BIN/fleet-peerlink-fake-ssh.py"
+  pl_start
+  until_ok 10 pl_up u-abcd@alice \
+    || { WHY="a rebuilt pod's new key was never re-pinned: $(tail -3 "$B/run.err")"; pl_stop; return 1; }
+  [ -f "$B/repinned" ] || { WHY="up without asking the hub afresh"; pl_stop; return 1; }
+  grep -q '主机钥匙对不上：向入口重新要这台的钥匙再试' "$B/run.err" \
+    || { WHY="the keeper's log does not say it re-pinned"; pl_stop; return 1; }
+  pl_stop
+  SECS=$(since "$t0")
+  WHAT="pod 重建换了主机钥匙：Host key verification failed 后向入口重新要证书和钥匙（FLEET_PEER_CERT_FRESH=1），重钉后当拍连上"
 }
 
 drill_peerlink_relay_endpoint() {

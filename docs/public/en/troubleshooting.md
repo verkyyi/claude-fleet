@@ -547,6 +547,7 @@ From `fleet doctor`.
 
 - **What it is**: whether the link between machines (used to see sessions on other machines) works.
 - **On WARN / FAIL**: `fleet-peerlink.py status` shows the last few rebuilds and why.
+- **How long it was down, and why**: every connect, drop, retry and the once-a-minute probe is a line in `~/.config/claude-fleet/logs/peerlink.ndjson`, with a cause class and the round trip in milliseconds. A refusal (4xx, auth, host key) is not redialled every second but backs off by minutes; a link down over two minutes (one for a refusal) leaves a message in 「✦ 消息」 naming the cause.
 
 #### `releasekey`
 

@@ -770,6 +770,7 @@ FLEET_PEER_CERT                    escape hatch: 0 = never ask the hub for a mac
 FLEET_PEER_CERT_SECS               seam: life asked for a peer certificate (default 300; the hub caps it at 300) (fleet-peer-cert.sh, #1626)
 FLEET_PEER_CERT_MARGIN             knob: seconds before expiry a cached peer certificate stops being reused (fleet-peer-cert.sh, 30, #1631)
 FLEET_PEER_CERT_CONNECT_SECS       seam: connect bound for the peer-cert request — a down hub is refused inside 1 s (default 0.8) (fleet-peer-cert.sh, #1630)
+FLEET_PEER_CERT_FRESH              handoff: 1 = skip the certificate cache and ask the hub again, re-pinning the host keys it vouches for now (fleet-peerlink.py after a host key mismatch, FQAR)
 FLEET_PEER_LIST_CONNECT_SECS       seam: connect bound for the /v1/node/peers request (default 2) (fleet-peer-list.sh, #3482)
 FLEET_PEER_KEY                     path: the peer key the hub signs (default ~/.ssh/fleet-peer) (fleet-peer-cert.sh, #1626)
 FLEET_CLIENT_AUTO_UPDATE           escape hatch: 0 = the installed client never updates itself from the hub; the team's defaults still land (fleet-client-update.sh, #1722)
