@@ -128,9 +128,18 @@ Chinese), never decided here.
 
 STALE (issue #3184, EPIC #3178 C6): 失联 is judged off ONE time, global/hub_ok —
 the file the producer's `mac-a!` reads. A lost row is grey end to end and tagged
-「? 失联 N 分钟」; hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) puts a red
-banner on top naming the machines (banner()); ↵ on a lost row says 进不去 instead
-of going (lost_msg()). An open popup reads its list again every
+「? 失联 N 分钟」; hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) — or
+FLEET_HUB_SESSIONS_STALE_FAIL (15 s) once global/hub_why says the last round failed
+(hub_lost_after, task FQAR) — puts a red banner on top naming the machines
+(banner()); ↵ on a lost row says 进不去 instead of going (lost_msg()).
+
+UNREACHABLE (task FQAR): a row the hub shows alive on another machine whose link
+from here (peerlink/state.json, fleet_view_link.py) is down / connecting /
+verifying is dimmed, loses its working glyph (a question stays !), and its bottom
+line says 「不可进入 · 正在重连 N 秒」 (link_overlay); this machine's own rows are
+never touched. The actions page (Tab) ends with a 「连接」 block (link_page):
+machine · place · route · phase · rtt · up since · fails · last error · enter
+p50/p95 off view-switch.ndjson · the hub's word on the machine. An open popup reads its list again every
 FLEET_VIEW_REFRESH (2 s, 0 = never) off the screen's thread (Refresh), the lit
 row kept by its key — and each read runs hub_fresh, so a silent hub is retried.
 
@@ -185,6 +194,7 @@ if str(Path(__file__).absolute().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).absolute().parent))
 import fleet_timing  # noqa: E402 — the panel's and the new session's clock (issue #3551)
 import fleet_stub  # noqa: E402 — a new session's window before the session (T992)
+import fleet_view_link  # noqa: E402 — this machine's link to a row's machine (FQAR)
 from fleet_task_control import continue_task, pending_start_task, cancel_pending_start, controlled_stop_task, stop_task
 
 US = "\x1f"
@@ -430,10 +440,23 @@ def hub_age(now=None):
     return max(0, (time.time() if now is None else now) - ok)
 
 
+def hub_lost_after():
+    """How old hub_ok may get before the list says 失联 — fleet_status_hub_lost's
+    rule (fleet-status-lib.sh), the one judge: FLEET_HUB_SESSIONS_STALE (60 s)
+    while the hub's last round did not fail (a held long poll or an idle loop
+    is quiet that long by design); once global/hub_why says it failed,
+    FLEET_HUB_SESSIONS_STALE_FAIL (15 s) — a hub that does not answer is said
+    within seconds, not a minute (task FQAR)."""
+    stale = fenv("FLEET_HUB_SESSIONS_STALE", 60)
+    if (dash_global() / "hub_why").is_file():
+        return min(stale, fenv("FLEET_HUB_SESSIONS_STALE_FAIL", 15))
+    return stale
+
+
 def hub_stale(now=None):
-    """hub_ok older than FLEET_HUB_SESSIONS_STALE (60 s) — the bar's 入口连不上."""
+    """hub_ok older than hub_lost_after() — the bar's 入口连不上."""
     age = hub_age(now)
-    return age is not None and age > fenv("FLEET_HUB_SESSIONS_STALE", 60)
+    return age is not None and age > hub_lost_after()
 
 
 def hub_view_request(fleet):
@@ -1675,6 +1698,31 @@ def id_page(e, w):
     return out
 
 
+def link_page(e, now=None):
+    """The actions page's 「连接」 block (task FQAR): the row's machine and place,
+    this machine's link to it (route · phase · rtt · up since · fails/strikes ·
+    last error), the enter latency logged here (view-switch.ndjson p50/p95) and
+    the hub's word on the machine — one fact a line, dim. [(text, style)]."""
+    if e.get("kind") != "sess" or e.get("gone"):
+        return []
+    now = time.time() if now is None else now
+    en = ui_lang() == "en"
+    try:
+        st = fleet_view_link.link_state(conf_dir(), now)
+        link = fleet_view_link.link_of(st, e.get("machine") or "", e.get("login") or "") if e.get("far") else None
+        node = fleet_view_link.node_of(dash_global() / "hub_nodes", e.get("machine") or "")
+        stats = fleet_view_link.enter_stats(switch_log(), e.get("target") or "", e.get("machine") or "",
+                                            e.get("login") or "")
+        lines = fleet_view_link.detail_lines(e, link, node, stats, now, en, hub_age(now), hub_stale(now))
+    except Exception:  # noqa: BLE001 — a detail block never costs the page
+        return []
+    out = [("", ())]
+    for i, text in enumerate(lines):
+        red = i and e.get("unreach") is not None and text.startswith(("状态", "state"))
+        out.append(("  " + text, ("red",) if red else ("dim",)))
+    return out
+
+
 # --- an EPIC's members under its driver (T507, T486 v18 定稿 ⑪–⑭) -----------------
 # Only an EPIC hangs: a driver is a window here wearing @epic (fleet-epic-heartbeat.sh)
 # whose @task is the batch's parent task; its members are that task's children on
@@ -1932,7 +1980,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         landed_secs = 86400.0
     gl = glyphs()
     hage = hub_age(now)
-    hstale = hage is not None and hage > fenv("FLEET_HUB_SESSIONS_STALE", 60)
+    hstale = hage is not None and hage > hub_lost_after()
     groups = {g: [] for g in GROUPS}
     ended, repos, anc, norepo, shut = [], [], {}, [], []
     section, repo = "", ""
@@ -2222,6 +2270,20 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
     for e in out:
         if e.get("kind") == "sess":
             e["list_scope"] = fleet
+    link_overlay(out, here, me, now)
+    return out
+
+
+def link_overlay(out, here, me, now=None):
+    """Task FQAR: a row the hub shows alive on another machine (or another login
+    here) whose link from this machine is not up cannot be entered — its working
+    state is not what ↵ gives. fleet_view_link.overlay marks it (`unreach`, the
+    seconds the link has been down), off peerlink/state.json; a row of this
+    machine and login is never touched. No keeper state ⇒ nothing changes."""
+    try:
+        fleet_view_link.overlay(out, fleet_view_link.link_state(conf_dir(), now), here, me, now)
+    except Exception:  # noqa: BLE001 — a broken state file never costs the list
+        pass
     return out
 
 
@@ -2439,7 +2501,7 @@ def banner(items, now=None):
     row's PR is read off the hub, issue #4902). Nothing else is judged here: the
     hub fresh, or no hub_ok at all ⇒ no line."""
     age = hub_age(now)
-    if age is None or age <= fenv("FLEET_HUB_SESSIONS_STALE", 60):
+    if age is None or age <= hub_lost_after():
         return ""
     names = []
     for e in items:
@@ -2616,8 +2678,15 @@ def note_of(e):
     console card's 「为什么还没收」 line, one source). (text, red)."""
     tags = [t for t in (e.get("tags") or []) if t and t != e.get("repo")]
     red = any(say("view_tag_cfg_broken") in t for t in tags)
+    unreach = e.get("unreach")
+    if unreach is not None:
+        # FQAR: the link is down — say that instead of the working state
+        words = fleet_view_link.unreach_words(unreach, ui_lang() == "en")
+        word = e.get("word") if task_status(e) == "needs" else ""
+    else:
+        words, word = "", e.get("word")
     facts = [("Execution status unknown" if ui_lang() == "en" else "运行情况未知") if e.get("lost") else "",
-             e.get("board_context"), e.get("word"), e.get("ask"),
+             words, e.get("board_context"), word, e.get("ask"),
              task_status_word("loop") if e.get("loop") else "",
              agent_word(e) if e.get("agent_basis") == "planned" else "", e.get("why")]
     return " · ".join([x for x in facts if x] + tags), red
@@ -2663,6 +2732,8 @@ def task_status(e):
     state = e.get("state")
     if state in ("needs", "blocked"):
         return "needs"
+    if e.get("unreach") is not None:
+        return "quiet"     # FQAR: not enterable from here — no working glyph
     if e.get("pending_start"):
         return "pending"
     running = e.get("running") if "running" in e else (
@@ -2917,7 +2988,7 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     """
     gl = TASK_GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else TASK_GLYPHS
     col = color_on()
-    base = (("dim",) if e.get("lost") else ()) + (("lit",) if lit else ())
+    base = (("dim",) if e.get("lost") or e.get("unreach") is not None else ()) + (("lit",) if lit else ())
     sym = task_status(e)
     gstyle = base + (("c1", "bold") if col and sym == "needs" else ())
     show_repo = width >= 60
@@ -6508,6 +6579,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 if mode == "menu" and head and head.get("kind") == "sess":
                     # the window's ID under its actions (EPIC T497 C3): segments, aliases, hub
                     lines.extend(id_page(head, w))
+                    lines.extend(link_page(head))
                 selected = mat
                 keys = say("view_page_keys_fmt", "1–%d" % min(9, max(1, n))) if mode == "menu" else \
                     say("view_choice_keys_fmt", "1–%d" % min(9, max(1, n)))

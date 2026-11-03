@@ -14,7 +14,8 @@
 #               fetch leaves the last cache in place: its rows go on rendering, and
 #               once global/hub_ok — the epoch of the last round that stood (a
 #               200 taken, a 304 restamped), written here and nowhere else — is
-#               older than FLEET_HUB_SESSIONS_STALE they read 失联 (issue #1483,
+#               older than FLEET_HUB_SESSIONS_STALE (FLEET_HUB_SESSIONS_STALE_FAIL
+#               once hub_why says a round failed, task FQAR) they read 失联 (issue #1483,
 #               EPIC #1479 C4: the rows, the bar and the remote-row actions all
 #               read that one file through fleet_status_hub_lost, none probes
 #               the hub; the next round that stands flips them back, nothing to
@@ -663,8 +664,8 @@ EOF
     else hub_why unreachable "no answer"; fi
     case "$ok" in
       principal) printf 'fleet-hub-sessions: the hub answered but refused this certificate (above) — keeping the last cache\n' >&2 ;;
-      ''|*[!0-9]*) printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once hub_ok is older than %ss)\n' "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
-      *) printf 'fleet-hub-sessions: hub unreachable for %ss — keeping the last cache (its rows read 失联 past %ss; the next answer flips them back)\n' "$(( $(date +%s) - ok ))" "${FLEET_HUB_SESSIONS_STALE:-60}" >&2 ;;
+      ''|*[!0-9]*) printf 'fleet-hub-sessions: hub unreachable — keeping the last cache (its rows read 失联 once hub_ok is older than %ss)\n' "${FLEET_HUB_SESSIONS_STALE_FAIL:-15}" >&2 ;;
+      *) printf 'fleet-hub-sessions: hub unreachable for %ss — keeping the last cache (its rows read 失联 past %ss; the next answer flips them back)\n' "$(( $(date +%s) - ok ))" "${FLEET_HUB_SESSIONS_STALE_FAIL:-15}" >&2 ;;
     esac
     rm -f "$json" "$lf" "$mf"
     return 1

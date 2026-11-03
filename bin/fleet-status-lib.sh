@@ -16,7 +16,11 @@
 #       alerts, the 看台 and the remote-row actions all read it here; none of
 #       them probes the hub.
 #   fleet_status_hub_lost <now>        → rc 0 = 失联: FSH_TS is older than
-#       FLEET_HUB_SESSIONS_STALE (60 s), FSH_AGE the seconds since; rc 1 = fresh.
+#       FLEET_HUB_SESSIONS_STALE (60 s) — or FLEET_HUB_SESSIONS_STALE_FAIL (15 s)
+#       once global/hub_why says the last round failed (a held long poll and an
+#       idle loop are quiet up to a minute by design; a hub that refused or did
+#       not answer is said within seconds — task FQAR) — FSH_AGE the seconds
+#       since; rc 1 = fresh. fleet_view.py's hub_lost_after is the same rule.
 #   fleet_status_age <secs>            → FSA: `3m` / `2h` / `1d` for 失联 N.
 #
 # Everything is builtins: `read` over a US-separated file, no subshell (#888).
@@ -51,9 +55,11 @@ fleet_status_hub_ok() {
 }
 
 fleet_status_hub_lost() {
-  local now="${1:-0}" stale="${FLEET_HUB_SESSIONS_STALE:-60}"
+  local now="${1:-0}" stale="${FLEET_HUB_SESSIONS_STALE:-60}" fail="${FLEET_HUB_SESSIONS_STALE_FAIL:-15}"
   case "$now" in ''|*[!0-9]*) now=0 ;; esac
   case "$stale" in ''|*[!0-9]*) stale=60 ;; esac
+  case "$fail" in ''|*[!0-9]*) fail=15 ;; esac
+  [ -f "$FLEET_STATUS_G/hub_why" ] && [ "$fail" -lt "$stale" ] && stale=$fail
   FSH_AGE=$(( now - ${FSH_TS:-0} )); [ "$FSH_AGE" -lt 0 ] && FSH_AGE=0
   [ "$FSH_AGE" -gt "$stale" ]
 }
