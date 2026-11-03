@@ -158,10 +158,10 @@ class TaskList(unittest.TestCase):
                  run("a2", "Brief 10-30", 7, schedule_id="s1", state="needs"), run("a1", "Brief 10-29", 6, schedule_id="s1"),
                  run("d1", "daily-2026-10-30", 5), run("b1", "Brief 10-28", 4, schedule_id="s2")]
         targets = lambda opened: [e.get("target") or e["text"] for e in v.visible(items, "", opened) if e.get("sec", "").startswith(("src-", "sched-")) or e["kind"] == "sess"]
-        self.assertEqual(targets(set()), ["定时任务 · 6 · 1 个在问你"])
-        self.assertEqual(targets({"src-schedule"}), ["定时任务 · 6 · 1 个在问你", "a3", "a2", "  Brief · 1 次更早运行",
+        self.assertEqual(targets(set()), ["定时任务 · 6"])
+        self.assertEqual(targets({"src-schedule"}), ["定时任务 · 6", "a3", "a2", "  Brief · 1 次更早运行",
                                                      "d2", "  daily · 1 次更早运行", "b1"])
-        self.assertEqual(targets({"src-schedule", "sched-s1"})[:5], ["定时任务 · 6 · 1 个在问你", "a3", "a2", "  Brief · 1 次更早运行", "a1"])
+        self.assertEqual(targets({"src-schedule", "sched-s1"})[:5], ["定时任务 · 6", "a3", "a2", "  Brief · 1 次更早运行", "a1"])
         self.assertNotIn("a1", targets({"sched-s1"}), "a run folds with its group too")
         self.assertIn("a1", [e["target"] for e in v.visible(items, "", set(), current="a1") if e["kind"] == "sess"],
                       "the run open now is never folded")
@@ -439,16 +439,16 @@ class SessionArchive(unittest.TestCase):
 
 class SessionTree(unittest.TestCase):
     """A session opened by another session sits under it (the session tree):
-    drawn inside the title column, folded by ▸ / ▾, never hiding a question."""
+    drawn inside the title column (status · title · Agent · repo), shut by
+    default, a shut ▸ coloured by what it hides, duplicates folded into one."""
 
     def setUp(self):
         v._TASK_ORDER.clear()
         self.tmp = tempfile.TemporaryDirectory()
         self.env = patch.dict(os.environ, {"FLEET_UI_LANG": "zh", "FLEET_CONF_DIR": self.tmp.name})
         self.env.start()
-        os.environ.pop("FLEET_GLYPHS", None)
-        os.environ.pop("NO_COLOR", None)
-        os.environ.pop("FLEET_COLOR", None)
+        for k in ("FLEET_GLYPHS", "NO_COLOR", "FLEET_COLOR"):
+            os.environ.pop(k, None)
         v.caches_words_reset()
         v._BOARD["lang"] = "zh"
         self.now = time.time()
@@ -469,6 +469,8 @@ class SessionTree(unittest.TestCase):
                 self.node("D", "C", text="曾孙 二", **(deep or {})),
                 self.node("Q", text="plain")]
 
+    OPEN = {"P": True, "A": True}
+
     @staticmethod
     def drawn(e, width=100):
         return "".join(t for t, _ in v.paint([e], -1, width, qo.cells, qo.clip)[0])
@@ -477,94 +479,100 @@ class SessionTree(unittest.TestCase):
     def sess(items, query="", **kw):
         return [e for e in v.visible(items, query, set(), **kw) if e["kind"] == "sess"]
 
-    def test_nesting_and_alignment_with_cjk_titles(self):
-        items = self.family(deep=dict(state="working", running=True))
-        shown = self.sess(items)
+    @staticmethod
+    def seg(e, text, width=100):
+        return next(st for t, st in v.row_segs(e, width, qo.cells, qo.clip) if t == text)
+
+    def test_nesting_columns_and_alignment_with_cjk_titles(self):
+        shown = self.sess(self.family(), folds=self.OPEN)
         self.assertEqual([e["target"] for e in shown], ["P", "A", "C", "D", "B", "Q"],
                          "children under their opener, a third level drawn at the second")
-        prefix = {e["target"]: e.get("tree_prefix") for e in shown}
-        self.assertEqual(prefix, {"P": "", "A": "  ├ ", "C": "  │   ├ ", "D": "  │   └ ", "B": "  └ ", "Q": ""})
+        self.assertEqual({e["target"]: e.get("tree_prefix") for e in shown},
+                         {"P": "", "A": "  ├ ", "C": "  │   ├ ", "D": "  │   └ ", "B": "  └ ", "Q": ""})
         self.assertEqual([e["tree_twisty"] for e in shown], ["open", "open", "", "", "", ""])
-        for width in (100, 72, 60, 45):
+        for width in (100, 72, 60, 45, 39):
             lines = [self.drawn(e, width) for e in shown]
             self.assertTrue(all(qo.cells(x) == width for x in lines), (width, lines))
-            # the repo column starts at the same cell on every row, CJK titles or not
-            repo_x = {qo.cells(x[:x.rindex("test")]) for x in lines} if width >= 60 else {0}
-            self.assertEqual(len(repo_x), 1, lines)
+            # Agent (then repo) is a fixed column after the title: same cell on every row
+            if width >= 40:
+                agent_x = {qo.cells(x[:x.rindex("Codex")]) for x in lines}
+                self.assertEqual(len(agent_x), 1, lines)
+                want = width - v.AGENT_W - (v.REPO_W + 2 if width >= 60 else 1)
+                self.assertEqual(agent_x, {want}, lines)
+            else:
+                self.assertNotIn("Codex", "".join(lines))
+            if width >= 60:
+                self.assertEqual(len({qo.cells(x[:x.rindex("test")]) for x in lines}), 1, lines)
         lines = [self.drawn(e) for e in shown]
         col = v.name_col(100)
+        self.assertEqual(col, v.TEXT_X, "the title column starts right after the status slot")
         self.assertEqual(lines[0][col:col + 2], "▾ ")
         self.assertTrue(lines[0][col + 2:].startswith("父会话 中文标题"))
         self.assertTrue(lines[1][col:].startswith("  ├ ▾ 子任务 甲"))
         self.assertTrue(lines[2][col:].startswith("  │   ├   孙 一"))
         self.assertTrue(lines[4][col:].startswith("  └   子任务 乙"))
         self.assertTrue(lines[5][col:].startswith("  plain"), "a lone row keeps the two-cell slot")
-        # no new column, no session ID on the row
         self.assertNotIn("AB12", "".join(lines))
 
     def test_ascii_glyphs(self):
         with patch.dict(os.environ, {"FLEET_GLYPHS": "ascii"}):
-            shown = self.sess(self.family(deep=dict(state="working", running=True)))
+            shown = self.sess(self.family(), folds=self.OPEN)
             self.assertEqual(shown[1]["tree_prefix"], "  |-")
             self.assertEqual(shown[2]["tree_prefix"], "  |   |-")
             self.assertIn("v 父会话", self.drawn(shown[0]))
 
-    def test_default_fold_and_hidden_count(self):
-        shown = self.sess(self.family())
-        self.assertEqual([e["target"] for e in shown], ["P", "Q"], "nothing running under it: shut")
-        self.assertEqual(shown[0]["tree_twisty"], "shut")
-        self.assertEqual(shown[0]["tree_hidden_n"], 4)
-        line = self.drawn(shown[0])
-        self.assertIn("▸ 父会话 中文标题 (4)", line)
-        # the hidden rows are still searchable, drawn flat
+    def test_default_shut_hides_everything_and_counts(self):
+        for facts in ({}, dict(state="working", running=True), dict(pending_start=True), dict(state="needs")):
+            shown = self.sess(self.family(**facts))
+            self.assertEqual([e["target"] for e in shown], ["P", "Q"], ("always shut by default", facts))
+            self.assertEqual((shown[0]["tree_twisty"], shown[0]["tree_hidden_n"]), ("shut", 4))
+        self.assertIn("▸ 父会话 中文标题 (4)", self.drawn(self.sess(self.family())[0]))
+        # the person's choice is remembered either way
+        self.assertEqual([e["target"] for e in self.sess(self.family(), folds={"P": True})], ["P", "A", "B", "Q"])
+        self.assertEqual([e["target"] for e in self.sess(self.family(deep=dict(state="needs")), folds={"P": True})],
+                         ["P", "A", "B", "Q"], "a question three levels down hides with its shut parent")
+        # hidden rows are still searchable, drawn flat
         hit = self.sess(self.family(), "曾孙")
         self.assertEqual([e["target"] for e in hit], ["D"])
+        self.assertTrue(hit[0]["tree_hidden"])
         self.assertTrue(self.drawn(hit[0])[v.name_col(100):].startswith("  曾孙 二"))
-        # pending under it opens it too
-        shown = self.sess(self.family(pending_start=True))
-        self.assertEqual(shown[0]["tree_twisty"], "open")
-        # the person's choice wins, either way
-        self.assertEqual([e["target"] for e in self.sess(self.family(), folds={"P": True})], ["P", "A", "B", "Q"])
-        self.assertEqual([e["target"] for e in self.sess(self.family(), folds={"P": True, "A": True})],
-                         ["P", "A", "C", "D", "B", "Q"])
-        shut = self.sess(self.family(state="working", running=True), folds={"P": False})
-        self.assertEqual([e["target"] for e in shut], ["P", "Q"])
 
-    def test_working_twisty_colour(self):
-        shut = self.sess(self.family(state="working", running=True), folds={"P": False})
-        segs = v.row_segs(shut[0], 100, qo.cells, qo.clip)
-        tw = next(st for t, st in segs if t == "▸ ")
-        self.assertIn("c2", tw)
-        self.assertNotIn("dim", tw)
-        quiet = self.sess(self.family())
-        tw = next(st for t, st in v.row_segs(quiet[0], 100, qo.cells, qo.clip) if t == "▸ ")
-        self.assertIn("dim", tw)
-        self.assertNotIn("c2", tw)
+    def test_shut_twisty_and_count_colour_priority(self):
+        quiet = self.sess(self.family())[0]
+        self.assertEqual(quiet["tree_tone"], "")
+        self.assertIn("dim", self.seg(quiet, "▸ "))
+        self.assertIn("dim", self.seg(quiet, " (4)"))
+        work = self.sess(self.family(state="working", running=True))[0]
+        self.assertEqual(work["tree_tone"], "work")
+        self.assertIn("c2", self.seg(work, "▸ "))
+        self.assertIn("dim", self.seg(work, " (4)"))
+        loop = self.sess(self.family(loop=True))[0]
+        self.assertEqual(loop["tree_tone"], "work", "looping counts as working")
+        ask = self.sess(self.family(state="working", running=True, deep=dict(state="needs")))[0]
+        self.assertEqual(ask["tree_tone"], "ask", "asking wins over working")
+        for text in ("▸ ", " (4)"):
+            st = self.seg(ask, text)
+            self.assertIn("c1", st)
+            self.assertIn("bold", st)
         with patch.dict(os.environ, {"NO_COLOR": "1"}):
-            tw = next(st for t, st in v.row_segs(shut[0], 100, qo.cells, qo.clip) if t == "▸ ")
-            self.assertNotIn("c2", tw)
-
-    def test_asking_descendant_never_hidden_nor_folded_away(self):
-        items = self.family()
-        items[4].update(state="needs")          # D, three levels down, asks
-        shown = self.sess(items, folds={"P": False, "A": False})
-        self.assertEqual([e["target"] for e in shown], ["P", "A", "D", "Q"])
-        self.assertEqual(shown[0]["tree_hidden_n"], 2, "B and C hidden, D shown")
-        # asking: red/bold title as well as the glyph — no words added
-        segs = v.row_segs(shown[2], 100, qo.cells, qo.clip)
-        title = next(st for t, st in segs if t.startswith("曾孙"))
+            self.assertNotIn("c1", self.seg(ask, "▸ "))
+        # an asking row: glyph and title red/bold, no words added
+        row_ = self.sess(self.family(deep=dict(state="needs")), folds=self.OPEN)[3]
+        title = self.seg(row_, "曾孙 二")
         self.assertIn("c1", title)
         self.assertIn("bold", title)
-        self.assertNotIn("在问", self.drawn(shown[2]))
-        # an old tree holding a question never goes to 更多会话
+
+    def test_asking_never_goes_to_more_sessions(self):
+        items = self.family(deep=dict(state="needs"))
         for e in items:
             e["activity_at"] = self.now - 3 * 86400
-        shown = self.sess(items)
-        self.assertEqual([e["target"] for e in shown][:1], ["P"])
-        self.assertTrue(all(not e.get("sec") for e in shown if e["target"] in ("P", "A", "D")))
+        out = v.compact_task_list(items, now=self.now)
+        p = next(e for e in out if e.get("target") == "P")
+        self.assertFalse(p.get("sec"), "a tree holding a question stays in the list (shut)")
+        self.assertEqual(next(e for e in out if e.get("target") == "Q").get("sec"), "gone")
 
-    def test_arrow_and_g_keys(self):
-        shown = self.sess(self.family(deep=dict(state="working", running=True)))
+    def test_arrow_g_and_reveal(self):
+        shown = self.sess(self.family(), folds=self.OPEN)
         by = {e["target"]: e for e in shown}
         self.assertEqual(v.tree_arrow(by["P"], True), ("P", True))
         self.assertEqual(v.tree_arrow(by["P"], False), ("P", False))
@@ -572,31 +580,70 @@ class SessionTree(unittest.TestCase):
         self.assertIsNone(v.tree_arrow(by["B"], True), "→ on a leaf does nothing")
         self.assertEqual(v.tree_arrow(by["C"], False), ("A", False))
         self.assertIsNone(v.tree_arrow(by["Q"], False))
-        # g: the row of the session that opened it — D's opener is C, drawn beside it
-        self.assertEqual(by["D"]["tree_opener"], "C")
-        self.assertEqual(by["D"]["tree_opener_title"], "孙 一")
-        self.assertEqual(by["B"]["tree_opener"], "P")
+        self.assertEqual((by["D"]["tree_opener"], by["D"]["tree_opener_title"]), ("C", "孙 一"))
         self.assertEqual(v.tree_at_row(shown, by["B"]["tree_opener"], 4), 0)
-        self.assertEqual(by["P"]["tree_opener"], "")
+        self.assertEqual(v.say("view_keys_tree_child_fmt", "孙 一"), "来自 孙 一  g 跳到它")
         # remembered per view; a row no longer listed is dropped from the book
         items = self.family()
-        folds = v.tree_toggle({"gone-row": True}, "fx", "P", True, items)
-        self.assertEqual(folds, {"P": True})
+        self.assertEqual(v.tree_toggle({"gone-row": True}, "fx", "P", True, items), {"P": True})
         self.assertEqual(v.tree_folds_load("fx"), {"P": True})
         self.assertEqual(v.tree_folds_load("other"), {})
-        # the keys line words
-        self.assertEqual(v.say("view_keys_tree_child_fmt", "孙 一"), "来自 孙 一  g 跳到它")
+        # the cursor lands on a hidden row (a search hit, a jump): its ancestors open
+        folds = v.tree_reveal({}, "fy", items, "D")
+        self.assertEqual(folds, {"P": True, "A": True})
+        self.assertEqual(v.tree_folds_load("fy"), folds)
+        self.assertIn("D", [e["target"] for e in self.sess(items, folds=folds)])
+        self.assertEqual(v.tree_reveal({"P": True}, "fz", items, "B"), {"P": True}, "a shown row changes nothing")
 
-    def test_from_sessions_section_is_gone(self):
-        items = [self.node("mine"), self.node("bot", source="agent"), self.node("job", source="schedule")]
+    def test_duplicates_fold_into_the_newest(self):
+        items = [self.node("P", text="driver"),
+                 self.node("d1", "P", text="Fix  Tests", activity_at=self.now - 30),
+                 self.node("d2", "P", text="fix tests", activity_at=self.now - 10),
+                 self.node("d3", "P", text="Fix tests", activity_at=self.now - 20, state="needs"),
+                 self.node("other", "P", text="Fix tests", source="api", activity_at=self.now - 5),
+                 self.node("solo1", text="same"), self.node("solo2", text="same")]
+        for e in items[1:5]:
+            e["from"] = "P"
+        shown = self.sess(items, folds={"P": True})
+        self.assertEqual([e["target"] for e in shown], ["P", "other", "d2", "solo1", "solo2"],
+                         "one row per (from, title, source); rows with no `from` never merge")
+        d2 = shown[2]
+        self.assertEqual(d2["dup_n"], 3)
+        self.assertEqual(v.row_status(d2), "needs", "the group's most urgent")
+        segs = v.row_segs(d2, 100, qo.cells, qo.clip)
+        self.assertEqual(segs[1][0], v.TASK_GLYPHS["needs"])
+        self.assertIn("dim", self.seg(d2, " ×3"))
+        self.assertIn("fix tests ×3", self.drawn(d2))
+        self.assertEqual(shown[0]["tree_hidden_n"], 0)
+        # the others are searchable, never drawn; the parent's (N) counts rows, not copies
+        hit = self.sess(items, "fix tests", folds={"P": True})
+        self.assertEqual(sorted(e["target"] for e in hit), ["d1", "d2", "d3", "other"])
+        self.assertNotIn("×", self.drawn([e for e in hit if e["target"] == "d2"][0]))
+        shut = self.sess(items)[0]
+        self.assertEqual((shut["tree_hidden_n"], shut["tree_tone"]), (2, "ask"))
+
+    def test_from_sessions_section_is_gone_and_section_order(self):
+        items = [self.node("mine"), self.node("bot", source="agent"), self.node("job", source="schedule"),
+                 self.node("call", source="api", state="working", running=True),
+                 self.node("old", activity_at=self.now - 5 * 86400), self.node("arch", archived=True)]
         out = v.compact_task_list(items, now=self.now)
         self.assertFalse(any(e.get("sec") == "src-agent" for e in out))
-        self.assertNotIn("会话派出的", " ".join(e.get("text") or "" for e in out if e["kind"] == "sec"))
         self.assertEqual([e["target"] for e in v.visible(items, "", set()) if e["kind"] == "sess"], ["bot", "mine"])
-        self.assertIn("src-schedule", [e.get("sec") for e in out if e["kind"] == "sec"], "schedules keep their section")
+        secs = [e["sec"] for e in out if e["kind"] == "sec"]
+        self.assertEqual(secs, ["gone", "src-schedule", "src-api", "archived"], "更多会话 before the source groups")
+        heads = {e["sec"]: e for e in v.visible(items, "", set()) if e["kind"] == "sec"}
+        self.assertEqual(heads["src-api"]["text"], "API 派发 · 1")
+        self.assertEqual(heads["src-api"]["tone"], "work")
+        line = v.paint([heads["src-api"]], -1, 60, qo.cells, qo.clip)[0]
+        self.assertEqual(line[1], ("▸", ("c2",)))
+        self.assertEqual(v.paint([heads["src-schedule"]], -1, 60, qo.cells, qo.clip)[0][1], ("▸", ("dim",)))
+        self.assertEqual(qo.cells("".join(t for t, _ in line)), 60)
+        ask = [self.node("job2", source="schedule", state="needs")]
+        h = next(e for e in v.visible(ask, "", set()) if e["kind"] == "sec")
+        self.assertEqual(h["text"], "定时任务 · 1", "no count of questions in words")
+        self.assertEqual(v.paint([h], -1, 60, qo.cells, qo.clip)[0][1], ("▸", ("c1", "bold")))
 
     def test_live_child_under_ended_parent(self):
-        v._BOARD["lang"] = "zh"
         board = dict(rows=[dict(id="old", title="老会话", group="gone", tag="ended"),
                            dict(id="kid", title="还在跑", group="work", tag="working", state="working", running=True,
                                 **{"from": "old", "from_title": "老会话", "from_ended": True, "tree_at": 99}),
@@ -607,45 +654,46 @@ class SessionTree(unittest.TestCase):
         self.assertEqual((kid["from"], kid["from_title"], kid["from_ended"], kid["tree_at"], kid["tree_parent"]),
                          ("old", "老会话", True, 99, ""))
         items = [e for es in groups.values() for e in es] + gone
-        shown = v.visible(items, "", set())
-        kinds = [(e["kind"], e.get("target") or e.get("of")) for e in shown]
+        shown = v.visible(items, "", set(), folds={"kid": True})
+        kinds = [(e["kind"], e.get("target")) for e in shown]
         at = kinds.index(("sess", "id:kid"))
-        self.assertEqual(kinds[at + 1], ("from", "id:kid"))
-        self.assertEqual(kinds[at + 2], ("sess", "id:sub"), "the hub's parent nests it")
-        line = self.drawn(shown[at + 1])
-        self.assertEqual(line.strip(), "来自 老会话（已结束）")
-        self.assertTrue(line.startswith(" " * (v.name_col(100) + 2) + "来自"))
-        self.assertFalse(v.pickable(shown[at + 1]))
+        self.assertEqual(kinds[at + 1], ("sess", "id:sub"), "no line under it; the hub's parent nests sub")
+        self.assertFalse(any(e["kind"] == "from" for e in shown))
+        # who opened it, on the lit row's own line
+        self.assertIn("来自 老会话（已结束）", v.note_of(shown[at])[0])
+        self.assertNotIn("来自", v.note_of(shown[at + 1])[0])
         with patch.dict(os.environ, {"FLEET_UI_LANG": "en"}):
             v.caches_words_reset()
             self.assertEqual(v.say("view_from_ended_fmt", "old"), "From old (ended)")
         v.caches_words_reset()
-        # no title, no line
-        kid2 = dict(kid, from_title="")
-        self.assertFalse(any(e["kind"] == "from" for e in v.visible([kid2], "", set())))
+        self.assertNotIn("来自", v.note_of(dict(shown[at], from_title=""))[0])
+
+    def test_board_at_falls_back_to_activity(self):
+        board = dict(rows=[dict(id="a", title="a", group="work", tag="working", at=0, activity_at=1234),
+                           dict(id="b", title="b", group="work", tag="working", activity_at=77),
+                           dict(id="c", title="c", group="work", tag="working", at=55, activity_at=77)])
+        groups, _ = v.board_apply(board, {g: [] for g in v.GROUPS}, [], [], "node", "user")
+        act = {e["fid"]: e.get("act") for es in groups.values() for e in es}
+        self.assertEqual(act, {"a": 1234, "b": 77, "c": 55})
 
     def test_local_rows_nest_by_from_fid(self):
-        # no hub: a window's @from_fid names its opener among the rows here
         parent = row("@1", fid="f1", state="working", running=True)
         child = row("@2", fid="f2", state="working", running=True)
         child["from"] = "f1"
         ended = row("@3", fid="f3", ended=True, text="结束的")
         orphan = row("@4", fid="f4")
         orphan["from"] = "f3"
-        shown = v.visible([parent, child, ended, orphan], "", set())
-        sess = [e for e in shown if e["kind"] == "sess"]
+        sess = self.sess([parent, child, ended, orphan], folds={"f1": True})
         by = {e["target"]: e for e in sess}
         self.assertEqual(by["@2"]["tree_prefix"], "  └ ")
         self.assertEqual(by["@4"]["tree_prefix"], "", "never nested under an ended opener")
-        froms = [e for e in shown if e["kind"] == "from"]
-        self.assertEqual([(e["of"], e["text"]) for e in froms], [("@4", "来自 结束的（已结束）")])
+        self.assertIn("来自 结束的（已结束）", v.note_of(by["@4"])[0])
 
     def test_old_hub_rows_stay_flat(self):
         board = dict(rows=[dict(id="a", title="a", group="work", tag="working", running=True),
                            dict(id="b", title="b", group="queue", tag="idle", depth=1)])
         groups, gone = v.board_apply(board, {g: [] for g in v.GROUPS}, [], [], "node", "user")
-        items = [e for es in groups.values() for e in es]
-        shown = v.visible(items, "", set())
+        shown = v.visible([e for es in groups.values() for e in es], "", set())
         self.assertEqual([(e["kind"], e.get("tree_prefix"), e.get("tree_twisty")) for e in shown],
                          [("sess", "", ""), ("sess", "", "")])
 
@@ -655,12 +703,12 @@ class SessionTree(unittest.TestCase):
                  self.node("new", activity_at=self.now - 100),
                  self.node("pinned", group="pin", activity_at=self.now - 9000),
                  self.node("pkid", "pinned", activity_at=self.now - 20, state="working", running=True)]
-        shown = self.sess(items)
-        self.assertEqual([e["target"] for e in shown], ["pinned", "pkid", "old", "kid", "new"],
+        folds = {"old": True, "pinned": True}
+        self.assertEqual([e["target"] for e in self.sess(items, folds=folds)], ["pinned", "pkid", "old", "kid", "new"],
                          "a root rises by its tree's newest activity; PIN carries its children")
         items[1]["tree_at"] = 0
         items[0]["tree_at"] = self.now - 1      # the hub's tree_at wins over the rows here
-        self.assertEqual([e["target"] for e in self.sess(items)][2], "old")
+        self.assertEqual([e["target"] for e in self.sess(items, folds=folds)][2], "old")
 
 
 if __name__ == "__main__":

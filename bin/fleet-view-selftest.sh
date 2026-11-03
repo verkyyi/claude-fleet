@@ -197,8 +197,8 @@ done
 for bad in '─ 等你' '─ 在干活' '─ 待派发' '⌫ 现在收起' '要不要继续合并？'; do
   grep -qF "$bad" "$W/popup.txt" && st_fail "B: legacy group/action/question still drawn: $bad"
 done
-# plan B (T493): glyph · Agent · short name · repo (no ID column — DDBQ)
-grep -qE '! +Claude +Beta 要你拍板' "$W/popup.txt" || st_fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
+# plan B (T493), v5: glyph · title column · Agent · repo (no ID column — DDBQ)
+grep -qE '! +Beta 要你拍板 +Claude ' "$W/popup.txt" || st_fail "B: the asking row does not lead with its ! glyph: $(grep -F Beta "$W/popup.txt")"
 # Highlight changes background only; text and glyph columns stay fixed (#4416).
 grep -q '▶' "$W/popup.txt" && st_fail "B: selection inserted a marker"
 [ -n "${FLEET_VIEW_EVIDENCE:-}" ] && cp "$W/popup.txt" "$FLEET_VIEW_EVIDENCE"

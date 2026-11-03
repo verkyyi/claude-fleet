@@ -2444,8 +2444,9 @@ def board_apply(board, groups, shut, gone, here, me):
         e["board_context"] = board_words({"words": r.get("context") or ["", ""]})
         # 会话合一 (task PQ41): where the session was opened — web / terminal
         e["origin"] = r.get("origin") or ""
-        if not e.get("act") and isinstance(r.get("at"), (int, float)):
-            e["act"] = int(r["at"])             # the hub's last word for it (Q1A8: the landing's pick)
+        at = r.get("at") or r.get("activity_at")   # no `at` (0 / missing): its activity
+        if not e.get("act") and isinstance(at, (int, float)) and at:
+            e["act"] = int(at)                  # the hub's last word for it (Q1A8: the landing's pick)
         e["word"] = board_words(r)
         if r.get("state"):
             e["state"] = r["state"]
@@ -2706,7 +2707,9 @@ def note_of(e):
     facts = [("Execution status unknown" if ui_lang() == "en" else "运行情况未知") if e.get("lost") else "",
              words, e.get("board_context"), word, e.get("ask"),
              task_status_word("loop") if e.get("loop") else "",
-             agent_word(e) if e.get("agent_basis") == "planned" else "", e.get("why")]
+             agent_word(e) if e.get("agent_basis") == "planned" else "", e.get("why"),
+             say("view_from_ended_fmt", e["from_title"]) if e.get("from_ended") and e.get("from_title")
+             and not e.get("tree_opener") else ""]
     return " · ".join([x for x in facts if x] + tags), red
 
 
@@ -2956,61 +2959,137 @@ def tree_desc(e, kids):
     return out
 
 
-def tree_default_open(desc):
-    """Open while anything under it runs, is about to, or asks the person."""
-    return any(task_status(d) in ("work", "pending", "needs") for d in desc)
+def row_status(e):
+    """The status a row is drawn with: a merged row (duplicates folded into one,
+    tree_dedupe) wears its group's most urgent, else its own task_status."""
+    return e.get("dup_status") or task_status(e)
 
 
-def tree_emit(root, kids, folds):
+def row_tone(rows):
+    """What a folded thing hides, as one colour: "ask" (a row asks the person) >
+    "work" (a row runs or loops) > "" (dim) — a shut ▸, its (N), a heading's ▸."""
+    st = {row_status(x) for x in rows}
+    return "ask" if "needs" in st else "work" if st & {"work", "loop"} else ""
+
+
+def tone_style(tone, col=True):
+    return ("c1", "bold") if col and tone == "ask" else ("c2",) if col and tone == "work" else ("dim",)
+
+
+def title_norm(e):
+    return re.sub(r"\s+", " ", (e.get("text") or e.get("name") or "").strip().lower())
+
+
+def tree_dedupe(lists, tat):
+    """Duplicates fold into one row: in each sibling list, rows with the same
+    `from` (never an empty one), title (normalised) and source keep only the
+    newest, with dup_n (×N) and dup_status (the group's most urgent: asking >
+    working > its own); the rest leave the list and are returned
+    {id(kept): [the others]} — still searchable, never drawn."""
+    dups = {}
+    for lst in lists:
+        groups = {}
+        for e in lst:
+            if e.get("from"):
+                k = (e["from"], title_norm(e), e.get("source") or "", e.get("group") == "pin")
+                groups.setdefault(k, []).append(e)
+        drop = set()
+        for g in groups.values():
+            if len(g) < 2:
+                continue
+            g.sort(key=lambda e: -tat.get(id(e), 0))
+            kept, rest = g[0], g[1:]
+            dups[id(kept)] = rest
+            kept["dup_n"] = len(g)
+            st = {task_status(x) for x in g}
+            urgent = "needs" if "needs" in st else "work" if "work" in st else ""
+            if urgent:
+                kept["dup_status"] = urgent
+            drop |= {id(x) for x in rest}
+        lst[:] = [e for e in lst if id(e) not in drop]
+    return dups
+
+
+def tree_family(e, kids, dups):
+    """`e`, its folded duplicates and everything under any of them, preorder."""
+    out = []
+    todo = [e]
+    while todo:
+        x = todo.pop()
+        out.append(x)
+        todo.extend(reversed(dups.get(id(x), []) + kids.get(id(x), [])))
+    return out
+
+
+def tree_emit(root, kids, folds, dups=None):
     """`root` and its subtree as drawn: each row with tree_prefix / tree_twisty
-    (open · shut · "") / tree_hidden_n / tree_hidden_work, tree_up (the row a ←
-    folds), tree_opener (+ its title: the row g goes to); a row a shut ancestor
-    hides is kept with tree_hidden (search still finds it) — never one asking
-    the person, nor the rows above it. A from-line follows a row opened by a
-    session that is over."""
+    (open · shut · "") / tree_hidden_n / tree_tone (what a shut one hides: ask ·
+    work · ""), tree_up (the row a ← folds), tree_opener (+ its title: the row g
+    goes to). Shut is the default and hides everything under it, a question too;
+    a hidden row (a shut ancestor's, or a duplicate folded into its newest) is
+    kept with tree_hidden — search still finds it."""
     g = tree_glyphs()
     folds = folds or {}
-    asking = lambda d: task_status(d) == "needs"
-
-    def opened(e, desc):
-        k = tree_key(e)
-        return bool(folds[k]) if k in folds else tree_default_open(desc)
+    dups = dups or {}
+    opened = lambda e: bool(folds.get(tree_key(e), False))
     lvl = [(k, tree_desc(k, kids)) for k in kids.get(id(root), [])]
     every = [d for k, ds in lvl for d in [k] + ds]
-    root_open = opened(root, every)
-    plan = []
-    for k, ds in lvl:
-        k_open = opened(k, ds)
-        vis2 = [d for d in ds if (root_open and k_open) or asking(d)]
-        plan.append((k, ds, k_open, root_open or asking(k) or bool(vis2), vis2))
-    shown = {id(root)} | {id(k) for k, _, _, v, _ in plan if v} | {id(d) for p in plan for d in p[4]}
+    root_open = opened(root)
+    plan = [(k, ds, root_open and opened(k)) for k, ds in lvl]
+    shown = {id(root)} | ({id(k) for k, _ in lvl} if root_open else set()) | \
+        {id(d) for k, ds, o in plan if o for d in ds}
     opener = {}
     for x in [root] + every:
         for c in kids.get(id(x), []):
             opener[id(c)] = x
+    out = []
 
-    def mark(e, prefix, twisty, under, up, depth):
-        hid = [d for d in under if id(d) not in shown]
+    def mark(e, prefix, twisty, under, up, depth, hidden=None):
+        hid = [d for x in under if id(x) not in shown for d in [x] + dups.get(id(x), [])]
+        shut = bool(under) and twisty == "shut"
         e.update(tree_prefix=prefix, tree_twisty=twisty if under else "", tree_depth=depth,
-                 tree_hidden_n=len(hid) if under and twisty == "shut" else 0,
-                 tree_hidden_work=bool(under) and twisty == "shut" and any(task_status(d) == "work" for d in hid),
-                 tree_hidden=id(e) not in shown, tree_key=tree_key(e), tree_up=tree_key(up) if up is not None else "")
+                 tree_hidden_n=len([d for d in under if id(d) not in shown]) if shut else 0,
+                 tree_tone=row_tone(hid) if shut else "",
+                 tree_hidden=(id(e) not in shown) if hidden is None else hidden,
+                 tree_key=tree_key(e), tree_up=tree_key(up) if up is not None else "")
         op = opener.get(id(e))
         e["tree_opener"] = tree_key(op) if op is not None else ""
         e["tree_opener_title"] = (op.get("text") or op.get("name") or "") if op is not None else ""
-        return e
-    out = [mark(root, "", "open" if root_open else "shut", every, None, 0)]
-    if root.get("from_ended") and root.get("from_title"):
-        out.append({"kind": "from", "of": root["target"], "text": say("view_from_ended_fmt", root["from_title"])})
-    vis1 = [k for k, _, _, v, _ in plan if v]
-    for k, ds, k_open, _, vis2 in plan:
+        out.append(e)
+        for m in dups.get(id(e), []):
+            # the duplicates folded into it: searchable, never drawn
+            for x in tree_family(m, kids, dups):
+                x.update(tree_prefix="", tree_twisty="", tree_depth=depth, tree_hidden_n=0, tree_tone="",
+                         tree_hidden=True, dup_hidden=True, tree_key=tree_key(x), tree_up=e["tree_up"],
+                         tree_opener=e["tree_opener"], tree_opener_title=e["tree_opener_title"])
+                out.append(x)
+    mark(root, "", "open" if root_open else "shut", every, None, 0)
+    vis1 = [k for k, _ in lvl] if root_open else []
+    for k, ds, k_open in plan:
         last1 = bool(vis1) and k is vis1[-1]
-        out.append(mark(k, "  " + (g["end"] if last1 else g["mid"]), "open" if root_open and k_open else "shut", ds, root, 1))
+        mark(k, "  " + (g["end"] if last1 else g["mid"]), "open" if k_open else "shut", ds, root, 1)
         cont = "  " if last1 else g["bar"]
+        vis2 = ds if k_open else []
         for d in ds:
             last2 = bool(vis2) and d is vis2[-1]
-            out.append(mark(d, "  " + cont + "  " + (g["end"] if last2 else g["mid"]), "", [], k, 2))
+            mark(d, "  " + cont + "  " + (g["end"] if last2 else g["mid"]), "", [], k, 2)
     return out
+
+
+def tree_reveal(folds, fleet, items, target, current="", selected=""):
+    """The cursor landed on a row a shut ▸ hides (a search hit, a jump): its
+    ancestors are opened — remembered as a → would be. Returns the choices."""
+    rows = [e for e in compact_task_list(items, current, selected=selected, folds=folds) if e["kind"] == "sess"]
+    by = {e.get("tree_key"): e for e in rows if not e.get("dup_hidden")}
+    e = next((x for x in rows if x.get("target") == target), None)
+    if e is None or not e.get("tree_hidden") or e.get("dup_hidden"):
+        return folds
+    up, seen = e.get("tree_up"), set()
+    while up and up not in seen:
+        seen.add(up)
+        folds = tree_toggle(folds, fleet, up, True, items)
+        up = (by.get(up) or {}).get("tree_up")
+    return folds
 
 
 def tree_arrow(e, right):
@@ -3034,8 +3113,8 @@ def tree_folds_file(fleet):
 
 
 def tree_folds_load(fleet):
-    """This view's own ▸ / ▾ choices, {row key: open} — a row never toggled
-    takes tree_default_open."""
+    """This view's own ▸ / ▾ choices, {row key: open} — a row never toggled is
+    shut."""
     try:
         got = json.loads(tree_folds_file(fleet).read_text())
     except (OSError, ValueError):
@@ -3070,7 +3149,8 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     # folding, ordering and sections below are decided on the roots
     kids, roots = tree_link(rows)
     tat = tree_times(rows, kids)
-    whole = lambda e: [e] + tree_desc(e, kids)
+    dups = tree_dedupe([roots] + list(kids.values()), tat)
+    whole = lambda e: tree_family(e, kids, dups)
     pin = [e for e in roots if e.get("group") == "pin"]
     # who opened it (task DDBQ): a schedule or an API caller — each its own
     # folded group, newest first; a person's and a session's are the main list
@@ -3101,7 +3181,7 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
         """The tree under `root` as drawn, every row of it in `sec` (None: shown;
         the one open now stays shown in a source group); `folded` = moved to 更多会话
         (list_folded: the list's choice, not the session's lifecycle)."""
-        for x in tree_emit(root, kids, folds):
+        for x in tree_emit(root, kids, folds, dups):
             if x["kind"] == "sess":
                 if folded:
                     x["list_folded"] = x.get("sec") != "gone"
@@ -3116,17 +3196,27 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
             put(e)
     for e in ordinary:
         put(e)
+    # PIN · the list · 更多会话 · 定时任务 · API 派发 · 已归档
+    older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
+    if history or older:
+        running = sum(task_status(x) == "work" for e in history for x in whole(e))
+        label = ("More sessions" if ui_lang() == "en" else "更多会话") + " · %d" % len(history)
+        if running:
+            label += (" · %d running" if ui_lang() == "en" else " · %d 个运行中") % running
+        out.append({"kind": "sec", "sec": "gone", "text": label, "n": len(history), "older": sum(e.get("n", 0) for e in older),
+                    "tone": row_tone([x for e in history for x in whole(e)])})
+        for e in history:
+            put(e, "gone", folded=True)
+        out += older
     lift = lambda e: any(needs_attention(x) or task_status(x) in ("work", "pending") or x["target"] in keep
                          for x in whole(e))
     for k in SECTION_SOURCES:
         group = sorted(sourced[k], key=newest)
         if not group:
             continue
-        asking = sum(bool(needs_attention(x)) for e in group for x in whole(e))
-        label = source_label(k) + " · %d" % len(group)
-        if asking:
-            label += (" · %d asking" if ui_lang() == "en" else " · %d 个在问你") % asking
-        out.append({"kind": "sec", "sec": "src-" + k, "text": label, "n": len(group), "alert": bool(asking)})
+        # its ▸ says what it holds, as a shut parent's does (row_tone) — no words
+        out.append({"kind": "sec", "sec": "src-" + k, "text": source_label(k) + " · %d" % len(group), "n": len(group),
+                    "tone": row_tone([x for e in group for x in whole(e)])})
         runs = schedule_runs(group, keep, lift) if k == "schedule" else [["", "", group, []]]
         for key, name, shown, folded in runs:
             for e in shown:
@@ -3137,20 +3227,11 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
                 sub = "sched-" + key
                 n = len(folded)
                 out.append({"kind": "sec", "sec": sub, "sec_parent": "src-" + k, "n": n,
+                            "tone": row_tone([x for e in folded for x in whole(e)]),
                             "text": "  " + name + (" · %d earlier run%s" % (n, "" if n == 1 else "s") if ui_lang() == "en"
                                                    else " · %d 次更早运行" % n)})
                 for e in folded:
                     put(e, sub, sec_parent="src-" + k)
-    older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
-    if history or older:
-        running = sum(task_status(x) == "work" for e in history for x in whole(e))
-        label = ("More sessions" if ui_lang() == "en" else "更多会话") + " · %d" % len(history)
-        if running:
-            label += (" · %d running" if ui_lang() == "en" else " · %d 个运行中") % running
-        out.append({"kind": "sec", "sec": "gone", "text": label, "n": len(history), "older": sum(e.get("n", 0) for e in older)})
-        for e in history:
-            put(e, "gone", folded=True)
-        out += older
     if archived:
         out.append({"kind": "sec", "sec": "archived", "text": "Archived" if ui_lang() == "en" else "已归档", "n": len(archived)})
         out += archived
@@ -3215,12 +3296,14 @@ def agent_word(e):
 
 
 def name_col(width):
-    """The cell the name column starts at, as row_segs lays a row out."""
-    return TEXT_X + (AGENT_W + 1 if width >= 40 else 0)
+    """The cell the title column starts at, as row_segs lays a row out: right
+    after the status slot (the title is the row's focus; Agent follows it)."""
+    return TEXT_X
 
 
 def row_segs(e, width, cells, clip, lit=False, glyph=True):
-    """One status slot · Agent(7) · title · repo(13).
+    """One status slot · the title column (tree prefix · twisty slot · title,
+    the flexible one) · Agent(7) · repo(13).
     The session ID is internal: the Tab detail shows it, the row does not (task DDBQ).
     Only a request for input is red/bold; lost observations dim the whole row.
     Legacy parent/member metadata never changes title geometry.
@@ -3228,20 +3311,14 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     gl = TASK_GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else TASK_GLYPHS
     col = color_on()
     base = (("dim",) if e.get("lost") or e.get("unreach") is not None else ()) + (("lit",) if lit else ())
-    sym = task_status(e)
+    sym = row_status(e) if not e.get("tree_flat") else task_status(e)
     gstyle = base + (("c1", "bold") if col and sym == "needs" else ())
     show_repo = width >= 60
     show_agent = width >= 40
     agent = agent_word(e)
     segs = [(" " * ICON_X, base), (gl[sym], gstyle), (" ", base)]
-    if show_agent:
-        # Keep the plan marker visible even in the seven-cell engine column.
-        if e.get("agent_basis") == "planned":
-            agent = (e.get("agent") or "?").capitalize()[:3] + ("·计" if _BOARD.get("lang") == "zh" else "(P)")
-        aw = ellipsis(agent, AGENT_W, cells, clip)
-        segs.append((aw + " " * (AGENT_W - cells(aw)) + " ", base + (("dim",) if not e.get("agent") else ())))
     used = sum(cells(t) for t, _ in segs)
-    tail = (REPO_W + 2) if show_repo else 1
+    tail = (AGENT_W + 1 if show_agent else 0) + ((REPO_W + 2) if show_repo else 1)
     room = max(1, width - used - tail)
     # the title column (the session tree): its prefix, a two-cell twisty slot,
     # the title — red/bold while it asks the person — and a shut one's (N)
@@ -3252,18 +3329,30 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     slot = clip((tg[twisty] + " ") if twisty else "  ", max(0, room - 1 - cells(prefix)))
     avail = room - cells(prefix) - cells(slot)
     more = " (%d)" % e["tree_hidden_n"] if twisty == "shut" and e.get("tree_hidden_n") else ""
+    times = " ×%d" % e["dup_n"] if not flat and (e.get("dup_n") or 0) > 1 else ""
     if cells(more) > avail - 2:
         more = ""
-    name = clip_name(e.get("text") or "", avail - cells(more), cells, clip)
+    if cells(times) + cells(more) > avail - 2:
+        times = ""
+    name = clip_name(e.get("text") or "", avail - cells(more) - cells(times), cells, clip)
+    tone = e.get("tree_tone") if twisty == "shut" else ""
     if prefix:
         segs.append((prefix, base + ("dim",)))
     if slot:
-        hot = col and twisty == "shut" and e.get("tree_hidden_work")
-        segs.append((slot, base + (("c2",) if hot else ("dim",))))
+        # a shut one's ▸: asking (red/bold) > running (green) > dim — and so its (N)
+        segs.append((slot, base + tone_style(tone, col)))
     segs.append((name, base + (("c1", "bold") if col and sym == "needs" else ())))
+    if times:
+        segs.append((times, base + ("dim",)))
     if more:
-        segs.append((more, base + ("dim",)))
-    segs.append((" " * max(0, avail - cells(name) - cells(more)), base))
+        segs.append((more, base + (tone_style("ask", col) if tone == "ask" else ("dim",))))
+    segs.append((" " * max(0, avail - cells(name) - cells(times) - cells(more)), base))
+    if show_agent:
+        # Agent after the title, a fixed aligned column; the plan marker stays visible
+        if e.get("agent_basis") == "planned":
+            agent = (e.get("agent") or "?").capitalize()[:3] + ("·计" if _BOARD.get("lang") == "zh" else "(P)")
+        aw = ellipsis(agent, AGENT_W, cells, clip)
+        segs.append((" " + aw + " " * (AGENT_W - cells(aw)), base + (("dim",) if not e.get("agent") else ())))
     if show_repo:
         r = ellipsis(e.get("repo") or "", REPO_W, cells, clip)
         segs.append((" " + r + " " * (REPO_W - cells(r)) + " ", base))
@@ -3328,8 +3417,12 @@ def paint(shown, at, width, cells, clip):
         if e["kind"] == "sec":
             # a row the cursor stops on (T762): indented like one; only a ─ heading
             # starts at the left edge
-            lines.append([(fill(row_lead("▸" if e.get("closed", True) else "▾") + e["text"], width, cells, clip),
-                           (("lit",) if lit else ()) + (("c1", "bold") if e.get("alert") and color_on() else ()))])
+            # its ▸ coloured by what it holds while shut (row_tone), as a parent's
+            ls = ("lit",) if lit else ()
+            shut = e.get("closed", True)
+            tone = e.get("tone") if shut else ""
+            lines.append([(" " * ICON_X, ls), ("▸" if shut else "▾", ls + tone_style(tone, color_on())),
+                          (fill(" " + e["text"], width - ICON_X - 1, cells, clip), ls)])
             continue
         if e["kind"] == "cmd":
             icon = cmd_icons().get(e.get("icon") or e.get("cmd") or "")
@@ -3353,10 +3446,6 @@ def paint(shown, at, width, cells, clip):
             continue
         if e["kind"] == "note":
             lines.append([(clip(" " * TEXT_X + e["text"], width), ("dim",))])
-            continue
-        if e["kind"] == "from":
-            # who opened the row above, a session that is over: under its title
-            lines.append([(fill(" " * (name_col(width) + 2) + e["text"], width, cells, clip), ("dim",))])
             continue
         lines.append(row_segs(e, width, cells, clip, lit))
     return lines
@@ -6541,6 +6630,9 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
 
     def bolt_at():
         return next((i for i, e in enumerate(shown) if e.get("cmd") == "new"), -1)
+    if land_at or cur:
+        # the cursor lands on a row a shut ▸ hides: its ancestors open (tree_reveal)
+        folds = tree_reveal(folds, fleet, items, land_at or cur, cur, selected_target)
     shown = listing()
     # --at (task Q1A8's landing): the cursor on that session, else as always
     at = next((i for i, e in enumerate(shown) if land_at and e.get("target") == land_at and e["kind"] == "sess"),
@@ -7253,6 +7345,9 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             continue
         show_legend = False
         lit = shown[at].get("target") if 0 <= at < len(shown) else None
+        if not query and lit and 0 <= at < len(shown) and shown[at].get("tree_hidden"):
+            # back from a search on a row a shut ▸ hides: open its ancestors
+            folds = tree_reveal(folds, fleet, items, lit, cur, selected_target)
         shown = listing()
         # typed words: the best session hit is lit; none hit — the language row
         # when they name it (语言 · lang …, issue #3329; 消息 …, T675), else ⚡
@@ -7262,6 +7357,9 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                             next((i for i, e in enumerate(shown) if pickable(e)), 0))))
         if not query:
             at = next((i for i, e in enumerate(shown) if e["kind"] == "sess" and e.get("target") in (lit, cur)), at)
+        elif 0 <= at < len(shown) and shown[at].get("tree_hidden"):
+            # a search lit a row a shut ▸ hides: its ancestors open (drawn flat now)
+            folds = tree_reveal(folds, fleet, items, shown[at]["target"], cur, selected_target)
         top, follow_list = 0, True
 
 

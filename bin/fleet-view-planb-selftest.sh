@@ -131,12 +131,13 @@ for e, segs in zip(shown, lines):
     # the session ID is internal: the Tab detail shows it, never the row (task DDBQ)
     assert e["id"] not in text or not e["id"], (e["id"], text)
     agent = (e["agent"] or "").capitalize() or "未知"
-    assert segs[3][0] == agent.ljust(7 - (qo.cells(agent) - len(agent))) + " ", segs[3]
-    assert ("dim" in segs[3][1]) == (not e["agent"]) or e.get("lost"), segs[3]
+    # status · title column · Agent(7) · repo(13): Agent follows the title
+    assert segs[-2][0] == " " + agent.ljust(7 - (qo.cells(agent) - len(agent))), segs[-2]
+    assert ("dim" in segs[-2][1]) == (not e["agent"]) or e.get("lost"), segs[-2]
     # the title column carries the session tree (a two-cell twisty slot first);
     # the repo column is the row's last cell run
     repo = segs[-1][0]
-    assert segs[4][0] in ("  ", "▾ ", "▸ ") or "dim" in segs[4][1], segs[4]
+    assert segs[3][0] in ("  ", "▾ ", "▸ ") or "dim" in segs[3][1], segs[3]
     assert qo.cells(repo) == 15 and repo.startswith(" ") and repo.endswith(" "), repr(repo)
     red = any(st.startswith("c") for st in segs[1][1])
     assert red == (fv.task_status(e) == "needs") and (not red or "bold" in segs[1][1]), segs[1]
@@ -152,7 +153,7 @@ lit = lines[at]
 assert all("lit" in st for _, st in lit), lit
 long = dict(by["@2"], text="很长的标题第一段，" + "后面还有非常非常长的说明文字" * 6)
 segs = fv.row_segs(long, W, qo.cells, qo.clip)
-name = segs[5][0].rstrip()
+name = segs[4][0].rstrip()
 assert name == "很长的标题第一段…" or name.endswith("…"), name
 cut = fv.clip_name("前一半的文字比较长，后一半" + "很长" * 30, 34, qo.cells, qo.clip)
 assert cut == "前一半的文字比较长…", cut
