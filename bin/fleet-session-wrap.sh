@@ -234,7 +234,10 @@ fi
 # a fallback — is no agent (issue #2404): stamp it, so the session caps
 # (fleet_window_has_agent) stop counting the window. The next wrapper clears it.
 if [ "$intmux" = 1 ]; then
-  trap 'kill "${NOSTOP:-}" 2>/dev/null; tmux set-option -p -t "$TMUX_PANE" @wrap_gone 1 2>/dev/null' EXIT
+  # …and its window stamp goes with it (task PV5W): a pane that no longer runs a
+  # wrapper must not carry @wrap_win, or fleet-window-carry.sh reads it as a
+  # session that moved and strips the window it names.
+  trap 'kill "${NOSTOP:-}" 2>/dev/null; tmux set-option -p -t "$TMUX_PANE" @wrap_gone 1 2>/dev/null; tmux set-option -pu -t "$TMUX_PANE" @wrap_win 2>/dev/null' EXIT
 fi
 
 # Why a relaunch died at once, read off what it left on the pane: conversation |
