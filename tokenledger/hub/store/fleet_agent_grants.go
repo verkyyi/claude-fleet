@@ -60,7 +60,16 @@ CREATE TABLE IF NOT EXISTS fleet_oauth_tokens (
   expires_at TEXT NOT NULL,
   used_at    TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS fleet_oauth_tokens_grant ON fleet_oauth_tokens(grant_id);`
+CREATE INDEX IF NOT EXISTS fleet_oauth_tokens_grant ON fleet_oauth_tokens(grant_id);
+CREATE TABLE IF NOT EXISTS fleet_oauth_failures (
+  at        TEXT NOT NULL,
+  person    TEXT NOT NULL DEFAULT '',
+  client_id TEXT NOT NULL DEFAULT '',
+  stage     TEXT NOT NULL,
+  code      TEXT NOT NULL DEFAULT '',
+  reason    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS fleet_oauth_failures_at ON fleet_oauth_failures(at);`
 
 // Grant kinds.
 const (
@@ -331,4 +340,53 @@ func (s *Store) PruneOAuth(now time.Time) error {
 	}
 	_, err := s.write.Exec(`DELETE FROM fleet_oauth_tokens WHERE expires_at < ?`, t)
 	return err
+}
+
+// OAuthFailure is one refused sign-in step (task T4DN): what the client was
+// told, kept a week so its person can read why an agent would not connect.
+type OAuthFailure struct {
+	At       time.Time `json:"at"`
+	Person   string    `json:"-"`
+	ClientID string    `json:"client_id"`
+	Stage    string    `json:"stage"`
+	Code     string    `json:"error"`
+	Reason   string    `json:"reason"`
+}
+
+// RecordOAuthFailure writes one refusal and drops those older than a week.
+func (s *Store) RecordOAuthFailure(f OAuthFailure) error {
+	if _, err := s.write.Exec(`INSERT INTO fleet_oauth_failures (at, person, client_id, stage, code, reason)
+		VALUES (?, ?, ?, ?, ?, ?)`, agentTime(f.At), f.Person, f.ClientID, f.Stage, f.Code, f.Reason); err != nil {
+		return err
+	}
+	_, err := s.write.Exec(`DELETE FROM fleet_oauth_failures WHERE at < ?`, agentTime(f.At.Add(-7*24*time.Hour)))
+	return err
+}
+
+// OAuthFailures lists a person's refusals of the last week, newest first, at most limit.
+func (s *Store) OAuthFailures(person string, limit int) ([]OAuthFailure, error) {
+	rows, err := s.read.Query(`SELECT at, client_id, stage, code, reason FROM fleet_oauth_failures
+		WHERE person = ? ORDER BY at DESC LIMIT `+fmt.Sprint(limit), person)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []OAuthFailure{}
+	for rows.Next() {
+		var f OAuthFailure
+		var at string
+		if err := rows.Scan(&at, &f.ClientID, &f.Stage, &f.Code, &f.Reason); err != nil {
+			return nil, err
+		}
+		f.At = agentParse(at)
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// PeekOAuthCode reads who a code was issued to without spending it: a refused
+// token request is filed under the person who approved it.
+func (s *Store) PeekOAuthCode(hash string) (person, clientID string) {
+	_ = s.read.QueryRow(`SELECT person, client_id FROM fleet_oauth_codes WHERE code_hash = ?`, hash).Scan(&person, &clientID)
+	return person, clientID
 }
