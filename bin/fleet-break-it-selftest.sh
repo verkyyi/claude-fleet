@@ -6901,6 +6901,16 @@ drill_park_cold_wake() {
 # A cold park's wake reopens its ID, and reopen refused it as «still open in a
 # window»: the live list it reads had counted the cold park (for the hub's sake),
 # so every cooled session answered no_session and could not come back.
+# A cold park's wake from outside tmux (the web's chat service, a daemon): the
+# reopen's spawner could not find its fleet and said «no target tmux session».
+drill_park_cold_wake_outside_tmux() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-cold-selftest.py" Kept.test_reopen_outside_tmux_names_the_fleet_to_the_spawner 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='tmux 外唤醒冷停放：重开把 FLEET_SESSION 交给建窗口的脚本；tmux 里照旧'
+}
+
 drill_park_cold_reopen_refused() {
   CAP=30; local t0 out
   t0=$(now)
