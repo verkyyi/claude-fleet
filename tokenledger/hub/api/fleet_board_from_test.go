@@ -217,3 +217,65 @@ func TestBoardFromByKey(t *testing.T) {
 		}
 	}
 }
+
+// A tree moves only on what the person would want to see (task PV5W): a nested
+// row's start, and its activity once it asks or has ended — not its every turn.
+func TestBoardTreeAtCalm(t *testing.T) {
+	rows := []BoardRow{
+		{ID: "root", Group: "queue", At: 100, ActivityAt: 200},
+		{ID: "busy", Group: "work", At: 150, ActivityAt: 900, From: "root"},
+		{ID: "asks", Group: "ask", At: 160, ActivityAt: 500, From: "root"},
+		{ID: "quiet", Group: "queue", At: 100, ActivityAt: 300},
+	}
+	b := finishBoard(rows)
+	got := map[string]BoardRow{}
+	for _, r := range b.Rows {
+		got[r.ID] = r
+	}
+	if got["root"].TreeAt != 500 {
+		t.Errorf("root tree_at = %d; want 500 (the ask), not the busy child's turn 900", got["root"].TreeAt)
+	}
+	if got["busy"].TreeAt != 900 || got["quiet"].TreeAt != 300 {
+		t.Errorf("own activity: busy %d quiet %d", got["busy"].TreeAt, got["quiet"].TreeAt)
+	}
+	// siblings by the same signal: the ask before the busy one
+	var kids []string
+	for _, r := range b.Rows {
+		if r.Parent == "root" {
+			kids = append(kids, r.ID)
+		}
+	}
+	if len(kids) != 2 || kids[0] != "asks" {
+		t.Errorf("siblings = %v; want the asking one first", kids)
+	}
+	// an ended child moves its tree to its end
+	for i := range rows {
+		if rows[i].ID == "busy" {
+			rows[i].Group, rows[i].ActivityAt = "gone", 1000
+		}
+	}
+	for _, r := range finishBoard(rows).Rows {
+		if r.ID == "root" && r.TreeAt != 1000 {
+			t.Errorf("an ended child: root tree_at = %d; want 1000", r.TreeAt)
+		}
+	}
+}
+
+// A session with no birth stamp is dated by its activity, never the epoch.
+func TestBoardNoBornIsNotEpoch(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	id := "0b7e8c1a-4444-4222-8333-000000000001"
+	wid := "fleet/" + id
+	w := map[string]any{"identity": id, "state": "needs", "activity_at": float64(now.Unix() - 60)}
+	b, err := s.buildBoard("gh:1", []FleetSession{{WorkerID: &wid, Worker: w, Availability: "online", ObservedAt: now}}, now)
+	if err != nil || len(b.Rows) != 1 || b.Rows[0].At != now.Unix()-60 {
+		t.Fatalf("rows = %+v %v", b.Rows, err)
+	}
+	delete(w, "activity_at")
+	b, _ = s.buildBoard("gh:1", []FleetSession{{WorkerID: &wid, Worker: w, Availability: "online", ObservedAt: now}}, now)
+	if b.Rows[0].At != now.Unix() {
+		t.Fatalf("no activity either: at = %d; want when it was heard", b.Rows[0].At)
+	}
+}
