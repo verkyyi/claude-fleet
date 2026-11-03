@@ -536,6 +536,8 @@ type Server struct {
 	// healthUnrecorded alerts on failed probes the database would not record
 	// (health.go): the database-down case the stored count cannot see.
 	healthUnrecorded healthUnrecorded
+	// reachCanary bounds the relay canary's open echoes (task FQAR).
+	reachCanary reachCanaryGate
 	// logQuiet keeps a repeating line to once a window per signature (T906).
 	logQuiet logQuiet
 	// underivedEPs: endpoints this replica raised fleet_underived for (T906).
@@ -839,6 +841,9 @@ func (s *Server) routes() *routeMux {
 		// A client's connection events (claude-fleet T689): the client sends
 		// them by its certificate; the doctor reads the 24-hour statistics.
 		mux.HandleFunc(control.ClientEventsPath, s.handleFleetClientEvents)
+		// What the views see of reaching their sessions and links (task FQAR):
+		// hourly counts by the same doors; /v1/status publishes the aggregate.
+		mux.HandleFunc(ReachStatsPath, s.handleReachStats)
 		// A write by connection certificate (claude-fleet#1487): the other
 		// machines' sidebars and the `fleet` shell act on their person's
 		// workers with the one credential they hold, signed per write.
@@ -991,6 +996,9 @@ func (s *Server) routes() *routeMux {
 		// its enrollment token.
 		mux.HandleFunc(control.SSHRelayPath, s.handleSSHRelayConnect)
 		mux.HandleFunc("/v1/node/peer-relay", s.handleSSHRelayConnect)
+		// The status page's relay canary (task FQAR): an echo beside the peer
+		// relay that the hub's own probe opens through its public address.
+		mux.HandleFunc(ReachCanaryPath, s.handleReachCanary)
 		mux.HandleFunc(control.SSHRelayDataPath, s.handleSSHRelayData)
 		// The data half of a chat relay (claude-fleet#3644): the agent, by
 		// its own signature or token, as for the SSH relay.

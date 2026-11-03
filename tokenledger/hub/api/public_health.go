@@ -115,6 +115,10 @@ type publicHealthData struct {
 	Reply24    publicHealthSpread           `json:"reply_24h"`
 	Reply7     publicHealthSpread           `json:"reply_7d"`
 	Latency    publicHealthLatency          `json:"latency"`
+	// What the views see (task FQAR, reach_stats.go): sessions entered, links
+	// up, enter latency and recovery — aggregates only, nil below reachMinN.
+	Reach24 publicReach `json:"reach_24h"`
+	Reach30 publicReach `json:"reach_30d"`
 }
 
 func (s *Server) publicHealthSnapshot(now time.Time) (publicHealthData, error) {
@@ -183,6 +187,12 @@ func (s *Server) publicHealthSnapshot(now time.Time) (publicHealthData, error) {
 		ratio := float64(fails) / float64(n)
 		out.Latency.FailureRate = &ratio
 	}
+	reach, err := s.Store.ReachRows(now.Add(-30 * 24 * time.Hour))
+	if err != nil {
+		return out, err
+	}
+	out.Reach24 = publicReachOf(reach, now.Add(-24*time.Hour))
+	out.Reach30 = publicReachOf(reach, now.Add(-30*24*time.Hour))
 	return out, nil
 }
 

@@ -593,6 +593,14 @@ if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-id.sh" ] && [ -d "$FLEET_CONF_DIR/ids" ];
   fleet_timebox 20 bash "$BIN/fleet-id.sh" switch >/dev/null 2>&1 || :
 fi
 
+# --- the views' reachability for the status page (task FQAR) ------------------
+# This login's view-switch / peerlink ledgers folded into hourly counts and sent
+# to the hub (POST /v1/fleet/reach-stats); the script keeps its own once-an-hour
+# clock and is silent on a machine with no ledgers. FLEET_REACH_REPORT=0 is off.
+if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-reach-report.py" ]; then
+  fleet_timebox 30 python3 "$BIN/fleet-reach-report.py" tick >/dev/null 2>&1 || :
+fi
+
 # Diskguard gate is a MACHINE-WIDE (per-volume) condition, so answer it ONCE per
 # tick. A cleanup does a base-checkout pull + worktree teardown; don't add that
 # I/O below the floor. Mirrors the other single-writer, disk-gated fleet daemons.

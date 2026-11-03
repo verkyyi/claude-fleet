@@ -28,6 +28,7 @@ T1111 / K2CN，PNWW R3、S4、C3。公开入口 `/status`，接口 `GET /v1/stat
 | workbench | 绕过本地令牌缓存，读取现有 `/internal/wx/token` 并检查响应，不存响应内容 |
 | notify | FLEET_NOTIFY_KF_URL 下的 `/healthz`，只 GET，不创建通知 |
 | releases | 读取当前 stable 指针所指构建的 manifest.json |
+| relay | 经 FleetPublicURL 的公网入口打开 `wss://<host>/v1/node/peer-relay-canary`，收 `ready` 握手、回显一帧随机字节（任务 FQAR，见下「会话可达性」） |
 
 `CCQUOTA_HEALTH_TARGETS` 可覆盖 HTTP 检查的目标，是 JSON 对象，键为固定组件标识。例如 `{"claudefleet":"https://fleet.example.com/healthz","notify":"https://notify.example.com/healthz"}`。配置留在部署环境，不进健康 API。微信和发布检查始终复用已有配置。没配置的组件显示 unconfigured，不是假绿。
 
@@ -51,7 +52,29 @@ T1111 / K2CN，PNWW R3、S4、C3。公开入口 `/status`，接口 `GET /v1/stat
 
 `POST /v1/health` 仅管理员同源请求可写事件的 `note_zh` / `note_en`，长度受限、拒绝地址形态和明显凭据内容；前端作为纯文本显示。说明是公开内容，不可粘贴诊断日志。写入记审计。站点 edition 决定页面语言（sandbox 英文，其余中文）。
 
-## 验证
+## 会话可达性（任务 FQAR）
+
+2026-11-02 看台经 hub 的 peer-relay 进 pod 的路一直 426 好几个小时，公开页的 failure_rate 仍是 0：hub 自己的 ping 只量 hub↔节点，从不走看台→节点。补两件事。
+
+**`relay` 组件（合成探测）**。`ReachCanaryPath`（`/v1/node/peer-relay-canary`，`tokenledger/hub/api/reach_canary.go`）是 peer relay 旁的一个回声：WebSocket 升级后发 `{"type":"ready"}`（与 SSH 中转同一握手），之后把二进制帧原样送回，最多 4 KiB、10 秒。探测由 `RunHealth` 的 leader 每分钟从 hub **经自己的公网地址**打开它（FleetPublicURL → `wss://`），所以覆盖 DNS、TLS、负载均衡与 ingress 的 WebSocket 升级（426 那次的形状）、副本接受、中转握手和帧。它不问任何节点、不需要任何人的机器或 pod、不读身份、只记探测自身的状态和耗时；匿名可达，所以每副本最多同时 4 个、令牌桶每分钟 30（突发 10），超出 429。它**不**证明节点回拨或 pod 自己的代理——那部分由下面的看台上报量。失败三分钟照常开事件、走 `s.notify`。`CCQUOTA_HEALTH_TARGETS` 的 `relay` 键可覆盖目标。
+
+**看台上报（真实数据）**。每台看台所在的机器（家机器）上，`bin/fleet-reach-report.py tick` 由 cleanup 守护每分钟调一次、自己一小时最多发一次（失败 600 秒后重试；`FLEET_REACH_REPORT=0` 关），读本登录的 `logs/view-switch.ndjson`（每次进会话）与 `logs/peerlink.ndjson`（常开连接的 up / down / retry / probe），把最近 48 小时折成按（小时，连接，路线类别）的行，`POST /v1/fleet/reach-stats`（会话、viewer token、节点 token，或连接证书签名 `fleet-reach-stats <ts>`，命名空间 `fleet-reach-stats@claude-fleet`）。整行重发即替换，可重复发送。表 `fleet_reach_stats`：`hour, src, link, route, attempts, ok, enter_hist, want_ms, up_ms, recover_hist, at`，主键 `(hour, src, link, route)`，保留 90 天（`probeHealth` 顺带清理）。
+
+- 不传名字：`link` 是 `sha256(salt, 机器, 登录)` 前 16 位，salt 是本登录 `$FLEET_CONF_DIR/reach-salt`（0600，随机）——hub 反推不出；本机会话 `link` 为空。`src` 是 hub 对调用者身份做的哈希，不存名字。逐行校验，名字形状、越界数值、未来或 90 天前的小时一律单行拒绝。
+- 路线类别：`local`（看台本机）· `direct`（tailnet / lan / entry）· `relay`（peer-relay / hub-relay）· `unknown`；远端进入按那一刻 peerlink 账本里该连接最后一条路线归类。
+- 直方图上界（ms）：150 · 200 · 300 · 500 · 1000 · 2000 · 5000 · 10000 · 30000 · 60000 · 300000 · 1800000，再加一个开放档（`store.ReachBounds`，客户端同一张表）。
+
+口径（`/v1/status` 的 `reach_24h` / `reach_30d`，每个窗口 `all` / `local` / `direct` / `relay` 各一组）：
+
+| 字段 | 定义 |
+|---|---|
+| `session_reach` | 10 秒内进到会话的次数 ÷ 尝试次数。select-window / web-go / peer-window / peer-select 为成功（耗时超 10 秒算失败）；gone / far-none / unsupported 失败；peer-wait 若 10 秒内该连接有 `up` 算成功（耗时含等待），否则失败；forward 等不算进入。网页终端会话暂不计入 |
+| `link_availability` | 想要的连接处于 up 的时间 ÷ 想要的时间。按 peerlink 账本相邻事件分段：up / ok probe 之后为 up，down / retry / 失败 probe 之后为 down；最后一条事件之后最多再算 900 秒（`FLEET_REACH_STALE_SECS`），没有消息的连接不算「想要」 |
+| `enter_p50_ms` / `enter_p95_ms` | 成功进入的耗时（看台记录的决策到 select-window 返回），取分档上界 |
+| `recover_p50_ms` / `recover_p95_ms` | down→up：有 `gap_s` 用它，否则用 down 起点到 up 的时间，取分档上界 |
+
+任一数字背后的样本不足 20（尝试次数、成功进入数、恢复次数、有想要时长的连接小时数）发布为 `null`，页面显示「—」。公开 DTO 不含 `src`、`link`、计数或时长原值。
+
 
 Store 测试覆盖秒迁移、重复迁移、混合单位、事务上报去重、故障阈值、重复分钟、缺分钟、恢复再故障。API 测试覆盖匿名拒绝、成员/管理数据边界、未知状态、说明权限、地址拒绝、WeChat 61004、重复故障通知、恢复、签码不创建用户登录 scene、重定向拒绝和 edition。浏览器计时测试覆盖 FID 地址切换、过期、首次回答与上报重试。
 

@@ -136,6 +136,8 @@ var routeAccess = map[string]string{
 	// through FleetScope.
 	control.SessionsPath: accessUser, control.SummaryPath: accessUser,
 	control.ClientEventsPath: accessUser,
+	ReachStatsPath:           accessUser,
+	ReachCanaryPath:          accessPublic,
 	control.WritePath:        accessSelf, control.ClientPath: accessSelf, ClientTestPath: accessSelf,
 	control.ClientPath + "/actions": accessSelf, control.ClientPath + "/place": accessSelf,
 	control.RenewPath: accessSelf, control.HomePath: accessSelf, control.LoginNodePath: accessSelf,
