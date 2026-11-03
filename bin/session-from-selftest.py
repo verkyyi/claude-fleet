@@ -84,5 +84,19 @@ check("C: a word that is no ID is nothing", "from" not in extra)
 _, extra = inventory_row(base + ["park=", "source=agent"])
 check("C: no column, no from (the row as before)", "from" not in extra and extra.get("source") == "agent")
 
+# ---- D: an older ID gets its key from its own `opened` (fill-only) -------------
+import json as _json, tempfile as _tf
+os.environ["FLEET_ID_DIR"] = _tf.mkdtemp()
+import fleet_id  # noqa: E402
+old = "0b7e8c1a-2222-4222-8333-0000000000d1"
+with open(fleet_id.ledger_path(old), "w") as fh:
+    fh.write(_json.dumps({"ev": "opened", "id": old, "seq": 1, "ts": 1, "short": "ABCD",
+                          "repo": "o/web-app", "worktree": "/p/web-app-scratch-12"}) + "\n")
+    fh.write(_json.dumps({"ev": "closed", "id": old, "seq": 2, "ts": 2}) + "\n")
+check("D: an older ID's key from its worktree", fleet_id.key_backfill(old)
+      and fleet_id.fold(fleet_id.read(old))["opened"].get("key") == "o-web-app:scratch-12")
+check("D: once only", fleet_id.key_backfill(old) is False)
+check("D: push fills it before handing the ledger on", "        key_backfill(fid)\n" in read("bin", "fleet_id.py"))
+
 print("session-from-selftest: %s" % ("PASS" if not fails else "%d FAIL" % fails))
 sys.exit(1 if fails else 0)

@@ -247,6 +247,32 @@ type BoardID struct {
 	Opened, Closed, ActivityAt                                   int64
 }
 
+// BoardIDsByKey is owner's IDs that opened under key, whatever their age (task
+// PV5W): a task names the session that dispatched it by key, and that session may
+// have ended long before the task did. Keys compare case-insensitively.
+func (s *Store) BoardIDsByKey(owner, key string) ([]BoardID, error) {
+	if owner == "" || key == "" {
+		return nil, nil
+	}
+	rows, err := s.read.Query(`SELECT id, short, machine, login, title, task, task_id, repo, close_reason, seq, opened_at, closed_at,
+ '', title_source, activity_at, session_source, key
+		FROM fleet_ids WHERE owner = ? AND LOWER(key) = LOWER(?)`, owner, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BoardID
+	for rows.Next() {
+		var b BoardID
+		if err := rows.Scan(&b.ID, &b.Short, &b.Machine, &b.Login, &b.Title, &b.Task, &b.TaskID, &b.Repo, &b.Reason,
+			&b.Seq, &b.Opened, &b.Closed, &b.Agent, &b.TitleSource, &b.ActivityAt, &b.SessionSource, &b.Key); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
 // BoardIDs lists owner's IDs ("" = everyone's) that are open, or closed at or
 // after since (epoch seconds).
 func (s *Store) BoardIDs(owner string, since int64) ([]BoardID, error) {
