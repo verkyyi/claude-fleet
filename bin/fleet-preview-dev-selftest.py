@@ -393,5 +393,138 @@ class McpDev(Base):
         self.assertIn('stopped (exit 3)', got['output'])
 
 
+def load_tool():
+    from importlib.util import spec_from_file_location, module_from_spec
+    spec = spec_from_file_location('fleet_preview_tool', TOOL)
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class FakeBridge:
+    want, strict = None, False
+
+    def __init__(self):
+        self.kick, self.got = threading.Event(), []
+
+    def set(self, t):
+        self.got.append(t)
+
+
+class Idle(unittest.TestCase):
+    """An idle preview: the stable listener is asked less and less, and only its own
+    process; a lost one sends the watcher back to the whole tree at its base pace."""
+
+    def setUp(self):
+        self.pv = load_tool()
+        self.pv.say = lambda msg: None
+        self.pv.WATCH_S, self.pv.WATCH_MAX_S = 0.05, 0.4
+        self.walks, self.cheap, self.held = 0, 0, True
+        row = ('127.0.0.1', 4321, os.getpid())
+
+        def walk(pid):
+            self.walks += 1
+            return [row]
+
+        def still(t):
+            self.cheap += 1
+            return self.held
+        self.pv.listeners, self.pv.still = walk, still
+
+    def run_watch(self, secs, bridge):
+        stop = threading.Event()
+        th = threading.Thread(target=self.pv.watch, args=(bridge, types_child(), 'u', stop), daemon=True)
+        th.start()
+        time.sleep(secs)
+        stop.set()
+        bridge.kick.set()
+        th.join(2)
+
+    def test_next_wait_doubles_to_the_cap_and_resets(self):
+        w = self.pv.WATCH_S
+        seen = []
+        for _ in range(6):
+            w = self.pv.next_wait(w, True)
+            seen.append(w)
+        self.assertEqual(seen[-1], self.pv.WATCH_MAX_S)
+        self.assertEqual(self.pv.next_wait(self.pv.WATCH_MAX_S, False), self.pv.WATCH_S)
+
+    def test_stable_listener_backs_off_and_skips_the_tree(self):
+        b = FakeBridge()
+        self.run_watch(1.6, b)
+        # at a flat 0.05 s pace 1.6 s is ~32 ticks, each a whole-tree walk
+        self.assertLessEqual(self.walks, 2, 'a stable listener was walked from the tree again')
+        self.assertLess(len(b.got), 12, 'the watcher did not back off: %d ticks' % len(b.got))
+        self.assertTrue(all(t for t in b.got))
+
+    def test_lost_listener_walks_the_tree_again(self):
+        b = FakeBridge()
+        self.held = False
+        self.run_watch(0.6, b)
+        self.assertGreater(self.walks, 3, 'a lost listener was not looked for again')
+
+    def test_a_connection_brings_the_base_pace_back(self):
+        b = FakeBridge()
+        stop = threading.Event()
+        th = threading.Thread(target=self.pv.watch, args=(b, types_child(), 'u', stop), daemon=True)
+        th.start()
+        time.sleep(1.2)          # backed off to the 0.4 s cap
+        n = len(b.got)
+        b.kick.set()             # what Bridge.handle does
+        time.sleep(0.12)
+        self.assertGreaterEqual(len(b.got) - n, 2, 'a connection did not reset the pace')
+        stop.set()
+        b.kick.set()
+        th.join(2)
+
+
+def types_child():
+    class C:
+        pid = os.getpid()
+    return C()
+
+
+class Orphan(unittest.TestCase):
+    """A run whose session is gone stops its command; one that never had a pane,
+    or was started from init, keeps running."""
+
+    def setUp(self):
+        self.pv = load_tool()
+        self.pv.say = lambda msg: None
+
+    def test_orphaned_needs_init_parent_and_a_gone_pane(self):
+        pv = self.pv
+        real = os.getppid
+        try:
+            pv.os.getppid = lambda: 1
+            pv.pane_gone = lambda pane: pane == '%7'
+            self.assertTrue(pv.orphaned(4242, '%7'))
+            self.assertFalse(pv.orphaned(1, '%7'), 'started under init: never ours to stop')
+            self.assertFalse(pv.orphaned(4242, '%8'), 'its pane still answers')
+            pv.os.getppid = lambda: 4242
+            self.assertFalse(pv.orphaned(4242, '%7'), 'its parent is still there')
+        finally:
+            pv.os.getppid = real
+
+    def test_no_pane_is_never_gone(self):
+        self.assertFalse(self.pv.pane_gone(''))
+
+    def test_orphan_watch_stops_the_command(self):
+        pv = self.pv
+        pv.ORPHAN_S = 0.05
+        pv.orphaned = lambda start_ppid, pane: True
+        child = subprocess.Popen(['sleep', '30'])
+        stop = threading.Event()
+        th = threading.Thread(target=pv.orphan_watch, args=(child, 4242, '%7', stop), daemon=True)
+        th.start()
+        try:
+            self.assertEqual(child.wait(5), -signal.SIGTERM)
+        finally:
+            stop.set()
+            if child.poll() is None:
+                child.kill()
+            th.join(2)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -11,7 +11,11 @@ itself and forwards each connection, byte for byte (HTTP, SSE and WebSocket HMR
 alike), to the TCP listener the command opens on loopback. Ports are shared by
 every login on the machine, so a listener is used only while it belongs to a
 process of the command's own tree (lsof / /proc), checked again every 2 s and
-its process again on every connection; nothing else is ever forwarded to.
+its process again on every connection; nothing else is ever forwarded to. While
+the listener stays put the check slows down (doubling up to
+FLEET_PREVIEW_WATCH_MAX_SECS, and only that process is asked); a change, a lost
+listener or a connection brings it back to every 2 s. A run whose session is gone
+(its parent exited and its tmux pane no longer answers) stops its command.
 
   PORT / HOST=127.0.0.1           handed to the command (most dev servers read PORT)
   {port} {host} {socket}          in the command's words, replaced before it starts
@@ -44,6 +48,11 @@ from urllib.parse import urlsplit
 
 NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_-]{0,34}$')   # + ".sock" = the hub's 40
 WATCH_S = float(os.environ.get('FLEET_PREVIEW_WATCH_SECS', '2'))
+# A stable listener is re-checked less and less often, up to this (a whole-machine
+# ps + lsof every 2 s for days was most of an idle preview's cost).
+WATCH_MAX_S = max(WATCH_S, float(os.environ.get('FLEET_PREVIEW_WATCH_MAX_SECS', '30')))
+# How often a run asks whether its session is still there (0 = never).
+ORPHAN_S = float(os.environ.get('FLEET_PREVIEW_ORPHAN_SECS', '15'))
 # How long one ownership check vouches for the next connections: /proc is cheap, lsof ~40 ms.
 TRUST_S = float(os.environ.get('FLEET_PREVIEW_TRUST_SECS', '0' if os.path.isdir('/proc/self/fd') else '0.5'))
 HINT_S = float(os.environ.get('FLEET_PREVIEW_HINT_SECS', '90'))
@@ -216,6 +225,7 @@ class Bridge:
     def __init__(self, path, want, strict):
         self.path, self.want, self.strict = path, want, strict
         self.target, self.seen, self.lock, self.vlock = None, 0.0, threading.Lock(), threading.Lock()
+        self.kick = threading.Event()   # a connection: the watcher looks again at its base pace
         self.srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         old = os.umask(0o177)
         try:
@@ -251,6 +261,7 @@ class Bridge:
             return t
 
     def handle(self, c):
+        self.kick.set()
         t, u = self.current(), None
         if t:
             try:
@@ -426,6 +437,9 @@ def run(a, cmd):
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda s, f: None if (s == signal.SIGINT and tty) else forward(child, s))
     threading.Thread(target=renewer, args=(pv_id, pv.get('expires') or 0, stop), daemon=True).start()
+    if ORPHAN_S > 0:
+        threading.Thread(target=orphan_watch, args=(child, os.getppid(), os.environ.get('TMUX_PANE', ''), stop),
+                         daemon=True).start()
     if bridge:
         threading.Thread(target=bridge.serve, daemon=True).start()
         threading.Thread(target=watch, args=(bridge, child, url, stop), daemon=True).start()
@@ -462,11 +476,24 @@ def finish(bridge, path, pv_id, keep, rc):
     say('stopped%s · preview %s · socket removed' % (how, closed))
 
 
+def still(t):
+    """The cheap tick: t's own process still listens on t's address (no machine-wide ps)."""
+    return bool(t) and alive(t[2]) and any(r[:2] == t[:2] for r in owned({t[2]}))
+
+
+def next_wait(wait, same):
+    """Double while the listener stays the same, back to the base pace when it does not."""
+    return min(wait * 2, WATCH_MAX_S) if same else WATCH_S
+
+
 def watch(bridge, child, url, stop):
-    start, hinted, last = time.time(), False, None
+    start, hinted, last, wait = time.time(), False, None, WATCH_S
     while not stop.is_set():
-        rows = listeners(child.pid)
-        t = pick(rows, bridge.want if bridge.strict or any(r[1] == bridge.want for r in rows) else None)
+        if wait > WATCH_S and still(last):
+            t = last   # backed off and unchanged: only its own process was asked
+        else:
+            rows = listeners(child.pid)
+            t = pick(rows, bridge.want if bridge.strict or any(r[1] == bridge.want for r in rows) else None)
         bridge.set(t)
         if t and t[:2] != (last or (None, None))[:2]:
             say('ready: %s ← %s:%d (pid %d)' % (url, dial_addr(t[0]), t[1], t[2]))
@@ -479,12 +506,42 @@ def watch(bridge, child, url, stop):
             hinted = True
         elif not t and last:
             say('the dev server stopped listening; the preview answers 503 until it is back')
+        wait = next_wait(wait, bool(t) and t == last)
         last = t
         if not hinted and time.time() - start > HINT_S:
             hinted = True
             say('note: no TCP listener in the command\'s processes yet. If it listens on a fixed port, '
                 'pass --port N (or put {port} in the command); on a Unix socket, use --unix')
-        stop.wait(WATCH_S)
+        if bridge.kick.wait(wait):
+            bridge.kick.clear()
+            wait = WATCH_S
+
+
+def pane_gone(pane):
+    """Does the tmux pane this run was started from no longer answer? (no pane known: never)"""
+    if not pane:
+        return False
+    try:
+        p = subprocess.run(['tmux', 'display-message', '-p', '-t', pane, '#{pane_id}'],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False   # no tmux to ask: keep running
+    return p.returncode != 0 or p.stdout.strip() != pane
+
+
+def orphaned(start_ppid, pane):
+    """Our parent exited (we were re-parented to init) and the session's pane is gone."""
+    return start_ppid != 1 and os.getppid() == 1 and pane_gone(pane)
+
+
+def orphan_watch(child, start_ppid, pane, stop):
+    while not stop.wait(ORPHAN_S):
+        if orphaned(start_ppid, pane):
+            say('the session that started this preview is gone; stopping the command')
+            forward(child, signal.SIGTERM)
+            if not stop.wait(10) and child.poll() is None:
+                forward(child, signal.SIGKILL)
+            return
 
 
 def watch_unix(path, child, url, stop):

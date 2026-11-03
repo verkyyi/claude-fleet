@@ -7511,6 +7511,15 @@ drill_preview_bridge_foreign_port() {
   SECS=$(since "$started"); WHAT='a foreign listener on the handed / let-go port gets 503, never a byte; a held --port refuses before registering'
 }
 
+# An idle preview ran a whole-machine ps + lsof every 2 s for as long as it lived,
+# and one whose session had ended (re-parented to init) kept doing it for days.
+drill_preview_idle_orphan() {
+  local started; started=$(now); CAP=30
+  python3 "$BIN/fleet-preview-dev-selftest.py" Idle Orphan >"$WORK/preview-idle-orphan.log" 2>&1 \
+    || { cat "$WORK/preview-idle-orphan.log"; WHY='an idle preview kept its full pace, or an orphaned one kept running'; return 1; }
+  SECS=$(since "$started"); WHAT='稳定监听退避到 30 秒、只问自己的进程，丢了或有连接回到 2 秒；会话没了的孤儿预览停掉命令'
+}
+
 drill_private_preview_isolation() {
   CAP=180; local t0; t0=$(now)
   term_go 'TestPreviewHostsCookiesAndReturn TestPreviewAuthFlow TestPreviewSignedOutOAuthReturn TestPreviewTrialAndDisabled TestPreviewReplicas TestPreviewIdentityAndGeneration TestPreviewHTTPStreamAndWebSocket TestPreviewSocketPaths' './hub/api ./hub/store ./e2e ./agent' \
