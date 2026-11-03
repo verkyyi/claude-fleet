@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { compactRows, descendants, foldedDup, fromRow, members, sessionTree, treeAt, treeContext, treeLines, urgentOf, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, scheduleCard, scheduleLabel, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
+import { compactRows, descendants, foldedDup, fromRow, members, sessionTree, treeAt, treeContext, treeLines, urgentOf, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, clockOrDay, rowsSignal, scheduleLabel, scheduleLines, scheduleResult, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
+import { bellGroups, runFailed } from '../src/app/notices.ts';
+import { scheduleSeed } from '../src/app/new-session.ts';
 
 const tr2 = (w) => (w ? w.join('|') : '');
 const F = '5b1e0000-0000-4000-8000-00000000f001';
@@ -143,7 +145,7 @@ const pinned = {...rows[0], id:'pinned',group:'pin'};
 assert.deepEqual(listRows([...rows,pinned]).pin.map(r=>r.id), ['pinned']);
 assert.deepEqual(listRows(rows.map(r=>({...r,group:r.group==='gone'?'gone':'queue'}))).open.map(r=>r.id), open.map(r=>r.id), 'state changes do not reorder rows');
 assert.equal(listRows([{...rows[0],group:'gone'}]).gone.length,0, 'attention stays outside history');
-assert.ok(src.includes('更多会话') && src.includes('>PIN</div>'));
+assert.ok(src.includes('更多会话') && !src.includes('>PIN</div>') && !src.includes('attention-next'), 'no PIN heading, no 待处理 · N');
 assert.deepEqual(rowState(R({ glyph: 'done', tag: ['本轮结束', 'Turn ended'] })), ['空闲', 'Idle'], 'a turn ended is idle to the person');
 // the head: code and state, no machine; its own stream's word wins
 assert.match(headMeta(R({ glyph: 'work', group: 'work' })), /^K7Q2 · (回答中|Replying)$/);
@@ -254,9 +256,11 @@ assert.equal(compactRows(changedRows,{now,previous:frozen,interacting:true,curre
   ], 'one line per schedule; an asking run is never folded; same name, other schedule apart');
   assert.deepEqual(scheduleRuns([]), []);
 }
-// Y8XY: a schedule's runs never reach the main list — running, waiting to
-// start or asking — and the ⏰ card holds them: each schedule's live runs under
-// it, the runs of a schedule the card does not list under 其他运行.
+// Y8XY / PV5W: a schedule's runs never reach the main list — running, waiting
+// to start or asking. 定时任务 · N holds them: one line per schedule (its own
+// order), its runs newest first under it, the most urgent run its dot, its last
+// result (✓/✗ HH:MM today, else MM-DD) or 下次 HH:MM; the runs of a schedule the
+// list does not have gather on 其他运行.
 {
   const run = (id, x = {}, b = {}) => ({ id, title: id, at: 0, group: 'run', ...x, board: { source: 'schedule', ...b } });
   const rows = [
@@ -271,13 +275,84 @@ assert.equal(compactRows(changedRows,{now,previous:frozen,interacting:true,curre
   ];
   const g = compactRows(rows, { now });
   assert.deepEqual([...g.pin, ...g.open, ...g.gone].map(r => r.id), ['mine'], 'the main list is the person\'s own sessions only');
-  const card = scheduleCard(rows, ['s1', 's2']);
-  assert.deepEqual(Object.fromEntries(Object.entries(card.live).map(([k, v]) => [k, v.map(r => r.id)])), { s1: ['w', 'p'], s2: ['q'] });
-  assert.deepEqual(card.other.map(r => r.id), ['x', 'y'], 'a run of an unlisted schedule stays reachable');
-  assert.equal(card.running, 2);
-  assert.equal(card.asking, 1);
+  // 2026-11-03 13:17 and 2026-11-02 07:10 in Shanghai; "now" 2026-11-03 18:00
+  const at = (iso) => Date.parse(iso) / 1000;
+  const nowMs = Date.parse('2026-11-03T18:00:00+08:00');
+  const spec = (id, name, observed, x = {}) => ({ spec: { id, name, timezone: 'Asia/Shanghai', enabled: true, ...x }, observed });
+  const schedules = [
+    spec('s2', 'Weekly notes', { last_run: at('2026-11-02T07:10:00+08:00'), last_result: 'failed' }),
+    spec('s1', 'Group brief', { last_run: at('2026-11-03T13:17:00+08:00'), last_result: 'ok' }),
+    spec('s3', 'Never ran', { next_run: at('2026-11-04T07:10:00+08:00') }),
+    spec('s4', 'Paused', { next_run: at('2026-11-04T07:10:00+08:00') }, { enabled: false }),
+  ];
+  const sl = scheduleLines(schedules, rows, nowMs);
+  assert.deepEqual(sl.lines.map((l) => [l.id, l.runs.map((r) => r.id), l.urgent?.id, l.failed, l.result]), [
+    ['s2', ['q'], 'q', true, '✗ 11-02'],
+    ['s1', ['w', 'p', 'e'], 'w', false, '✓ 13:17'],
+    ['s3', [], undefined, false, scheduleResult(schedules[2], nowMs)],
+    ['s4', [], undefined, false, ''],
+  ], 'one line per schedule in its order: runs newest first, the most urgent run, the last result');
+  assert.match(scheduleResult(schedules[2], nowMs), /^(下次|Next) 11-04$/);
+  assert.match(scheduleResult(spec('s5', 'x', { next_run: at('2026-11-03T21:05:00+08:00') }), nowMs), /^(下次|Next) 21:05$/, 'today: its clock');
+  assert.deepEqual(sl.other.map((r) => r.id), ['x', 'y'], 'a run of an unlisted schedule stays reachable');
+  assert.equal(clockOrDay(at('2026-11-03T00:05:00+08:00'), 'Asia/Shanghai', nowMs), '00:05');
+  assert.equal(clockOrDay(at('2026-11-03T00:05:00+08:00'), 'America/Los_Angeles', nowMs), '11-02', 'the day in the schedule\'s own zone');
+  assert.equal(rowsSignal(sl.lines[1].runs), 'work');
+  assert.equal(rowsSignal([...sl.lines[0].runs, ...sl.lines[1].runs]), 'ask', 'asking over working');
+  assert.deepEqual(scheduleLines([], []), { lines: [], other: [] });
 }
 console.log('session-list: schedule runs OK');
+
+// 通知 (task PV5W): the bell counts asking + new results + FAILED schedule runs;
+// a schedule that did its job is listed, never counted. Asking oldest first,
+// schedule runs merged per schedule, a failed one first.
+{
+  const nowMs = Date.parse('2026-11-03T18:00:00+08:00');
+  const s = Math.floor(nowMs / 1000);
+  const R = (id, b = {}, x = {}) => ({ id, title: id, at: 0, glyph: 'idle', tone: 'muted', group: 'queue', tag: ['空闲', 'Idle'], line: '', kids: [], ...x, board: { id, tag: 'idle', ...b } });
+  const rows = [
+    R('ask-new', { state: 'needs', activity_at: s - 10 }),
+    R('ask-old', { state: 'needs', activity_at: s - 500 }),
+    R('done1', { activity_at: s - 20 }),
+    R('done-asking', { state: 'needs', activity_at: s - 30 }),
+    R('quiet', { activity_at: s - 40 }),
+    R('arch', { state: 'needs', archived: true }),
+  ];
+  const run = (id, sid, state, ended, x = {}) => ({ id, schedule_id: sid, state, started: ended - 60, ended, summary: `sum ${id}`, error: '', ...x });
+  const unread = [
+    run('a1', 'brief', 'ok', s - 3600), run('a2', 'brief', 'ok', s - 60),
+    run('b1', 'notes', 'failed', s - 7200, { error: 'boom' }),
+    run('c1', 'old', 'ok', s - 3 * 86400),
+  ];
+  const g = bellGroups(rows, { done1: 'x', 'done-asking': 'y', gone: 'z' }, unread, { brief: 'Group brief', notes: 'Weekly notes' }, nowMs);
+  assert.deepEqual(g.asking.map((r) => r.id), ['ask-old', 'done-asking', 'ask-new'], 'oldest wait first; never an archived one');
+  assert.deepEqual(g.results.map((r) => r.id), ['done1'], 'a new result once, not twice beside its ask');
+  assert.deepEqual(g.schedules.map((x) => [x.id, x.runs.length, x.failed, x.line]), [['notes', 1, 1, 'boom'], ['brief', 2, 0, 'sum a2'], ['old', 1, 0, 'sum c1']], 'merged per schedule, a failed one first');
+  assert.match(g.schedules[1].label, /^(Group brief · 今天 2 次|Group brief · 2 today)$/);
+  assert.match(g.schedules[2].label, /^(old · 1 次|old · 1 runs)$/);
+  assert.equal(g.count, 3 + 1 + 1, 'asking 3 + new result 1 + failed run 1 — successful runs are not counted');
+  assert.equal(bellGroups(rows, {}, unread.filter((r) => r.state === 'ok'), {}, nowMs).count, 3, 'success alone adds nothing');
+  assert.ok(runFailed({ state: 'failed', error: '' }) && runFailed({ state: 'stopped', error: 'x' }) && !runFailed({ state: 'ok', error: '' }));
+  assert.equal(bellGroups(null, {}, [], {}, nowMs).count, 0);
+  const bell = readFileSync(new URL('../src/app/Bell.tsx', import.meta.url), 'utf8');
+  for (const w of ['在问你', '新结果', '定时任务', '说明', '全部已读', 'readSchedule(read', 'markSeen(r)', 'Popover', 'Sheet'])
+    assert.ok(bell.includes(w), `the bell has ${w}`);
+  assert.ok(bell.includes('open && "text-clay"'), 'the bell is clay while open');
+  const shell = readFileSync(new URL('../src/app/Shell.tsx', import.meta.url), 'utf8');
+  assert.ok(!shell.includes('ScheduleNotice') && !shell.includes('LegacyMigrationNotice') && !shell.includes('定时任务有新结果'), 'no bars over the page');
+  assert.ok(shell.includes('<Bell />') && shell.includes('<Bell phone'), 'a bell on the sidebar head and the phone bar');
+  assert.ok(shell.indexOf('<Bell phone') < shell.indexOf('to={meTab("account").path}'), 'left of the avatar');
+  assert.ok(shell.includes('<TrialBar') && shell.includes('<NetBarOf />') && shell.includes('<ReplyToast />'));
+  assert.ok(!shell.includes('StudioLink') && shell.includes('<Sparkles />增长运营 Agent'), '增长运营 Agent lives in the person menu only');
+  assert.ok(!shell.includes('NewScheduleButton') && !src.includes('NewScheduleButton'), 'no separate schedule button');
+  assert.ok(src.includes('data-new-split') && src.includes('新建定时任务') && src.includes('schedulePath("new")'), '新会话 is a split button with 新建定时任务');
+  const ns = readFileSync(new URL('../src/app/NewSession.tsx', import.meta.url), 'utf8');
+  const nd = readFileSync(new URL('../src/app/NewDialog.tsx', import.meta.url), 'utf8');
+  for (const f of [ns, nd]) assert.ok(f.includes('定时运行') && f.includes('scheduleSeed(') && f.includes('schedulePath("new")'), 'the 定时运行 switch hands the words to the schedule form');
+  assert.deepEqual(scheduleSeed('Daily brief\nsummarise it', 'codex', 'o/r'), { prompt: 'Daily brief\nsummarise it', name: 'Daily brief', agent: 'codex', repo: 'o/r' });
+  assert.deepEqual(scheduleSeed('x', 'deepseek'), { prompt: 'x', name: 'x', agent: '', repo: '' });
+}
+console.log('session-list: bell OK');
 
 // 子会话挂在发起会话下面 (v5): a session another opened hangs under it — ordered
 // by the tree's activity, always folded until the person opens it (folded hides
@@ -431,14 +506,22 @@ console.log('session-list: schedule runs OK');
   assert.ok(rowSrc.includes('r.board?.tag === "parked" && r.why ? <RowWhy'), 'the why line only for a parked row');
   for (const w of ['在问你', 'Asking', '⚑', '↳']) assert.ok(!rowSrc.includes(w), `a row draws no ${w}`);
   assert.ok(!/animate-(spin|pulse)/.test(src) && !/animate-(spin|pulse)/.test(page), 'nothing in the list spins or pulses');
-  // the source group's header: its chevron's colour, no 个在问你
-  const groupSrc = src.slice(src.indexOf('data-source-group'), src.indexOf('{archiveToggle}\n      </>'));
+  // the section headers (定时任务, API): the chevron's colour, no 个在问你
+  const groupSrc = src.slice(src.indexOf('const header = '), src.indexOf('{archiveToggle}\n      </>'));
   assert.ok(groupSrc.includes('SIGNAL[signal]') && !groupSrc.includes('在问你') && !groupSrc.includes('asking`'));
-  // PIN → the list → More → ⏰ schedules → API → archived; the shell draws no card of its own
-  const order = ['>PIN</div>', 'timeline(lines(open))', '更多会话', '<ScheduleGroup phone={variant === "page"} />', 'data-source-group', '{archiveToggle}\n      </>'].map((s) => src.indexOf(s));
+  // pinned first with no heading → the list → More → 定时任务 → API → archived;
+  // no ⏰ card anywhere, no 待处理 · N
+  const order = ['[...lines(pin), ...lines(open)].map(treeRow)', '更多会话', 'data-source-group="schedule"', 'data-source-group={src}', '{archiveToggle}\n      </>'].map((s) => src.indexOf(s));
   assert.ok(order.every((x, i) => x > 0 && (!i || x > order[i - 1])), `section order ${order}`);
-  const shell = readFileSync(new URL('../src/app/Shell.tsx', import.meta.url), 'utf8');
-  assert.ok(!shell.includes('<ScheduleGroup'), 'the schedules card lives in the list');
-  assert.ok(!src.slice(src.indexOf('export const SessionListPage')).includes('<ScheduleGroup'), 'nor above it on the phone');
+  assert.ok(!src.includes('ScheduleGroup') && !src.includes('<section aria-label'), 'no schedules card');
+  const sched = src.slice(src.indexOf('const ScheduleLineRow: FC'), src.indexOf("// the open session's ref"));
+  assert.ok(sched.includes('schedulePath(s.id)') && sched.includes('<RowGlyph r={s.urgent} />') && sched.includes('s.failed ? "text-destructive"') && sched.includes('data-schedule-result'), 'a schedule is a row: its dot, red when failed, its result, opens the schedule');
+  assert.ok(sched.indexOf('"▾"') > 0 && sched.indexOf('({s.runs.length})') > 0, 'its runs fold under it, (N) when folded');
+  assert.ok(src.includes('toggle(`schedule:${key}`, o)') && src.includes('opened[`schedule:${id}`]'), 'a schedule\'s fold is remembered with the tree\'s');
+  // 置顶: no heading, a clay pin at a top-level row's end (a click unpins), a faint one on hover pins (computer); the phone's in its long-press sheet
+  const pinSrc = src.slice(src.indexOf('const usePin = '), src.indexOf('const SessionRow: FC'));
+  assert.ok(pinSrc.includes('pinSession(worker, on)') && pinSrc.includes('已置顶 · 点击取消') && pinSrc.includes('"text-clay"') && pinSrc.includes('opacity-0 group-hover/menu-item:opacity-100'));
+  assert.ok(pinSrc.includes('if (variant === "page" || !worker) return pinned ?'), 'the phone draws the pin, never a hover button');
+  assert.ok(src.includes('pinnable: !l.depth') && src.includes('pinnable={topLevel}') && src.includes('<PressPin'), 'a child never wears it; the phone pins from its sheet');
 }
 console.log('session-list: session tree OK');

@@ -9,8 +9,10 @@ import { legacyReader, type Migration } from "./legacy-request";
 export const migrateLegacy = legacyReader(meOnce, (...args) => fetch(...args), !!viewAs);
 
 // One migration on the person's own page. Tickets and view-as never write.
-// Failures stay visible and retryable; the new session entry remains available.
-export function LegacyMigrationNotice() {
+// Failures stay visible and retryable — in the bell's 说明 (task PV5W), no bar
+// of their own; the new session entry remains available.
+export type LegacyNotice = { busy: boolean; retry: () => void };
+export function useLegacyMigration(): LegacyNotice | null {
   const unified = useUnified();
   const { reload } = useWorkRows();
   const refresh = useRef(reload);
@@ -30,9 +32,12 @@ export function LegacyMigrationNotice() {
     return () => { alive = false; clearTimeout(timer); };
   }, [unified, attempt]);
   if (!unified || !result || result.ok || result.readOnly) return null;
-  return <div role="status" className="border-border border-b px-4 py-2 text-sm">
-    {result.why === "busy" ? tr("以前的对话还在回复，答完后会加入会话列表。", "Your previous chat is replying; it will join the list when it finishes.")
-      : <>{tr("以前的对话暂时无法加入列表。", "Your previous chats could not join the list yet.")}{" "}
-        <button type="button" className="underline" onClick={() => retry((n) => n + 1)}>{tr("重试", "Retry")}</button></>}
-  </div>;
+  return { busy: result.why === "busy", retry: () => retry((n) => n + 1) };
+}
+
+// Its words, where the bell lists it.
+export function LegacyNoticeText({ n }: { n: LegacyNotice }) {
+  return <>{n.busy ? tr("以前的对话还在回复，答完后会加入会话列表。", "Your previous chat is replying; it will join the list when it finishes.")
+    : <>{tr("以前的对话暂时无法加入列表。", "Your previous chats could not join the list yet.")}{" "}
+      <button type="button" className="underline" onClick={n.retry}>{tr("重试", "Retry")}</button></>}</>;
 }

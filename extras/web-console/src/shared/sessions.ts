@@ -253,3 +253,16 @@ export async function sessionWrite(tool: "worker_reap" | "worker_resume" | "work
   if (r.data?.status === "failed") return r.data.result?.error?.message || "failed";
   return null;
 }
+
+// 置顶 / 取消置顶 (task PV5W): worker_pin through the same write door — a set
+// (on | off), never a toggle, so a retry lands the same way. The row's session
+// is what is pinned; a row with none cannot be. Resolves like sessionWrite.
+export const pinWorker = (r: { live?: { id: string }; board?: { worker_id?: string } }) => r.live?.id || r.board?.worker_id || "";
+export async function pinSession(workerID: string, on: boolean): Promise<string | null> {
+  const idem = (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9-]/g, "");
+  const r = await sendJSON<{ status?: string; result?: { error?: { message?: string } } }>("POST", "/v1/fleet/write",
+    { tool: "worker_pin", args_json: JSON.stringify({ worker_id: workerID, pin: on ? "on" : "off", idempotency_key: idem }) });
+  if (!r.ok) return r.error || (r.status ? `HTTP ${r.status}` : "network");
+  if (r.data?.status === "failed") return r.data.result?.error?.message || "failed";
+  return null;
+}

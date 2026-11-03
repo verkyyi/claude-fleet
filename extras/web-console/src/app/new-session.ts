@@ -186,3 +186,11 @@ export function rowForOpen(rows: Row[] | null, fid: string, worker: string): Row
   return (rows || []).find((r) => (!!worker && (r.live?.id === worker || r.board?.worker_id === worker))
     || (!!fid && (r.live?.ident === fid || r.id === fid || !!r.board?.worker_id?.endsWith(`/${fid}`)))) || null;
 }
+
+// What the new-session page / dialog hands the schedule form when 定时运行 is on
+// (the state SchedulePanel's `seed` reads): the words, a name off their first
+// line, the agent, the repo.
+export const scheduleSeed = (prompt: string, agent: string, repo = "") => ({
+  prompt, name: (prompt.split("\n").map((l) => l.trim()).find(Boolean) || "").slice(0, 120),
+  agent: agent === "codex" || agent === "claude" ? agent : "", repo,
+});

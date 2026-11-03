@@ -1,4 +1,4 @@
-import { SchedulesProvider, NewScheduleButton, useSchedules, schedulePath } from "./schedules";
+import { SchedulesProvider } from "./schedules";
 // Shell.tsx — the member side's frame (EPIC #3923 C3): on a phone (< 768) a
 // top bar (the mark, what is left of the person's limit, on the list its search,
 // the avatar into 我的); on a computer shadcn's Sidebar — the session list
@@ -15,7 +15,7 @@ import { SchedulesProvider, NewScheduleButton, useSchedules, schedulePath } from
 // (shadcn's collapsible="icon"), the choice kept in this browser.
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type FC, type ReactNode, type Ref } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { ArrowLeft, ChevronsUpDown, CircleUserRound, Eye, LogOut, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ChevronsUpDown, CircleUserRound, Eye, LogOut, ShieldCheck, Sparkles } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +32,7 @@ import { Wordmark } from "@/shared/Wordmark";
 import { tr } from "@/shared/i18n";
 import { Toaster } from "@/components/ui/sonner";
 import { isAdmin, useMe, useUsageHead, type Me, type Quota, type Trial } from "@/shared/api";
-import { LegacyMigrationNotice } from "./chat/legacy";
+import { Bell, NoticesProvider } from "./Bell";
 import { leaveViewAs, viewAs } from "@/shared/viewAs";
 import { backStep, phoneBar } from "./phone-screen";
 import { ADMIN_HREF, ME_TABS, meTab } from "./routes";
@@ -127,7 +127,7 @@ const PersonMenu: FC = () => {
             ))}
             <DropdownMenuItem onSelect={() => location.assign("/status")}><ShieldCheck />{tr("服务健康", "Service health")}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => go(meTab("account").path)}><CircleUserRound />{tr("我的", "Me")}</DropdownMenuItem>
-            {me?.studio ? <DropdownMenuItem onSelect={() => go("/studio")}>增长运营 Agent</DropdownMenuItem> : null}
+            {me?.studio ? <DropdownMenuItem onSelect={() => go("/studio")}><Sparkles />增长运营 Agent</DropdownMenuItem> : null}
             {isAdmin(me) ? (
               <DropdownMenuItem asChild className="text-clay focus:text-clay [&_svg]:!text-clay">
                 <a href={ADMIN_HREF} className="no-underline"><ShieldCheck />{tr("管理后台", "Admin")}</a>
@@ -156,12 +156,12 @@ const Side: FC = () => (
       </Link>
       <span className="ms-auto flex items-center gap-0.5 group-data-[collapsible=icon]:hidden">
         <QuotaPillOf />
+        <Bell />
         <SearchButton />
       </span>
     </SidebarHeader>
     <SidebarContent>
-      <div className="flex gap-2 px-2 group-data-[collapsible=icon]:hidden"><NewButton label className="flex-1" /><NewScheduleButton /></div>
-      <StudioLink />
+      <div className="flex gap-2 px-2 group-data-[collapsible=icon]:hidden"><NewButton label className="flex-1" /></div>
       <SidebarGroup className="px-1.5">
         <SidebarGroupContent><SessionRows variant="side" chatHome /></SidebarGroupContent>
       </SidebarGroup>
@@ -173,8 +173,6 @@ const Side: FC = () => (
     <SidebarRail />
   </Sidebar>
 );
-
-const StudioLink: FC = () => useShell().me?.studio ? <Link to="/studio" className="mx-2 rounded-lg px-3 py-2 text-sm font-medium hover:bg-muted">增长运营 Agent</Link> : null;
 
 const QuotaPillOf: FC = () => <QuotaPill quota={useShell().quota} />;
 
@@ -224,6 +222,7 @@ const TopBar: FC<{ title: string }> = ({ title }) => {
       )}
       <span className="ms-auto flex shrink-0 items-center px-1"><QuotaPill quota={quota} /></span>
       {bar === "list" ? <SearchButton className="size-11" /> : null}
+      {bar === "list" ? <Bell phone className="size-11" /> : null}
       {bar === "list" ? (
         <Link to={meTab("account").path} className="flex size-11 shrink-0 items-center justify-center rounded-full no-underline" aria-label={tr("我的", "Me")} title={tr("我的", "Me")}>
           <Avatar className="size-8"><AvatarFallback className="text-xs">{initial(me?.name || me?.login || "")}</AvatarFallback></Avatar>
@@ -265,17 +264,6 @@ function useSideOpen(): [boolean, (o: boolean) => void] {
   return [open, save];
 }
 
-// One persistent in-app result notice, also available without external delivery.
-const ScheduleNotice: FC = () => {
-  const { search } = useLocation();
-  const { unread } = useSchedules();
-  if (!unread.length || new URLSearchParams(search).has("schedule")) return null;
-  return <Link role="status" to={schedulePath(unread[0].schedule_id)} className="border-b bg-muted px-4 py-2 text-sm no-underline">
-    <span className="font-medium">{tr("定时任务有新结果", "New schedule results")} ({unread.length})</span>
-    <span className="ml-2 line-clamp-2 break-words">{(unread[0].summary || unread[0].error).slice(0, 160)}</span>
-  </Link>;
-};
-
 // AppShell: the frame around every member page. The page fills the space
 // between the bars; a page that scrolls scrolls inside <main>.
 export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: () => void }> = ({ children, quotaKey, bumpQuota }) => {
@@ -290,6 +278,7 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
      <WorkRowsProvider>
      <SchedulesProvider>
      <ListUiProvider>
+     <NoticesProvider>
       <ReplyToast />
       <SidebarProvider open={sideOpen} onOpenChange={setSideOpen} className="min-h-0 motion-reduce:[&_[data-slot^=sidebar]]:transition-none"
         style={{ height: "var(--app-h, 100dvh)", "--sidebar-width": "20rem" } as CSSProperties}>
@@ -298,12 +287,11 @@ export const AppShell: FC<{ children: ReactNode; quotaKey: number; bumpQuota: ()
           <ViewAsBar />
           {studio ? null : <TopBar title={title} />}
           <NetBarOf />
-          {studio ? null : <LegacyMigrationNotice />}
-          {studio ? null : <ScheduleNotice />}
           <TrialBar trial={trial} onAsked={setTrial} />
           <main className="min-h-0 flex-1 overflow-y-auto">{children}</main>
         </div>
       </SidebarProvider>
+     </NoticesProvider>
      </ListUiProvider>
      </SchedulesProvider>
      </WorkRowsProvider>
