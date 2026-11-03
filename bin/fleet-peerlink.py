@@ -256,7 +256,8 @@ def ledger_path():
 
 def _redact(text):
     try:
-        sys.path.insert(0, BIN)
+        if BIN not in sys.path:
+            sys.path.insert(0, BIN)
         import fleet_clientlog
         return fleet_clientlog.redact(text)
     except Exception:  # noqa: BLE001 — a log line, never a crash
@@ -1380,6 +1381,12 @@ class Keeper:
                 self.beat_secs = 0.2 if busy else TICK if active else IDLE_TICK
                 self.save(now)
                 end = time.time() + self.beat_secs
+                # FQAR: every up link is probed end to end at least every E2E_SECS,
+                # the quiet beat included — the wait ends when the first is due, but
+                # never sooner than TICK (a probe a strike held back is no spin)
+                due = [l.last_probe + E2E_SECS for l in self.links.values() if l.phase == "up" and not l.probe]
+                if due:
+                    end = min(end, max(min(due), time.time() + TICK))
                 # the quiet beat polls once a second, never forking
                 step = 0.1 if active or busy else 1.0
                 while not stop and time.time() < end:
@@ -1406,11 +1413,6 @@ class Keeper:
                         self.probe_good(l, ms)
                     # a request (#4359)
                     if wake_mtime() != self.wake_seen:
-                        break
-                    # FQAR: every up link is probed end to end at least every
-                    # E2E_SECS, the quiet beat included
-                    if any(l.phase == "up" and not l.probe and time.time() - l.last_probe >= E2E_SECS
-                           for l in self.links.values()):
                         break
                     # quiet, the state's ts still says "running" (STALE)
                     if time.time() - self.saved_at >= max(1.0, STALE / 3):

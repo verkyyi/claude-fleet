@@ -297,7 +297,8 @@ class G_E2E(Base):
     def test_probe_cadence(self):
         self.assertLessEqual(min(self.pl.PROBE, self.pl.E2E_SECS), 60)
         src = open(HERE / "fleet-peerlink.py").read()
-        self.assertIn("time.time() - l.last_probe >= E2E_SECS", src)
+        self.assertIn("due = [l.last_probe + E2E_SECS for l in self.links.values()", src)
+        self.assertIn("max(min(due), time.time() + TICK)", src)   # never a spin
 
 
 if __name__ == "__main__":
