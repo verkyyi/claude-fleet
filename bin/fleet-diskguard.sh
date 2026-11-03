@@ -724,6 +724,11 @@ fseventsd_over() {
 # FSEV_REMIND (to the notifier + a toast on every fleet), never a kill. The stamp
 # clears when it recovers, so a fresh episode later the same day is reported.
 fseventsd_watch() {
+  # A managed login (FLEET_MACHINE_TASKS=off) leaves it to the machine: the node
+  # daemon's own `diskguard` task runs this same tick for the whole machine
+  # (conf/node-tasks.tsv), the fix is `sudo`, which a tenant has not, and nine
+  # logins each scanning every process for one daemon's size was the cost.
+  [ "${FLEET_MACHINE_TASKS:-}" = off ] && return 0
   local line mb cpu et stamp last nowt s
   line="$(fseventsd_probe)"; stamp="$GDIR/last-fseventsd-remind"
   [ -n "$line" ] || return 0
@@ -741,6 +746,32 @@ warn line is ${FSEV_MB} MB / ${FSEV_CPU}%. This is what froze every new session
 restarts it immediately. Reported once a day; the fleet never kills it."
   # recorded, not flashed (issue #1617): once a day, nothing breaks before you look
   bash "$BIN/fleet-alerts.sh" event fseventsd "fleet: fseventsd at ${mb} MB / ${cpu}% CPU — new sessions stall at spawn; run \`sudo killall fseventsd\` (launchd restarts it)" >/dev/null 2>&1 || true
+  return 0
+}
+
+# --- one process table per tick ------------------------------------------------
+# crash_watch (the metrics row: its claude count and top RSS) and mem_watch (the
+# largest fleet processes) each walked the whole process table with argv — over
+# ~2000 processes on a machine of many logins, every login, every minute. ps_table
+# takes it ONCE, right before them, into the login's own diskguard dir (0600,
+# replaced atomically, removed by ps_table_done); _FLEET_PS_TABLE is a plain shell
+# variable, never exported, so nothing this tick starts reads a table it did not
+# take. No table (ps failed) ⇒ each reader runs its own `ps` as before.
+ps_table() {
+  _FLEET_PS_TABLE=
+  mkdir -p "$GDIR" 2>/dev/null || return 0
+  local t="$GDIR/ps-table" tmp="$GDIR/ps-table.$$"
+  if ( umask 077; ps -Ao pid=,ppid=,uid=,rss=,etime=,command= > "$tmp" 2>/dev/null ) \
+     && [ -s "$tmp" ] && mv -f "$tmp" "$t" 2>/dev/null; then
+    _FLEET_PS_TABLE="$t"
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+ps_table_done() {
+  [ -n "${_FLEET_PS_TABLE:-}" ] && rm -f "$_FLEET_PS_TABLE" 2>/dev/null
+  _FLEET_PS_TABLE=
   return 0
 }
 
@@ -1003,8 +1034,10 @@ EOF2
     inbox_watch                                   # what clients sent gone sessions (#2757), throttled
     selftest_watch                                # selftests' tmux debris + processes (#2970, #4360), hourly
     tree_watch                                    # a closed window's trees its hook missed (#4360)
+    ps_table                                      # ONE process table for the two readers below
     crash_watch                                   # a metrics row every tick (#1294)
     mem_watch                                     # memory / files / pty edges (#1293), notify-only
+    ps_table_done
     transcript_watch                              # daily transcript archive (#1299), budgeted
     cache_watch                                   # under the warn line: rebuildable caches (T1253), detached
     home_watch                                    # a home pane left dead: respawn it (#1801)

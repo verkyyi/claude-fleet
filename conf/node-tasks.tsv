@@ -33,7 +33,7 @@ base-sync	unit	login	git fetch of the login's own base checkouts, with its own c
 cleanup	unit	login	reaps the login's landed worktrees and windows (its tmux, its prmap)
 collect	unit	login	the dash collector for the login's tmux server
 cred-relay	unit	login	the login's relay pass, renewed when the machine's shared proxy asks (no template: the supervisor's ACCOUNT_BUILTIN, #4674)
-diskguard	unit	login	the login's tick (restore, home pane, pool, cert, inbox); the orphan watchdog is the machine's
+diskguard	unit	login	the login's tick (restore, home pane, pool, cert, inbox); the orphan watchdog and, on a managed login, the fseventsd watch are the machine's
 install-sync	unit	login	follows stable for the login's install (a managed login answers off · follows the runtime)
 ledger-watch	unit	login	the login's child-report ledgers
 memguard	unit	machine	the machine's memguard template: never run per login (the machine table's memguard is the one copy)

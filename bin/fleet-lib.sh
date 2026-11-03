@@ -4816,9 +4816,14 @@ fleet_mem_total_mb() {
 #   other   everything else (the operator's own apps, launchd agents) — not ours
 # FLEET_MEM_PS_CMD replaces the `ps` (a selftest stub); its output is
 # `pid ppid uid rss_kb etime command…`, the shape `ps -Ao` prints below.
+# _FLEET_PS_TABLE (never exported — one pass of one script sets it, see
+# fleet-diskguard.sh ps_table) names a file holding that same `ps` output, taken
+# once for several readers of one tick: a machine-wide `ps … command=` over ~2000
+# processes is the expensive part, and every login ran it twice a minute.
 fleet_proc_mem_rows() {
   local uid; uid="$(id -u 2>/dev/null)"
   { if [ -n "${FLEET_MEM_PS_CMD:-}" ]; then sh -c "$FLEET_MEM_PS_CMD" 2>/dev/null
+    elif [ -n "${_FLEET_PS_TABLE:-}" ] && [ -r "$_FLEET_PS_TABLE" ]; then cat "$_FLEET_PS_TABLE" 2>/dev/null
     else ps -Ao pid=,ppid=,uid=,rss=,etime=,command= 2>/dev/null; fi; } | awk -v me="$uid" '
     function secs(et,   f, n) {
       n = split(et, f, /[-:]/)
@@ -4925,7 +4930,12 @@ fleet_metrics_row() {
   mem="$(fleet_mem_probe)"; [ -n "$mem" ] || mem='- - - -'
   nf="$({ sysctl -n kern.num_files 2>/dev/null || awk '{print $1}' /proc/sys/fs/file-nr 2>/dev/null; } | awk 'NF{print $1+0; exit}')"
   for t in /dev/pts/[0-9]* /dev/ttys[0-9]*; do [ -e "$t" ] && pty=$((pty + 1)); done
-  cl="$(ps -axo comm= 2>/dev/null | awk '{ n = $0; sub(/.*\//, "", n); if (n == "claude" || $0 ~ /\/claude\/versions\//) c++ } END { print c+0 }')"
+  # the tick's one table when it has one (_FLEET_PS_TABLE: its argv[0] is column 6)
+  if [ -n "${_FLEET_PS_TABLE:-}" ] && [ -r "$_FLEET_PS_TABLE" ]; then
+    cl="$(awk '{ n = $6; sub(/.*\//, "", n); if (n == "claude" || $6 ~ /\/claude\/versions\//) c++ } END { print c+0 }' "$_FLEET_PS_TABLE" 2>/dev/null)"
+  else
+    cl="$(ps -axo comm= 2>/dev/null | awk '{ n = $0; sub(/.*\//, "", n); if (n == "claude" || $0 ~ /\/claude\/versions\//) c++ } END { print c+0 }')"
+  fi
   # the three largest of OUR processes (fleet_proc_mem_rows is RSS-sorted) as name:MB
   top="$(fleet_proc_mem_rows | awk -F'\t' '$5 != "other" { split($6, w, " "); n = w[1]; sub(/.*\//, "", n)
       gsub(/[^A-Za-z0-9._+-]/, "", n); if (n == "") n = "?"; o = o (k++ ? "," : "") n ":" $3; if (k == 3) exit }

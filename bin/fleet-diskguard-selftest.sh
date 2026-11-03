@@ -263,4 +263,60 @@ ORPHAN_PCT=0 orphan_watch
 st_eq "orphan_watch: PCT=0 disables it entirely" "absent" \
   "$([ -e "$ODIR/orphan-seen" ] && echo present || echo absent)"
 
-printf 'selftest OK: fleet-diskguard (%s assertions — worktree proc-reap + CPU watchdog + orphan watchdog)\n' "$CHECKS"
+# ============================================================================
+# D. one process table per --watch tick: crash_watch + mem_watch share ps_table's
+#    `ps`, and a managed login (FLEET_MACHINE_TASKS=off) leaves fseventsd to the
+#    machine's own diskguard task. A `ps` shim counts every machine-wide scan.
+# ============================================================================
+PST="$WORK/pstable-bin"; mkdir -p "$PST"
+PSCALLS="${WORK:?}/ps-calls"
+cat > "$PST/ps" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$PSCALLS"
+case "\$*" in
+  *command=*) cat <<'ROWS'
+  101     1  $(id -u)  20480 01:00:00 /Users/t/.local/share/claude/versions/9.9.9 --resume x
+  102   101  $(id -u)  10240    05:00 /bin/bash -c sleep 9
+  103     1  $(id -u)   4096    10:00 claude --model opus
+  104     1  99999    99999    10:00 /usr/sbin/fseventsd
+ROWS
+  ;;
+  *comm=*) printf '%s\n' /Users/t/.local/share/claude/versions/9.9.9 claude /usr/sbin/fseventsd ;;
+esac
+EOF
+chmod +x "$PST/ps"
+unset FLEET_MEM_PS_CMD
+live_rows="$(PATH="$PST:$PATH" fleet_proc_mem_rows)"
+live_cl="$(PATH="$PST:$PATH" fleet_metrics_row diskguard | awk -F'\t' '{print $10}')"
+rm -f "$PSCALLS"
+(
+  PATH="$PST:$PATH"
+  ps_table
+  st_eq "ps_table: names the login's own table" "$FLEET_CONF_DIR/diskguard/ps-table" "${_FLEET_PS_TABLE:-}"
+  st_eq "ps_table: the table is 0600" "-rw-------" "$(ls -l "$_FLEET_PS_TABLE" 2>/dev/null | awk '{print substr($1, 1, 10)}')"
+  st_eq "ps_table: never exported to what the tick starts" "none" "$(bash -c 'echo "${_FLEET_PS_TABLE:-none}"')"
+  st_eq "ps_table: the rows read from the table are the live rows" "$live_rows" "$(fleet_proc_mem_rows)"
+  st_eq "ps_table: the metrics claude count matches the live one" "$live_cl" \
+    "$(fleet_metrics_row diskguard | awk -F'\t' '{print $10}')"
+  fleet_proc_mem_rows >/dev/null; fleet_metrics_row diskguard >/dev/null
+  st_eq "ps_table: one machine-wide ps for every reader of the tick" "1" "$(grep -c . "$PSCALLS")"
+  ps_table_done
+  st_eq "ps_table_done: the table is removed" "absent" \
+    "$([ -e "$FLEET_CONF_DIR/diskguard/ps-table" ] && echo present || echo absent)"
+  rm -f "$PSCALLS"; fleet_proc_mem_rows >/dev/null
+  st_eq "ps_table_done: the next reader runs its own ps again" "1" "$(grep -c . "$PSCALLS")"
+  echo "$CHECKS" > "${WORK:?}/checks-d"
+)
+CHECKS=$(cat "$WORK/checks-d" 2>/dev/null || echo "$CHECKS")
+st_eq "ps_table leg: ran to the end" "present" "$([ -s "$WORK/checks-d" ] && echo present || echo absent)"
+# a managed login: no fseventsd scan of its own (the machine's diskguard runs it)
+rm -f "$PSCALLS"
+FLEET_MACHINE_TASKS=off PATH="$PST:$PATH" fseventsd_watch
+st_eq "fseventsd_watch: a managed login scans nothing" "0" "$( [ -f "$PSCALLS" ] && grep -c . "$PSCALLS" || echo 0)"
+rm -f "$PSCALLS"
+FLEET_MACHINE_TASKS='' PATH="$PST:$PATH" fseventsd_watch
+# (fseventsd is macOS's: elsewhere the probe never runs ps at all)
+want=0; [ "$(uname -s 2>/dev/null)" = Darwin ] && want=1
+st_eq "fseventsd_watch: any other login scans as before" "$want" "$( [ -f "$PSCALLS" ] && grep -c . "$PSCALLS" || echo 0)"
+
+printf 'selftest OK: fleet-diskguard (%s assertions — worktree proc-reap + CPU watchdog + orphan watchdog + one ps table)\n' "$CHECKS"
