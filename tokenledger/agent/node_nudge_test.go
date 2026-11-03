@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -277,5 +278,64 @@ func TestFleetReuseFollowsNudge(t *testing.T) {
 	empty := &Agent{}
 	if got := empty.fleetReuse(); got != 0 {
 		t.Fatalf("no nudge path: reuse %v, want 0", got)
+	}
+}
+
+// A login whose kept read counted no session keeps it for fleetQuietReuseMax
+// (a tenant login with nothing open re-read every 14 s for days); a read with
+// a session, an unreadable fleet, or a nudge since it started does not.
+func TestFleetReuseQuietLogin(t *testing.T) {
+	dir := t.TempDir()
+	nudge := filepath.Join(dir, "hub-nudge")
+	if err := os.WriteFile(nudge, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{cfg: Config{FleetNudgePath: nudge}}
+	if a.fleetRdQuiet.Load() {
+		t.Fatal("a fresh agent reads as quiet before any read")
+	}
+	a.fleetRdNudge.Store(a.fleetNudgeMtime())
+	if got := a.fleetReuse(); got != fleetReuseMax {
+		t.Fatalf("busy read: reuse %v, want %v", got, fleetReuseMax)
+	}
+	a.fleetRdQuiet.Store(true)
+	if got := a.fleetReuse(); got != fleetQuietReuseMax {
+		t.Fatalf("quiet read: reuse %v, want %v", got, fleetQuietReuseMax)
+	}
+	if fleetQuietReuseMax <= fleetReuseMax {
+		t.Fatalf("quiet reuse %v not longer than %v", fleetQuietReuseMax, fleetReuseMax)
+	}
+	later := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(nudge, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.fleetReuse(); got != 0 {
+		t.Fatalf("quiet read, nudged since: reuse %v, want 0", got)
+	}
+	t.Setenv("FLEET_CONTROL_READ_CACHE", "0")
+	a.fleetRdNudge.Store(a.fleetNudgeMtime())
+	if got := a.fleetReuse(); got != 0 {
+		t.Fatalf("quiet read, cache off: reuse %v, want 0", got)
+	}
+}
+
+func TestFleetPartQuiet(t *testing.T) {
+	fl := func(fs ...control.Fleet) fleetPart { return fleetPart{snap: fleetSnapshot{fleets: fs}} }
+	for _, c := range []struct {
+		name string
+		fp   fleetPart
+		want bool
+	}{
+		{"no fleets", fl(), true},
+		{"no claude-fleet", fleetPart{err: errNoFleet}, true},
+		{"empty fleet", fl(control.Fleet{Name: "f"}), true},
+		{"a session", fl(control.Fleet{Name: "f"}, control.Fleet{Name: "g", Count: 1}), false},
+		{"unreadable fleet", fl(control.Fleet{Name: "f", State: control.FleetStateUnknown}), false},
+		{"fleet error", fl(control.Fleet{Name: "f", Error: "x"}), false},
+		{"read failed", fleetPart{err: errors.New("fleet discover: boom")}, false},
+	} {
+		if got := c.fp.quiet(); got != c.want {
+			t.Errorf("%s: quiet %v, want %v", c.name, got, c.want)
+		}
 	}
 }

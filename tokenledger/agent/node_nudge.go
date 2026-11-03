@@ -118,6 +118,17 @@ func (n *nudgeBeats) due() bool {
 // for tests.
 var fleetReuseMax = 14 * time.Second
 
+// fleetQuietReuseMax is the same reuse on a login whose kept read counted no
+// session at all: a tenant login with nothing open re-read every 14 s for days
+// (two Python starts, a bash that sources fleet-lib.sh, ps and tmux each time),
+// ~40 reads a minute on a nine-login machine, while its answer — no rows, the
+// same capacity — never moved. What such a read carries besides rows is the
+// capacity (the hub's gate re-checks a start on arrival, fleet_control.py
+// READ_CACHE_FLOOR) and ready (itself re-asked at most every readyInterval, 60
+// s), so a minute old changes nothing a placement relies on; a spawn, close or
+// restore touches hub-nudge and the next beat reads at once. A var for tests.
+var fleetQuietReuseMax = 60 * time.Second
+
 // fleetNudgeMtime is hub-nudge's mtime as UnixNano, 0 when there is no file.
 func (a *Agent) fleetNudgeMtime() int64 {
 	if a.cfg.FleetNudgePath == "" {
@@ -132,8 +143,9 @@ func (a *Agent) fleetNudgeMtime() int64 {
 
 // fleetReuse is the max age of a fleet read this beat may answer with:
 // fleetReuseMax while hub-nudge exists and has not moved since the kept read
-// started, else 0 (read now) — no nudge file (no hub nudges on this login) or
-// FLEET_CONTROL_READ_CACHE=0 reads every beat, as before.
+// started — fleetQuietReuseMax when that read counted no session in any fleet
+// and every fleet read (fleetPart.quiet) — else 0 (read now). No nudge file (no hub
+// nudges on this login) or FLEET_CONTROL_READ_CACHE=0 reads every beat, as before.
 func (a *Agent) fleetReuse() time.Duration {
 	if os.Getenv("FLEET_CONTROL_READ_CACHE") == "0" {
 		return 0
@@ -141,6 +153,9 @@ func (a *Agent) fleetReuse() time.Duration {
 	m := a.fleetNudgeMtime()
 	if m == 0 || m != a.fleetRdNudge.Load() {
 		return 0
+	}
+	if a.fleetRdQuiet.Load() {
+		return fleetQuietReuseMax
 	}
 	return fleetReuseMax
 }

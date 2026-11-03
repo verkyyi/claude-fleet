@@ -562,7 +562,10 @@ func (a *Agent) nodeHeartbeat(ctx context.Context, probe *fleetProbe) control.He
 	// says no fleets would read a busy login as idle.
 	fp, at, _ := a.fleetRd.get(ctx, a.fleetReuse(), fleetBeatBudget, true, func(ctx context.Context) (fleetPart, bool) {
 		a.fleetRdNudge.Store(a.fleetNudgeMtime())
-		return a.readFleetPart(ctx, probe)
+		a.fleetRdQuiet.Store(false)
+		fp, ok := a.readFleetPart(ctx, probe)
+		a.fleetRdQuiet.Store(ok && fp.quiet())
+		return fp, ok
 	})
 	fp.fill(&hb, at)
 	hb.Routes = a.nodeRoutes(ctx)

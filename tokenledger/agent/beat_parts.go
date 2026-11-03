@@ -203,6 +203,24 @@ func (a *Agent) readFleetPart(ctx context.Context, probe *fleetProbe) (fleetPart
 	return fp, ctx.Err() == nil
 }
 
+// quiet reports a read that counted no session at all: every fleet read (no
+// error, none unknown) and none with a row — a cold park is a row, so a login
+// holding one is not quiet. No claude-fleet on the login is quiet too.
+func (fp fleetPart) quiet() bool {
+	if errors.Is(fp.err, errNoFleet) {
+		return true
+	}
+	if fp.err != nil {
+		return false
+	}
+	for _, f := range fp.snap.fleets {
+		if f.State == control.FleetStateUnknown || f.Error != "" || f.Count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // fill puts a fleet half read at `at` into a beat.
 func (fp fleetPart) fill(hb *control.Heartbeat, at time.Time) {
 	switch {
