@@ -318,6 +318,7 @@ func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient,
 		ClientName   string   `json:"client_name"`
 		RedirectURIs []string `json:"redirect_uris"`
 		AuthMethod   string   `json:"token_endpoint_auth_method"`
+		AuthMethods  []string `json:"token_endpoint_auth_methods_supported"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return c, errors.New("client metadata document is not JSON")
@@ -325,8 +326,8 @@ func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient,
 	if doc.ClientID != id {
 		return c, errors.New("client metadata document names another client_id")
 	}
-	if doc.AuthMethod != "" && doc.AuthMethod != "none" {
-		return c, errors.New("only public clients (token_endpoint_auth_method none)")
+	if !cimdPublicOK(doc.AuthMethod, doc.AuthMethods) {
+		return c, errors.New("only public clients: the client metadata document must allow token_endpoint_auth_method none")
 	}
 	if len(doc.RedirectURIs) == 0 || len(doc.RedirectURIs) > 10 {
 		return c, errors.New("client metadata document needs 1 to 10 redirect_uris")
@@ -342,6 +343,24 @@ func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient,
 		c.Name = string([]rune(c.Name)[:100])
 	}
 	return c, s.Store.PutOAuthClient(c)
+}
+
+// cimdPublicOK says whether a metadata document's client may sign in here as
+// a public client: it prefers none, or lists none among the methods it
+// supports. ChatGPT's document prefers private_key_jwt and lists
+// ["none", "private_key_jwt"]; this server advertises only none, so such a
+// client sends no assertion and PKCE binds the code (task T4DN). A document
+// that allows no public sign-in is refused.
+func cimdPublicOK(method string, supported []string) bool {
+	if method == "" || method == "none" {
+		return true
+	}
+	for _, m := range supported {
+		if m == "none" {
+			return true
+		}
+	}
+	return false
 }
 
 // clientHost is what the consent page names a client by besides its own name.

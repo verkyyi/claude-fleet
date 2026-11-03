@@ -375,3 +375,27 @@ func TestAgentKeyRidesAReplicaHopOnly(t *testing.T) {
 		t.Fatal("a replica hop carrying an agent key is refused at the door")
 	}
 }
+
+// ChatGPT's metadata document (as published): it prefers private_key_jwt but
+// supports none, so it signs in as a public client; one with no none is refused.
+func TestOAuthCIMDChatGPTDocument(t *testing.T) {
+	h := newAgentHarness(t)
+	id := "https://chatgpt.com/oauth/abc123/client.json"
+	saved := cimdFetch
+	t.Cleanup(func() { cimdFetch = saved })
+	doc := map[string]any{"client_id": id, "client_name": "ChatGPT",
+		"redirect_uris":                         []string{"https://chatgpt.com/connector_platform_oauth_redirect"},
+		"token_endpoint_auth_method":            "private_key_jwt",
+		"token_endpoint_auth_methods_supported": []string{"none", "private_key_jwt"},
+		"jwks_uri":                              "https://chatgpt.com/oauth/jwks.json"}
+	cimdFetch = func(context.Context, string) ([]byte, error) { return json.Marshal(doc) }
+	q := url.Values{"response_type": {"code"}, "client_id": {id}, "redirect_uri": {"https://chatgpt.com/connector_platform_oauth_redirect"},
+		"code_challenge": {pkceS256(strings.Repeat("w", 43))}, "code_challenge_method": {"S256"}}
+	if code, req := jsonAsPerson(t, h, http.MethodGet, MeOAuthRequestPath+"?"+q.Encode(), pAlice, nil); code != 200 {
+		t.Fatalf("ChatGPT's document: HTTP %d %v", code, req)
+	}
+	if !cimdPublicOK("private_key_jwt", []string{"none", "private_key_jwt"}) || cimdPublicOK("private_key_jwt", []string{"private_key_jwt"}) ||
+		cimdPublicOK("client_secret_basic", nil) || !cimdPublicOK("", nil) {
+		t.Fatal("cimdPublicOK")
+	}
+}
