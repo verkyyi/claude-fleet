@@ -269,7 +269,7 @@ drill_peerlink_two_keepers() {
   # first sees the file it holds is no longer the path's and quits
   rm -f "$B/conf/peerlink/.lock"
   pl_start; k2=$KP; t0=$(now)
-  until_ok 6 sh -c '! kill -0 "$1" 2>/dev/null' _ "$k1" || { WHY="two keepers both alive (pids $k1 $k2)"; KP=$k1; pl_stop; KP=$k2; pl_stop; return 1; }
+  until_ok 6 sh -c '! kill -0 "$1" 2>/dev/null' _ "$k1" || { WHY="two keepers both alive (pids $k1 $k2; $(ps -o pid=,stat= -p "$k1" -p "$k2" 2>/dev/null | tr '\n' ' '); lock pid $(head -1 "$B/conf/peerlink/.lock" 2>/dev/null); log: $(tail -4 "$B/run.err" | tr '\n' ' '))"; KP=$k1; pl_stop; KP=$k2; pl_stop; return 1; }
   SECS=$(since "$t0")
   kill -0 "$k2" 2>/dev/null || { WHY="the new keeper died too"; pl_stop; return 1; }
   until_ok 6 pl_up mac-a@bob || { WHY="the new keeper did not hold the link"; pl_stop; return 1; }
