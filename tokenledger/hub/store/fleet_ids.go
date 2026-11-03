@@ -312,7 +312,9 @@ func (s *Store) ensureFleetIDs() error {
 		{"title_source", "TEXT NOT NULL DEFAULT ''"},
 		// EPIC T644 C1: the task this ID belongs to, by the task's own ID
 		// (fleet_tasks.fid) — `task` keeps the T<n> for one version (compat-1v: 下一批删).
-		{"task_id", "TEXT NOT NULL DEFAULT ''"}} {
+		{"task_id", "TEXT NOT NULL DEFAULT ''"},
+		// task PV5W: who opened it (agent | schedule | api), from its `opened`
+		{"session_source", "TEXT NOT NULL DEFAULT ''"}} {
 		if err := s.addColumn("fleet_ids", c.col, c.spec); err != nil {
 			return err
 		}
@@ -444,6 +446,9 @@ type idRow struct {
 	// the pushing node, for `moved`
 	pushEP, pushMachine, pushLogin string
 	taskID                         string
+	// who opened it (task PV5W): agent | schedule | api, from its `opened`
+	// session_source — the list keeps a closed session in its group
+	sessionSource string
 }
 
 // ApplyFleetIDEvents applies a node's events in seq order (see the file's head).
@@ -465,10 +470,10 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 	r := idRow{}
 	r.ID = p.ID
 	err = tx.QueryRow(`SELECT owner, code, short, endpoint_id, machine, login, win, title, agent, repo, issues,
-		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq, natives, task_id, title_source
+		body, key, task, parent, prev, aliases, asked, parked, opened_at, closed_at, close_reason, seq, natives, task_id, title_source, session_source
 		FROM fleet_ids WHERE id = ?`+s.d.forUpdate(), p.ID).Scan(&r.Owner, &r.code, &r.Short, &r.EndpointID,
 		&r.Machine, &r.Login, &r.Window, &r.Title, &r.Agent, &r.Repo, &r.issues, &r.Body, &r.Key, &r.Task,
-		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq, &r.natives, &r.taskID, &r.TitleSource)
+		&r.Parent, &r.Prev, &r.aliases, &r.Asked, &r.Parked, &r.OpenedAt, &r.ClosedAt, &r.CloseReason, &r.Seq, &r.natives, &r.taskID, &r.TitleSource, &r.sessionSource)
 	exists := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return FleetIDPushed{}, err
@@ -557,10 +562,10 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 		als, _ := json.Marshal(nonNil(r.Aliases))
 		if _, err := tx.Exec(`UPDATE fleet_ids SET short = ?, endpoint_id = ?, machine = ?, login = ?, win = ?,
 			title = ?, agent = ?, repo = ?, issues = ?, body = ?, key = ?, task = ?, parent = ?, prev = ?, aliases = ?,
-			opened_at = ?, closed_at = ?, close_reason = ?, seq = ?, natives = ?, task_id = ?, title_source = ?, updated_at = ? WHERE id = ?`,
+			opened_at = ?, closed_at = ?, close_reason = ?, seq = ?, natives = ?, task_id = ?, title_source = ?, session_source = ?, updated_at = ? WHERE id = ?`,
 			r.Short, r.EndpointID, r.Machine, r.Login, r.Window, r.Title, r.Agent, r.Repo, string(iss), r.Body,
 			r.Key, r.Task, r.Parent, r.Prev, string(als), r.OpenedAt, r.ClosedAt, r.CloseReason, r.Seq, r.natives,
-			r.taskID, r.TitleSource, time.Now().UTC().Format(rfc), r.ID); err != nil {
+			r.taskID, r.TitleSource, r.sessionSource, time.Now().UTC().Format(rfc), r.ID); err != nil {
 			return FleetIDPushed{}, err
 		}
 	}
@@ -602,6 +607,10 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 		fillStr(&r.Task, evStr(ev, "task", 20))
 		fillStr(&r.Parent, evStr(ev, "parent", 64))
 		fillStr(&r.Prev, evStr(ev, "prev", 64))
+		switch v := evStr(ev, "session_source", 16); v {
+		case "agent", "schedule", "api":
+			fillStr(&r.sessionSource, v)
+		}
 		if r.OpenedAt == 0 {
 			r.OpenedAt = ts
 		}
