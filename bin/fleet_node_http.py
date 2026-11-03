@@ -6,7 +6,8 @@ read the token and another to sign — one `get` there was ~1 s, ~0.2 s here.
     pair()                 (url, token) — node.env's CCQUOTA_HUB_URL + CCQUOTA_TOKEN,
                            or a separated login's credential-proxy broker pair
                            (fleet_cred_ctl, issue #1971); None = no node token. Asked
-                           once a process; never exported, never on an argv.
+                           once a process for node.env; broker tokens refresh before expiry.
+                           Never exported, never on an argv.
     call(method, path, body=None) → (http code, text)
                            signed once this login's key is confirmed (FleetSig,
                            issue #3710: fleet_node_sig.confirmed_auth), else
@@ -26,6 +27,7 @@ import json
 import os
 import socket
 import sys
+import time
 from pathlib import Path
 
 BIN = Path(__file__).absolute().parent
@@ -63,12 +65,18 @@ def _unquote(v):
 
 
 _PAIR = []
+_PAIR_BROKER_AT = None
+_BROKER_REFRESH_SECS = 480  # broker node-token TTL is 600 seconds
 
 
 def pair(hub_url=""):
     """fleet_node_pair: node.env readable → its pair; separated → the broker's."""
+    global _PAIR_BROKER_AT
     if _PAIR:
-        return _PAIR[0]
+        if _PAIR_BROKER_AT is None or time.monotonic() - _PAIR_BROKER_AT < _BROKER_REFRESH_SECS:
+            return _PAIR[0]
+        _PAIR.clear()
+    _PAIR_BROKER_AT = None
     f = conf_dir() / "node.env"
     got = None
     if os.access(f, os.R_OK):
@@ -77,9 +85,12 @@ def pair(hub_url=""):
     elif (conf_dir() / "credsep.json").exists():
         sys.path.insert(0, str(BIN))
         import fleet_cred_ctl
+        received_at = time.monotonic()
         res, rc = fleet_cred_ctl.ctl("node-token")
         url, tok = (str(res.get("url") or ""), str(res.get("token") or "")) if isinstance(res, dict) else ("", "")
         got = (url, tok) if rc == 0 and url.startswith("http://127.0.0.1:") and tok.startswith("fcpn1.") else None
+        if got:
+            _PAIR_BROKER_AT = received_at
     _PAIR.append(got)
     return got
 
@@ -150,9 +161,19 @@ def _timeout():
 def call(method, path, body=None):
     """One request to the hub's node road → (code, text). Unreachable: no token,
     or neither road answered."""
-    got = pair()
-    if not got:
-        raise Unreachable("no node token here")
+    for attempt in range(2):
+        got = pair()
+        if not got:
+            raise Unreachable("no node token here")
+        broker = _PAIR_BROKER_AT is not None
+        result = _call_once(method, path, body, got)
+        if result[0] != 401 or not broker or attempt:
+            return result
+        # A broker rejection precedes dispatch: replay once with a fresh token.
+        _PAIR.clear()
+
+
+def _call_once(method, path, body, got):
     url, tok = got
     data = body.encode("utf-8") if isinstance(body, str) else (json.dumps(body).encode() if body is not None else None)
     headers = {"Content-Type": "application/json"}

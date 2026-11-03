@@ -167,20 +167,27 @@ WRAP="$HEAVY"
 QW="$("$PY" -c 'import shlex,sys;print(shlex.quote(sys.argv[1]))' "$WRAP")"
 # rewrite <cmd> [extra tool_input json] → the rewritten command, or "" when none.
 rewrite() {
-  "$PY" - "$1" "${2:-}" <<'PY' | FLEET_HEAVY_BIN="$WRAP" FLEET_MAIN="${HOOK_MAIN-/x}" "$PY" "$GUARD" | "$PY" -c 'import json,sys
+  "$PY" - "$1" "${2:-}" "${HOOK_CWD:-/}" <<'PY' | FLEET_HEAVY_BIN="$WRAP" FLEET_MAIN="${HOOK_MAIN-/x}" "$PY" "$GUARD" | "$PY" -c 'import json,sys
 d=sys.stdin.read().strip()
 print(json.loads(d)["hookSpecificOutput"]["updatedInput"]["command"] if d else "", end="")'
 import json, sys
 ti = {"command": sys.argv[1]}
 if sys.argv[2]:
     ti.update(json.loads(sys.argv[2]))
-print(json.dumps({"tool_name": "Bash", "tool_input": ti, "cwd": "/"}))
+print(json.dumps({"tool_name": "Bash", "tool_input": ti, "cwd": sys.argv[3]}))
 PY
 }
-P="$QW --label git-push --wait 60 -- "
+P="$QW --label push --wait 60 -- "
+
+eq "native worktree cwd: untouched" "" "$(HOOK_CWD=/repo/.claude/worktrees/agent-test rewrite 'git push origin b')"
+eq "native worktree subdir: untouched" "" "$(HOOK_CWD=/repo/.claude/worktrees/agent-test/src rewrite 'git push origin b')"
+eq "cd into native worktree: untouched" "" "$(rewrite 'cd /repo/.claude/worktrees/agent-test && git push origin b')"
+eq "relative quoted cd into native worktree: untouched" "" "$(HOOK_CWD=/repo rewrite 'cd ".claude/worktrees/agent-test" && git push origin b')"
+eq "ordinary worktree still queued" "${P}git push origin b" "$(HOOK_CWD=/repo-scratch-1 rewrite 'git push origin b')"
+eq "cd out of native worktree still queued" "cd /repo-scratch-1 && ${P}git push origin b" "$(HOOK_CWD=/repo/.claude/worktrees/agent-test rewrite 'cd /repo-scratch-1 && git push origin b')"
 
 eq "git push → prefixed" "${P}git push origin b" "$(rewrite 'git push origin b')"
-eq "git -C dir push → prefixed" "$QW --label git-push --wait 60 -- git -C /r push" "$(rewrite 'git -C /r push')"
+eq "git -C dir push → prefixed" "$QW --label push --wait 60 -- git -C /r push" "$(rewrite 'git -C /r push')"
 eq "&& chain + pipe: only the heavy statement" \
    "cd x && $QW --label pytest --wait 60 -- pytest -q | tail -5" "$(rewrite 'cd x && pytest -q | tail -5')"
 eq "two heavy statements → both prefixed" \
@@ -197,9 +204,9 @@ eq "bash <script> form" "$QW --label pre-pr.sh --wait 60 -- bash scripts/pre-pr.
    "$(rewrite 'bash scripts/pre-pr.sh')"
 HD="$(printf 'scripts/pre-pr.sh <<'"'"'EOF'"'"'\ngit push "$x" `y`\nEOF\necho done')"
 eq "heredoc body kept byte for byte" "$QW --label pre-pr.sh --wait 60 -- $HD" "$(rewrite "$HD")"
-eq "run_in_background → no --wait cap" "$QW --label git-push -- git push" \
+eq "run_in_background → no --wait cap" "$QW --label push -- git push" \
    "$(rewrite 'git push' '{"run_in_background": true}')"
-eq "timeout 600000ms → --wait 300" "$QW --label git-push --wait 300 -- git push" \
+eq "timeout 600000ms → --wait 300" "$QW --label push --wait 300 -- git push" \
    "$(rewrite 'git push' '{"timeout": 600000}')"
 
 # Light runs never queue (issue #1313); the fan-outs and full gates still do.

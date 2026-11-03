@@ -784,6 +784,8 @@
 | 会话列表对每条隐藏历史用 JSON LIKE 全扫操作日志；调用方退出后操作长期非终态（T1118） | 刷新越多数据库 CPU 越高、列表越来越慢 | 会话引用写入时索引与回填，隐藏仍核对审核版本；列表现读，动作与时钟变化不等缓存；原刷新/推送节奏不变，旧操作只在核实无活动并确认可见影响后处理 | `hub-session-list-scan` |
 | 看台经 hub 的 peer-relay 进别的机器 / pod 的路坏了（前门不升级 WebSocket、回 426），hub 自己的组件探测与 hub↔节点 ping 全绿（2026-11-02，任务 FQAR） | `/status` 好几个小时显示正常、failure_rate 0，没有事件、没有通知；人只能从看台上「连不上」自己发现 | `relay` 组件每分钟经 hub 自己的公网地址打开 `/v1/node/peer-relay-canary` 回声（握手 + 一帧），失败三分钟开事件、通知；看台每小时上报进入成功率 / 连接可用率 / 进入耗时 / 恢复时间（`POST /v1/fleet/reach-stats`，只有哈希与计数），`/v1/status` 公开 `reach_24h` / `reach_30d`，样本不足 20 显示「—」 | `status-relay-blind` |
 
+| 定时任务执行超过 broker node token 的十分钟寿命，finish 仍复用进程缓存（T1284） | 本地产物已落盘但回传 401，等下一轮才补上 | broker 凭证领取超过 480 秒重领；401 清缓存重试一次；node.env 长期凭证保持原行为 | `schedule-credential-expired` |
+| 原生隔离子 Agent 的 git push 被 heavy hook 包装，命令出现两个 git（T1284） | harness 拒绝推送 | 有效 cwd 在 `.claude/worktrees/agent-*` 时保留原命令；普通推送标签用 push | `native-worktree-push` |
 | 自助定时任务跨 login 写入、旧版本重放或密集触发 | 越权登记、复活已删任务或不断开启收费会话 | 固定本人 lane，版本栅栏，持久化每日上限；等待原生结论再判成功 | `schedule-self-service` |
 | 定时任务指定的 Agent 被 fleet 默认值覆盖 | 应由 Claude 执行的任务误用 Codex，依赖的技能无法执行 | 注册表保存 Agent，运行器显式传 `--agent`；旧节点等待升级，不静默忽略 | `schedule-agent-selection` |
 | 定时任务后台刷新遇到 401，跳走正在查看的会话或终端 | 原页与未保存内容被整页导航清掉，终端登录失效状态也被打断 | 后台读取原地清空私人任务、停止刷新并给登录入口；延迟旧响应不能恢复已失效数据 | `schedule-background-auth` |
