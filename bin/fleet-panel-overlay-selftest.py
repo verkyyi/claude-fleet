@@ -122,7 +122,12 @@ class StateTests(unittest.TestCase):
                 base = ["".join(x for x, _ in r) for r in v.paint(data, -1, 80, q.cells, q.clip)]
                 for at in range(len(data)):
                     selected = v.paint([dict(e, group="pin") for e in data], at, 80, q.cells, q.clip)
-                    self.assertEqual(base, ["".join(x for x, _ in r) for r in selected])
+                    # a pinned row adds only its marker after the title (PV5W): two
+                    # cells taken from the padding, nothing else moves
+                    mark = " ^" if glyphs == "ascii" else " ⇡"
+                    drawn = ["".join(x for x, _ in r) for r in selected]
+                    self.assertTrue(all(mark in d for d in drawn))
+                    self.assertEqual(base, [d.replace(mark, "  ", 1) for d in drawn])
                     self.assertIn("lit", selected[at][1][1])
                     self.assertNotIn("▶", base[at])
 
