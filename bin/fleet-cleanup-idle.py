@@ -944,6 +944,12 @@ class Cleaner:
             # (fleet_park_wake.py tick) — step 2 hands timers to the cold record
             self.why = "timer"
             return False
+        wt = snap.get("@worktree", "")
+        if wt and not Path(wt).is_dir():
+            # its reopen would refuse (fleet-id: «Recorded worktree is gone»): the
+            # wake answers no_session and the conversation is lost — keep it warm
+            self.why = "no-worktree"
+            return False
         if self.args.dry_run:
             print("would-cool-parked:" + window)
             return False

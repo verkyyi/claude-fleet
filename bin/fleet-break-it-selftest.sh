@@ -6927,6 +6927,16 @@ drill_park_cold_forgotten() {
   WHAT='冷停放仍是开着的会话：hub 存活上报带它、历史不记结束、看台那一行就地重开、保留期到了才结束 ID（keep 不过期）'
 }
 
+# A park whose worktree was removed went cold anyway: its wake reopened nothing
+# (fleet-id: «Recorded worktree is gone»), answered no_session, and the ID was lost.
+drill_park_cold_no_worktree() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-cold-selftest.py" Cold.test_missing_worktree_keeps_it_warm 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='工作区已不在的停放不冷却：留着窗口（why=no-worktree），不写 cold.json'
+}
+
 # A cold park is not in the node's inventory (only windows were), so the hub's list
 # drew it 看不到会话 on a lost machine — the 看台's count grew 「+?」 and the sessions
 # it dispatched lost their parent (PV5W). The inventory lists it now, never a target.
