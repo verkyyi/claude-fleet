@@ -50,3 +50,30 @@ Mac 上推荐用 iTerm2，⌘P 打开总面板；别的终端和手机用 `F12` 
 - 在家里机器的命令行里直接敲 `claude` 或 `codex`，用的就是 tokenman 的共享订阅（第一行会写「共享订阅」）；想用自己的账号就 `touch ~/.fleet-pool-off`。
 - 换了家（家换到另一台机器）：用页面上那个所有人共用的地址连的，什么都不用改，主机钥匙也不变。用「高级：直连这台机器」那条连的，那个地址跟着家走——换家后后面是新家那台机器，手机会问一次新的主机钥匙，和页面上写的指纹对得上再接受。两台在同一个路由器后面时，要把路由器的端口转发改到新家，页面上写着它在家里网络的地址。
 - 手机报「主机钥匙变了」、不知道怎么认：Termius 里 设置 → Known Hosts → 删掉那个地址那一条 → 重新连，指纹和 **从手机连** 页上的一致再点 Continue；电脑上 `ssh-keygen -R '[地址]:端口'` 后重连（`fleet` 自己会从入口拿最新的钥匙，不用手动认）。对不上就别认，告诉管理员。
+
+## 从你自己的 AI Agent 管（Claude Code、Codex、Gemini CLI、claude.ai）
+
+你平时用的 Agent 可以替你看、替你管 tokenman 里的会话：问它「tokenman 里有什么要我处理？」，让它给某个会话回一句、回答会话的提问、停掉一个，或者在 Claude / Codex 上新开几个。它经 MCP 连 `https://<入口>/mcp`，身份就是**你**——只看得到你自己的会话、只做你允许的事，随时可以收回。
+
+**浏览器登录（claude.ai、Claude Code、Gemini CLI）**：加上地址，批准一次就行。
+
+```sh
+claude mcp add --transport http tokenman https://hub.example.com/mcp   # Claude Code；之后 /mcp → 登录
+```
+
+- claude.ai、Claude 桌面版或手机版：设置 → Connectors → 添加自定义连接器 → `https://hub.example.com/mcp` → 登录。
+- Gemini CLI，写在 `~/.gemini/settings.json`：`"mcpServers": {"tokenman": {"httpUrl": "https://hub.example.com/mcp", "oauth": {"enabled": true}}}`。
+
+登录页会列出它要什么；不想给的去掉勾，再选能连多久（默认 30 天）。
+
+**或者用个人钥匙（Codex、脚本、任何 Agent）**：控制台 **我的 → Agent → 连接**，选 Agent 和它能做的事，复制给你的那段配置。钥匙只显示一次；放在环境变量里，别写进会分享的文件。Codex 写在 `~/.codex/config.toml`：
+
+```toml
+[mcp_servers.tokenman]
+url = "https://hub.example.com/mcp"
+bearer_token_env_var = "TOKENMAN_TOKEN"
+```
+
+**它能做什么**——每个连接各自选：看你的会话和任务（一定有）、给会话发消息、新开会话、停止和恢复会话、替你回答权限提问（默认不给，勾了它就能以你的名义批准操作）。
+
+**收回**：**我的 → Agent → 收回**，它下一次调用就被拒。每个连接都写着上次什么时候用过。

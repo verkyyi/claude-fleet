@@ -52,6 +52,10 @@ var routeAccess = map[string]string{
 	control.ChatAttachmentDataPath: accessSelf,
 	// The way in, and what a signed-out machine must reach.
 	"/logout": accessPublic, "/signin": accessPublic,
+	// An agent's way in (task T4DN): OAuth metadata, registration, authorize, token.
+	protectedResourcePath: accessPublic, protectedResourcePath + "/mcp": accessPublic,
+	authServerMetaPath: accessPublic, OAuthRegisterPath: accessPublic,
+	OAuthAuthorizePath: accessPublic, OAuthTokenPath: accessPublic,
 	"/auth/github/start": accessPublic, "/auth/github/callback": accessPublic,
 	"/auth/wechat/start": accessPublic, "/auth/wechat/callback": accessPublic, "/auth/wechat/bind": accessPublic,
 	wxQRPath: accessPublic, wxPollPath: accessPublic, wxRelayCBPath: accessPublic,
@@ -253,6 +257,9 @@ var routeAccess = map[string]string{
 	// /v1/fleet/person-bundle — each person their own
 	settingsPagePath:    accessUser,
 	"/v1/fleet/devices": accessUser, "/v1/fleet/devices/revoke": accessUser,
+	// 已连接的 Agent (task T4DN): each person their own connections.
+	MeAgentsPath: accessUser, MeAgentsRevokePath: accessUser,
+	MeOAuthRequestPath: accessUser, MeOAuthApprovePath: accessUser,
 	// Take a machine off the hub (claude-fleet#1928): a user only their own.
 	NodeRetirePath: accessUser,
 }

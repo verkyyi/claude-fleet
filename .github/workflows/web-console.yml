@@ -88,6 +88,8 @@ jobs:
           node --experimental-strip-types test/schedule-receipt.mjs
       - name: Background schedules preserve the current conversation on expiry
         run: node --experimental-strip-types test/schedule-feed.mjs
+      - name: Agent connections and the OAuth consent card (T4DN)
+        run: node --experimental-strip-types test/agents.mjs
       - name: Build
         run: npm run build
       - name: The committed dist is the build

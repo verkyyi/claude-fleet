@@ -85,6 +85,9 @@ type fleetPrincipal struct {
 	// hub MCP), not a browser's cookie (task DDBQ): what it starts is listed
 	// apart, as API 派发.
 	API bool
+	// Grant is a connected agent's scopes (task T4DN): nil for every other
+	// door. A write needs its scope here as well as in the person's own.
+	Grant []string
 }
 
 // All reports whether the caller sees every machine.
@@ -122,7 +125,11 @@ func (s *Server) FleetPrincipal(r *http.Request) (fleetPrincipal, error) {
 	if actor == "" {
 		actor = "operator"
 	}
-	return fleetPrincipal{Actor: actor, Person: person, scope: scope, API: bearer(r) != ""}, nil
+	p := fleetPrincipal{Actor: actor, Person: person, scope: scope, API: bearer(r) != ""}
+	if g := agentGrantOf(r.Context()); g != nil {
+		p.Grant = append([]string{}, g.Scopes...)
+	}
+	return p, nil
 }
 
 // --- registry feed (heartbeats) -----------------------------------------

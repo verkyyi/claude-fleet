@@ -1275,6 +1275,21 @@ again by the signed-in person's ACTIVE accounts from `/v1/fleet/me`, so a
 server-side scope regression still cannot put a colleague's session on it.
 Each `fleet_sessions` row carries `observed_at` / `age_sec` for that.
 
+### Your sessions from your own agent — the console's tools (task T4DN)
+
+With the module on, `/mcp` also offers the console's session tools, for a
+person's own agent (Claude Code, Codex, Gemini CLI, claude.ai — through a
+connected agent's key or OAuth, or the person's own sign-in): `sessions_list`
+(view needs_you · live · ended · all, with counts and a summary),
+`session_get` (the row, plus what it asks with the fingerprint to answer by),
+`session_read` (its last turns, a step's output never included),
+`session_say`, `session_answer`, `session_stop`, `session_new` (1–8 at once,
+per-item answers), `task_list` / `task_get` and `wait` (a long poll on the
+hub's cached list, with a cursor; at most 3 per person). Each goes through the
+console's own road (`/v1/chat/say|answer|stop|open|view`, the one session
+list) inside the hub, as that person: only their own sessions, never the
+operator's door, and each write checked against the scope the agent was given.
+
 ### Start, message, stop, resume — the Fleet Hub writes (claude-fleet#1410)
 
 The rest of the Fleet Hub moves in on the same switch: `worker_start`,

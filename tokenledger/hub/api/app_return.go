@@ -19,13 +19,23 @@ import (
 // appReturnMax bounds what the cookie carries.
 const appReturnMax = 512
 
+// oauthReturnMax bounds the OAuth consent page's return address.
+const oauthReturnMax = 2048
+
 // appReturnOK says whether v is a console address the sign-in may send a
 // browser back to.
 func appReturnOK(v string) bool {
 	if strings.HasPrefix(v, previewAuthorize+"?") {
 		return previewReturnOK(v)
 	}
-	if len(v) > appReturnMax || !strings.HasPrefix(v, AppPrefix+"/") ||
+	max := appReturnMax
+	if strings.HasPrefix(v, oauthConsentPagePath+"?") {
+		// an agent's whole OAuth request rides back through the sign-in (task
+		// T4DN): a client_id URL, a redirect, a PKCE challenge and a resource
+		// run past 512 bytes
+		max = oauthReturnMax
+	}
+	if len(v) > max || !strings.HasPrefix(v, AppPrefix+"/") ||
 		strings.Contains(v, "//") || strings.Contains(v, `\`) {
 		return false
 	}
