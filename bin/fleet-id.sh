@@ -346,6 +346,10 @@ print("refused\t-\t" + p.get("reason", "Native history is not verified; nothing 
   fi
   if [ "$cmd" = continue ]; then rargs+=(--prev "$p_id"); else rargs+=(--fid "$p_id"); fi
   [ "$ex" = 2 ] && { printf 'ok\n'; exit 0; }
+  # Outside tmux (a cold park's wake from the web's chat service, a daemon) the
+  # spawner cannot find its fleet by itself: the caller's FLEET_SESSION names it.
+  # Inside tmux nothing changes (BREAK-IT park-cold-wake-outside-tmux).
+  if [ -z "${TMUX:-}" ] && [ -n "${FLEET_SESSION:-}" ]; then rargs+=("$FLEET_SESSION"); fi
   exec bash "${FLEET_ID_SPAWN:-$BIN/dash-raw-session.sh}" "${rargs[@]}"
 fi
 # A final result starts its window's close (T680, fleet_reap_soon): written first,

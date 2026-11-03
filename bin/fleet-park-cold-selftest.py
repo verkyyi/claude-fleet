@@ -198,6 +198,33 @@ class Kept(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(json.loads(p.stdout)['native'], fixture_fid(9))
 
+    def test_reopen_outside_tmux_names_the_fleet_to_the_spawner(self):
+        # a cold park's wake from the web's chat service runs outside tmux, where
+        # dash-raw-session cannot find its fleet (`no target tmux session`)
+        sid = fixture_fid(9)
+        ids = self.root / 'conf/ids'
+        ids.mkdir(parents=True)
+        (ids / (self.fid + '.ndjson')).write_text('\n'.join(json.dumps(e) for e in [
+            dict(ev='opened', seq=1, id=self.fid, ts=1, agent='claude', title='cold one'),
+            dict(ev='native', seq=2, id=self.fid, ts=2, agent='claude', native=sid)]) + '\n')
+        enc = ''.join(c if c.isalnum() and c.isascii() else '-' for c in str(self.root))
+        proj = self.root / 'projects' / enc
+        proj.mkdir(parents=True)
+        (proj / (sid + '.jsonl')).write_text(json.dumps(dict(sessionId=sid)) + '\n')
+        spawn = self.root / 'spawn'
+        spawn.write_text('#!/bin/sh\nprintf "%%s\\n" "$@" > %s\n' % shlex.quote(str(self.root / 'spawn-args')))
+        spawn.chmod(0o755)
+        base = dict(os.environ, **self.env, HOME=str(self.root), CLAUDE_PROJECTS_DIR=str(self.root / 'projects'),
+                    FLEET_ID_LIVE_CMD='true', FLEET_ID_SPAWN=str(spawn), FLEET_SESSION='fleet')
+        base.pop('TMUX', None)
+        for env, named in ((base, True), (dict(base, TMUX='/tmp/x,1,0'), False)):
+            p = subprocess.run(['bash', str(BIN / 'fleet-id.sh'), 'reopen', self.fid, '--exec'], env=env,
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            args = (self.root / 'spawn-args').read_text().split('\n')
+            self.assertIn('--fid', args)
+            self.assertEqual('fleet' in args, named, args)
+
     def test_ledger_watch_skips_a_cooled_window(self):
         self.assertIn('cold.json" ] && continue', (BIN / 'fleet-ledger-watch.sh').read_text())
 
