@@ -1338,6 +1338,13 @@ expiry (30 days default, a year at most), a revocation, a call count.
   `mcp/sessions.go`): sessions by their lifelong id, «needs you» first, talking through
   the session gate (`/v1/chat/say|answer|stop?worker=`), starting through the console's
   open, waiting on a cursor. The `worker_*` tools stay for one version.
+- **The protocol** is the official Go MCP SDK (`github.com/modelcontextprotocol/go-sdk`,
+  `mcp/mcp.go`), stateless with JSON answers (initialize optional, `GET /mcp` 405); a
+  server is built per request with only the tools that caller may see. Each tool lists
+  `readOnlyHint` / `destructiveHint` and `_meta.securitySchemes` (oauth2 + its one scope,
+  `api.MCPToolScope`); a scope the grant lacks is a tool error whose
+  `_meta["mcp/www_authenticate"]` is an `insufficient_scope` challenge (`api/mcp_meta.go`)
+  — OpenAI's MCP auth requirements.
 - BREAK-IT rows `agent-grant-escapes`, `oauth-redirect-hijack`. People's setup:
   `docs/public/*/member/connect.md` «From your own AI agent».
 

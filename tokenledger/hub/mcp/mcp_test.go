@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -15,6 +16,12 @@ import (
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/pricing"
 )
+
+// protocolVersion is a revision these tests speak; the SDK negotiates it.
+const protocolVersion = "2025-06-18"
+
+// codeMethodNotFound is JSON-RPC's.
+const codeMethodNotFound = -32601
 
 func newMCP(t *testing.T) (*httptest.Server, *store.Store) {
 	t.Helper()
@@ -318,10 +325,32 @@ func TestCall_UnknownToolIsAToolError(t *testing.T) {
 
 func TestUnknownMethodIsAProtocolError(t *testing.T) {
 	ts, _ := newMCP(t)
-	out := rpc(t, ts, "resources/list", nil)
+	// The SDK refuses a method it does not know before running anything: a
+	// 400 naming it under the classic protocols, a JSON-RPC method-not-found
+	// under 2026-07-28.
+	post := func(version string) (*http.Response, []byte) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"no/such_method"}`))
+		req.Header.Set("Content-Type", "application/json")
+		if version != "" {
+			req.Header.Set("Mcp-Protocol-Version", version)
+		}
+		resp, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, b
+	}
+	if resp, b := post(""); resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "no/such_method") {
+		t.Errorf("classic: HTTP %d %q", resp.StatusCode, b)
+	}
+	resp, b := post("2026-07-28")
+	var out map[string]any
+	json.Unmarshal(b, &out)
 	e, ok := out["error"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected a JSON-RPC error, got %v", out)
+		t.Fatalf("2026-07-28: HTTP %d %q; want a JSON-RPC error", resp.StatusCode, b)
 	}
 	if int(e["code"].(float64)) != codeMethodNotFound {
 		t.Errorf("code = %v, want %d", e["code"], codeMethodNotFound)
@@ -362,10 +391,10 @@ func TestMalformedJSONIsAnInvalidRequest(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var out map[string]any
-	json.NewDecoder(resp.Body).Decode(&out)
-	if _, ok := out["error"]; !ok {
-		t.Fatalf("expected a JSON-RPC error, got %v", out)
+	// The SDK refuses an unparseable body at the HTTP layer: 400, saying so.
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "malformed") {
+		t.Fatalf("HTTP %d %q, want 400 malformed", resp.StatusCode, body)
 	}
 }
 
