@@ -95,6 +95,7 @@ FLEET_CLIENT_VER                   handoff: the thin client's .client-version ve
 FLEET_CONTROL_AS                   handoff: the agent file a hub-placed start opens as, fleet_control.py → fleet-control-read.sh --as (T672)
 FLEET_CONTROL_MODEL                handoff: the model a hub-placed start was created on (deepseek | deepseek-pro), fleet_control.py → fleet-control-read.sh → dash-*-session.sh --model (J7BN P1)
 FLEET_EXEC_REGION                  handoff: the pod's execution region, render.py → the pod env; cn = a mainland pod where fleet-claude.sh starts only a DeepSeek profile and fleet-codex.sh refuses (J7BN P1)
+FLEET_DEVNET_ENV                   path: the pod devnet env file fleet-node-linux.py writes (/etc/fleet-devnet.env), read for FLEET_EXEC_REGION by fleet-lib fleet_exec_region and for HTTPS_PROXY by fleet-cred-proxy.py (FQAR)
 FLEET_CLIENT_REHOMED               handoff: the home the thin loop gave up on (换家), set on the attach command for the new home, whose top line says so (fleet-thin.py → fleet-remote-view.sh, T690)
 FLEET_DEFER_ASKS                   knob: 0 = a fresh record's asks hold the window as every other start's do (T992)
 FLEET_DELIVER_HELD                 handoff: the one held delivery code, from the generated agent adapter table (bin/fleet-agent-adapter.sh, T626)
