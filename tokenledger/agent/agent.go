@@ -360,7 +360,10 @@ type Agent struct {
 	// fleetRdNudge is hub-nudge's mtime (UnixNano) when the kept fleet read
 	// started, 0 = none seen (claude-fleet#3544): fleetReuse keeps that read
 	// while the file has not moved since.
-	fleetRdNudge    atomic.Int64
+	fleetRdNudge atomic.Int64
+	// fleetRdQuiet is the kept fleet read's quiet() (no session, every fleet
+	// read): fleetReuse keeps such a read for fleetQuietReuseMax.
+	fleetRdQuiet    atomic.Bool
 	scanner         *scan.Scanner
 	codex           *scan.Scanner
 	codexProfiles   []*codexCollector
