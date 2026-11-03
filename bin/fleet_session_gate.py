@@ -1307,10 +1307,22 @@ def wake_ready(pane):
     Path(str(path) + ".claimed").unlink(missing_ok=True)
 
 
+def cold_warm(fid):
+    """A cold park (fleet_park_cold.py) gets its window back before anything
+    looks for it; no cold record ⇒ nothing is asked, byte for byte as before."""
+    try:
+        import fleet_park_cold
+        if fleet_park_cold.read(fid) and window(fid) is None:
+            fleet_park_cold.warm(fid)
+    except (ImportError, OSError, ValueError):
+        pass
+
+
 def wake(fid, seed_file=None, why="网页", request_only=False, delivery=None):
     # The sender and peer queue carry the same id. A slow native startup owns
     # its seed after .taken: a retry observes that receipt, never posts it again
     # to the now-live inbox. Bare / keyboard wakes retain their existing path.
+    cold_warm(fid)
     refused = execution_reason(window(fid), fid, fresh=True)
     if refused:
         return dict(ok=False, why=refused)
@@ -1543,6 +1555,7 @@ def say(args):
     delivery = args.delivery or str(uuid.uuid4())
     if not UUID_RE.match(delivery):
         return out(dict(state="refused", reason="bad_delivery"), 2)
+    cold_warm(fid)
     with lock(fid):
         known = find(records(fid), delivery)
         refused = execution_reason(window(fid), fid)

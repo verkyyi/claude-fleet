@@ -843,7 +843,11 @@ def stop_row(row):
             values = p.stdout.strip().split('|')
             if not fleet or p.returncode or len(values) != 4 or values[0] != row['key'] or not values[1]:
                 raise ValueError('本地会话身份不可核验，请刷新后重试')
-            if row.get('fleet_id') and row['fleet_id'] != values[1]:
+            # A hub row of a keyed window carries its worker_id's key alias
+            # (<slug>:scratch-N — fleet_hub_common.worker_identity), not a UUID:
+            # only an identity can contradict the window's own.
+            if (row.get('fleet_id') and re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', row['fleet_id'])
+                    and row['fleet_id'] != values[1]):
                 raise ValueError('本地会话身份已变化，请刷新后重试')
             row.update(fleet_id=values[1],task=values[2] or row.get('task') or '',task_execution=values[3])
         except (ValueError,OSError,subprocess.SubprocessError) as exc:

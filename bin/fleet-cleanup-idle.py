@@ -349,11 +349,12 @@ class Cleaner:
         except OSError:
             pass
 
-    def close(self, window, snap, recheck, why="reaped"):
+    def close(self, window, snap, recheck, why="reaped", end=True):
         """The one kill-window of a worktree session: under its transition lock,
         never while a reopen marks it (@migrating), and only once <recheck>()
         still holds — rc False when any of them says no (nothing closed). <why> is
-        its ID's close reason (`parked` for a park, E101)."""
+        its ID's close reason (`parked` for a park, E101); end=False (a cold park)
+        retires the window but leaves its ID open, as a move does."""
         if not getattr(self, "_closing_identity", False):
             import fleet_session_gate
             fid = snap.get("@fleet_id", "")
@@ -370,7 +371,7 @@ class Cleaner:
                     return False
                 self._closing_identity = True
                 try:
-                    return self.close(window, snap, recheck, why)
+                    return self.close(window, snap, recheck, why, end)
                 finally:
                     self._closing_identity = False
         if snap["@migrating"]:
@@ -392,7 +393,7 @@ class Cleaner:
             else:
                 self.retire(window)
             self.tm("kill-window", "-t", window)
-            if not other:
+            if not other and end:
                 self.end_id(snap["@fleet_id"], why)
             return True
         finally:
@@ -855,6 +856,8 @@ class Cleaner:
                 pass
         if not snap.get("@park_held") or not snap.get("@park_wrap_ver") or self.theirs(snap):
             return False
+        if snap.get("@fleet_id", "") in self.cold_due():
+            return self.cool(window, snap)
         due = fleet_reap_policy.parked_deadline(snap)
         if due is None:
             pol = self.policy(snap)
@@ -865,20 +868,7 @@ class Cleaner:
         self.why = "timer:%d" % due
         if self.now < due or getattr(self, "_park_only", False):
             return False
-        import fleet_session_gate
-        fid = snap.get("@fleet_id", "")
-        if not FID_RE.fullmatch(fid):
-            return False
-        draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
-        if (draft.exists() and draft.stat().st_size) or (self.moved(window, snap) or snap.get("@park_wake") or snap.get("@park_start")
-                or snap.get("@migrating") or self.busy(window, snap)
-                or any(r.get("state") in ("queued", "trying", "native", "waking")
-                       for r in fleet_session_gate.records(fid))):
-            self.why = "live"
-            return False
-        clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
-        if any(line.split("\t") == ["0", window] for line in clients.splitlines()):
-            self.why = "live"
+        if self.park_live(window, snap):
             return False
         wt = snap.get("@worktree", "")
         m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
@@ -898,6 +888,79 @@ class Cleaner:
         if not self.close(window, snap, lambda: not self.busy(window, snap)):
             return False
         print("reaped-parked:%s %s" % (window, key))
+        return True
+
+    def park_live(self, window, snap):
+        """A parked window something still holds — words waiting, a wake on its
+        way, a move, work, a queued sentence, a person looking — is never closed."""
+        import fleet_session_gate
+        fid = snap.get("@fleet_id", "")
+        if not FID_RE.fullmatch(fid):
+            return True
+        draft = fleet_session_gate.fid_dir(fid) / "park-input.txt"
+        if (draft.exists() and draft.stat().st_size) or (self.moved(window, snap) or snap.get("@park_wake") or snap.get("@park_start")
+                or snap.get("@migrating") or self.busy(window, snap)
+                or any(r.get("state") in ("queued", "trying", "native", "waking")
+                       for r in fleet_session_gate.records(fid))):
+            self.why = "live"
+            return True
+        clients = self.tm("list-clients", "-F", "#{client_control_mode}\t#{window_id}")
+        if any(line.split("\t") == ["0", window] for line in clients.splitlines()):
+            self.why = "live"
+            return True
+        return False
+
+    def cold_due(self):
+        """The fids of this fleet's held parks to cool this pass (FLEET_PARK_COLD=1):
+        all but the FLEET_PARK_WARM newest, parked past FLEET_PARK_COLD_AFTER."""
+        if getattr(self, "_cold", None) is None:
+            import fleet_park_cold
+            self._cold = set()
+            if fleet_park_cold.enabled():
+                rows = self.tm("list-windows", "-t", self.args.session, "-F",
+                               "#{@fleet_id}\t#{@parked}\t#{@park_held}\t#{@park_since}")
+                parks = []
+                for line in sorted(set(rows.splitlines())):
+                    f = line.split("\t")
+                    if len(f) == 4 and f[1] and f[2]:
+                        since = f[3] if f[3].isdigit() else f[1]
+                        parks.append((f[0], int(since) if since.isdigit() else 0))
+                self._cold = set(fleet_park_cold.due(parks, self.now))
+        return self._cold
+
+    def cool(self, window, snap):
+        """Cold park: the window and its processes go, the ID and conversation stay
+        (no `closed`); cold.json is written first and taken back on any refusal."""
+        import fleet_park_cold
+        import fleet_session_gate
+        self.why = "cold"
+        if self.park_live(window, snap):
+            return False
+        fid = snap["@fleet_id"]
+        if (fleet_session_gate.conf_dir() / "wake" / (fid + ".json")).exists():
+            # a park holding a timer contract stays warm: its tick needs the window
+            # (fleet_park_wake.py tick) — step 2 hands timers to the cold record
+            self.why = "timer"
+            return False
+        if self.args.dry_run:
+            print("would-cool-parked:" + window)
+            return False
+        import fleet_agent_adapter
+        agent = (fleet_session_gate.window(fid) or {}).get("agent") or "claude"
+        try:
+            sid = option(self.tm, window, fleet_agent_adapter.get(agent, "sid_window"))
+        except KeyError:
+            sid = ""
+        try:
+            fleet_park_cold.write(fid, dict(session=self.args.session, agent=agent, sid=sid or "",
+                                            name=snap.get("window_name", ""), worktree=snap.get("@worktree", ""),
+                                            since=snap.get("@park_since", "")))
+        except (OSError, ValueError):
+            return False
+        if not self.close(window, snap, lambda: not self.busy(window, snap), end=False):
+            fleet_park_cold.clear(fid)
+            return False
+        print("cooled-parked:%s %s" % (window, fid))
         return True
 
     @property
