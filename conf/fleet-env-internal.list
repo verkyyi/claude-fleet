@@ -650,6 +650,7 @@ FLEET_HUB_SESSIONS_LOG_MAX         knob: internal budget, bytes at which the ref
 FLEET_HUB_SESSIONS_STATUS_STALE    knob: seconds of hub_ok age past which `fleet-hub-sessions.sh --status` (fleet-doctor's hub-sessions row) reports the refresh stalled (fleet-hub-sessions.sh, 60, #1596)
 FLEET_HUB_SESSIONS_LOOP_SECS       knob: internal budget, how long one detached refresh loop lives before the next collector tick restarts it (70, #1423)
 FLEET_HUB_SESSIONS_STALE           knob: internal budget, seconds of hub silence (global/hub_ok, else the cache's #ts) after which the dash reads every remote row as 失联, the bar `入口 ○`, and a remote-row action refuses — fleet_status_hub_lost in fleet-status-lib.sh (60, #1423 #1483)
+FLEET_HUB_SESSIONS_STALE_FAIL      knob: internal budget, seconds of hub silence after which the rows read 失联 once global/hub_why says the last fleet_sessions round failed — fleet_status_hub_lost in fleet-status-lib.sh, hub_lost_after in fleet_view.py (15, task FQAR)
 FLEET_REMOTE_BIN                   knob: the fleet's bin/ on the other machine, default .claude/fleet/bin (fleet-peerlink.py, fleet-open.sh, fleet-session-cli.py, #1424)
 FLEET_REMOTE_SSH_CMD               seam: the ssh program another machine is reached with (fleet-peerlink.py, fleet-client-upload.py)
 FLEET_HUB_URL                      handoff: the hub URL `fleet connect` (fleet-connect.py) reads (#1424)

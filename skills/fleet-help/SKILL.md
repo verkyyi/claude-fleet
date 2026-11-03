@@ -59,6 +59,7 @@ The question wins over the reading: «手机上怎么…» asked from the Mac is
 | cannot connect | `docs/dev/CLIENT.md` § 「连不上」 |
 | Chinese shows as `_` or boxes | `docs/dev/CLIENT.md` § 「中文乱码」 |
 | the list stopped updating, a row cannot be opened | `docs/dev/CLIENT.md` § 「列表停住」 |
+| a row greyed 「不可进入 · 正在重连」, a session's link / route / rtt / enter latency (Tab → 连接) | `docs/dev/CLIENT.md` § 「进不去的行与连接详情」 |
 | operator preview of candidate native Codex guard configuration (not installation) | `docs/dev/AGENT-ADAPTER.md` § 「TOML」 (托管守卫) |
 | native Worktree and local runtime ownership migration evidence (not an enablement switch) | `docs/dev/AGENT-ADAPTER.md` § 「迁移边界：哪些还没交给原生」 |
 | Codex native usage pilot, fallback and context readings (not enabled by default) | `docs/dev/AGENT-ADAPTER.md` § 「rollout」 / 「用量采集」 |

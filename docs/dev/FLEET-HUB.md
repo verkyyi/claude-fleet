@@ -309,7 +309,9 @@ nothing else — a failed round leaves it, so its age IS the silence (the loop's
 stderr says `hub unreachable for Ns`). Every reader goes through
 `fleet_status_hub_ok` / `fleet_status_hub_lost` (`bin/fleet-status-lib.sh`; a
 cache from before the file is judged by its own `#ts`, as it always was), none
-probes the hub: older than `FLEET_HUB_SESSIONS_STALE` (60 s) ⇒ 失联. Then the
+probes the hub: older than `FLEET_HUB_SESSIONS_STALE` (60 s) ⇒ 失联 — or
+`FLEET_HUB_SESSIONS_STALE_FAIL` (15 s) once `global/hub_why` says the last round
+failed (task FQAR: a quiet long poll is not a dead hub, a failed round is). Then the
 sidebar keeps the last list — the other machines' rows dimmed where they
 stand, each ending in `@mac-a!` (issue #1882: no group of their own, the list
 does not move) — and on the hub
