@@ -16,7 +16,10 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
-import { compactRows, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, ROW_SOURCES, rowMeta, rowRef, searchRows, sourceLabel, type CompactGroups, type RowSource } from "./session-list";
+import {
+  compactRows, fromLine, fromRow, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, ROW_SOURCES, rowMeta, rowRef, searchRows,
+  sessionTree, sourceLabel, treeContext, treeLines, withKids, type CompactGroups, type GroupSource, type TreeLine,
+} from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
@@ -148,30 +151,60 @@ const RowDetail: FC<{ r: Row }> = ({ r }) => {
 type Variant = "side" | "page";
 const rowCls = "text-foreground hover:text-foreground flex items-center gap-3 no-underline";
 
-const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void }> = ({ r, variant, active, onPress }) => {
+// Where a row sits in the session tree (子会话挂在发起会话下面): its line, its
+// twisty's toggle, whether the list has any tree at all (the twisty's slot is
+// kept only then), a search hit's parent title, the 「来自 X（已结束）」 line
+// and the row it opens.
+type TreeProps = { line?: TreeLine; onToggle?: (id: string, open: boolean) => void; treeOn?: boolean;
+  context?: string; from?: string; fromTo?: Row };
+const INDENT = ["", "w-4", "w-8"];
+
+// ▾ open · ▸ folded (green while something folded under it works); a row
+// with nothing under it keeps the same width so the titles line up.
+const Twisty: FC<{ line?: TreeLine; onToggle?: (id: string, open: boolean) => void }> = ({ line, onToggle }) => {
+  if (!line?.kids) return <span data-twisty-slot className="w-3 shrink-0 group-data-[collapsible=icon]:hidden" aria-hidden />;
+  const toggle = (e: { preventDefault: () => void; stopPropagation: () => void }) => { e.preventDefault(); e.stopPropagation(); onToggle?.(line.r.id, !line.open); };
+  return <span role="button" tabIndex={0} data-twisty aria-expanded={line.open} aria-label={line.open ? tr("收起子会话", "Collapse") : tr("展开子会话", "Expand")}
+    onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggle(e); }} onPointerDown={(e) => e.stopPropagation()}
+    className={cn("w-3 shrink-0 cursor-pointer text-center text-xs leading-none group-data-[collapsible=icon]:hidden",
+      !line.open && line.hiddenWork ? "text-ok" : "text-muted-foreground hover:text-foreground")}>{line.open ? "▾" : "▸"}</span>;
+};
+
+const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void } & TreeProps> = ({ r, variant, active, onPress, line, onToggle, treeOn, context, from, fromTo }) => {
   const { seen, markSeen, replied } = useWorkRows();
   const it = listItem(r, seen);
   const press = useLongPress(() => onPress(r));
   const isNew = !!replied[r.id] && !active;
   const status = listStatusLabel(r);
+  // asking the person: said by colour alone — the glyph and the title in clay
+  const asking = listStatus(r).kind === "ask";
   const body = (
-    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} aria-label={[it.title, status].filter(Boolean).join(" · ")} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
+    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} aria-label={[context, it.title, status].filter(Boolean).join(" · ")} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
       className={cn(rowCls, listStatus(r).unknown && "opacity-60", variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
+      {line?.depth ? <span className={cn("shrink-0 group-data-[collapsible=icon]:hidden", INDENT[line.depth])} aria-hidden /> : null}
       <RowGlyph r={r} />
-      <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal")}>
-        <span className="min-w-0 truncate">{r.board?.schedule_id && <span className="mr-1 rounded bg-clay/10 px-0.5" aria-label={tr("定时运行", "Scheduled run")}>⏰</span>}{it.title}</span>
+      {treeOn ? <Twisty line={line} onToggle={onToggle} /> : null}
+      <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal", asking && "text-clay")}>
+        <span className="min-w-0 truncate">{context ? <span className="text-muted-foreground font-normal">{context} › </span> : null}{r.board?.schedule_id && <span className="mr-1 rounded bg-clay/10 px-0.5" aria-label={tr("定时运行", "Scheduled run")}>⏰</span>}{it.title}</span>
+        {line && !line.open && line.hidden ? <span data-tree-hidden className="text-muted-foreground shrink-0 font-normal">({line.hidden})</span> : null}
       </span>
     </Link>
   );
-  if (variant === "page") return <li className="flex items-center"><div className="min-w-0 flex-1">{body}</div><ArchiveButton row={r} /></li>;
+  // under the title, apart from the row's own link: who opened it, when that one has ended
+  const fromCls = cn("text-muted-foreground block truncate text-xs no-underline group-data-[collapsible=icon]:hidden pb-1",
+    variant === "page" ? treeOn ? "ps-17 pe-4" : "ps-11 pe-4" : treeOn ? "ps-15 pe-2" : "ps-9 pe-2");
+  const fromEl = from ? fromTo ? <Link to={sessionPath(fromTo)} data-from-line className={cn(fromCls, "hover:text-foreground")}>{from}</Link>
+    : <span data-from-line className={fromCls}>{from}</span> : null;
+  if (variant === "page") return <li><div className="flex items-center"><div className="min-w-0 flex-1">{body}</div><ArchiveButton row={r} /></div>{fromEl}</li>;
   return (
-    <SidebarMenuItem className="flex items-center">
-      <div className="min-w-0 flex-1"><Tooltip delayDuration={200}>
+    <SidebarMenuItem>
+      <div className="flex items-center"><div className="min-w-0 flex-1"><Tooltip delayDuration={200}>
         <TooltipTrigger asChild>
           <SidebarMenuButton asChild isActive={active} className="data-[active=true]:font-[inherit]">{body}</SidebarMenuButton>
         </TooltipTrigger>
         <TooltipContent side="right" align="start" className="max-w-80 text-xs leading-relaxed"><RowDetail r={r} /></TooltipContent>
-      </Tooltip></div><ArchiveButton row={r} />
+      </Tooltip></div><ArchiveButton row={r} /></div>
+      {fromEl}
     </SidebarMenuItem>
   );
 };
@@ -222,6 +255,13 @@ function useOpenRef() {
   return { ref: m ? decodeURIComponent(m[1]) : "", pathname };
 }
 
+// A twisty the person pressed, per row, kept in this browser: it wins over the
+// default (open while something under it works or asks).
+const TREE_KEY = "fleet.console.tree";
+function readOpened(): Record<string, boolean> {
+  try { const v = JSON.parse(localStorage.getItem(TREE_KEY) || "{}"); return v && typeof v === "object" ? v : {}; } catch { return {}; }
+}
+
 // The list itself. `variant` side = inside the computer's left column (shadcn
 // SidebarMenu, folds to its glyphs); page = the phone's whole screen.
 export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ variant, chatHome }) => {
@@ -235,7 +275,15 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const oldRoad = useUnified() === false;
   const { ref, pathname } = useOpenRef();
   const [goneOpen, setGoneOpen] = useState(false);
-  const [sourceOpen, setSourceOpen] = useState<Partial<Record<RowSource, boolean>>>({});
+  const [sourceOpen, setSourceOpen] = useState<Partial<Record<GroupSource, boolean>>>({});
+  const [opened, setOpened] = useState(readOpened);
+  // kept only for rows the list still has, so the book does not grow forever
+  const toggle = (id: string, open: boolean) => setOpened((o) => {
+    const known = new Set((allRows || []).map((r) => r.id));
+    const n = Object.fromEntries(Object.entries({ ...o, [id]: open }).filter(([k]) => known.has(k)));
+    try { localStorage.setItem(TREE_KEY, JSON.stringify(n)); } catch { /* private mode */ }
+    return n;
+  });
   const [pressed, setPressed] = useState<Row | null>(null);
   const previous = useRef<CompactGroups | undefined>(undefined);
   const [pointing, setPointing] = useState(false);
@@ -250,18 +298,29 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const searchGroups = listRows(rows);
   const ordered = [...searchGroups.pin, ...searchGroups.open, ...searchGroups.gone];
   const webActive = pathname === WEB_CHAT_PATH || (!!chatHome && pathname === "/");
-  const row = (r: Row) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed} />;
+  // the session tree: what a session opened hangs under it; the twisty's slot
+  // only once the list has a tree at all
+  const { tree } = grouped;
+  const treeOn = tree.kids.size > 0;
+  const row = (r: Row, x: TreeProps = {}) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed}
+    treeOn={treeOn} onToggle={toggle} from={fromLine(tree, r)} fromTo={fromLine(tree, r) ? fromRow(allRows || [], r) : undefined} {...x} />;
+  const lines = (roots: Row[]) => treeLines(roots, tree, opened, ref);
+  const flat = (items: Row[]): TreeLine[] => items.map((r) => ({ r, depth: 0, kids: 0, open: false, hidden: 0, hiddenWork: false }));
+  const treeRow = (l: TreeLine) => row(l.r, { line: l });
   const List = variant === "side" ? SidebarMenu : "ul";
-  const timeline = (items: Row[]) => {
+  // a day heading above each tree's root; what hangs under it follows it
+  const timeline = (items: TreeLine[]) => {
     let previous = "";
     const today = new Date(now).toDateString();
     const yesterdayDate = new Date(now); yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-    return items.flatMap(r => {
+    return items.flatMap(l => {
+      const r = l.r;
+      if (l.depth) return [treeRow(l)];
       const day = new Date(r.at).toDateString();
       const label = day === today ? tr("今天", "Today") : day === yesterdayDate.toDateString() ? tr("昨天", "Yesterday") : new Date(r.at).toLocaleDateString();
       const heading = day !== previous ? <li key={`day-${r.id}`} className="px-4 pt-3 pb-1 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">{label}</li> : null;
       previous = day;
-      return heading ? [heading, row(r)] : [row(r)];
+      return heading ? [heading, treeRow(l)] : [treeRow(l)];
     });
   };
   const searching = !!q.trim();
@@ -269,19 +328,20 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   let body: ReactNode;
   if (showArchived) {
     const found = searching ? searchRows(ordered, q) : ordered;
-    body = found.length ? <List>{timeline(found)}</List> : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有已归档会话", "No archived sessions")}</p>;
+    body = found.length ? <List>{timeline(flat(found))}</List> : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有已归档会话", "No archived sessions")}</p>;
   } else if (searching) {
+    // a hit nested under another says whose: 父标题 › 子标题 — folded ones are found too
     const found = searchRows(ordered, q);
     const webHit = `${tr("我的对话", "My chat")} chat`.toLowerCase().includes(q.trim().toLowerCase());
-    body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map(row)}</List>
+    body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map((r) => row(r, { context: treeContext(tree, r) }))}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
     const { pin, open, gone, sources } = grouped;
-    const runningHidden = gone.filter((r) => listStatus(r).kind === "work").length;
+    const runningHidden = withKids(tree, gone).filter((r) => listStatus(r).kind === "work").length;
     // A count, not a group (task DDBQ): the rows stay in time order; the count
     // opens the next one that needs the person, after the one open now —
-    // a folded source group's included.
-    const waiting = [...pin, ...open, ...ROW_SOURCES.flatMap((s) => sources[s])].filter(needsAttention);
+    // a folded source group's and one nested under another included.
+    const waiting = withKids(tree, [...pin, ...open, ...ROW_SOURCES.flatMap((s) => sources[s])]).filter(needsAttention);
     const nextWaiting = waiting[(waiting.findIndex((r) => rowRef(r) === ref) + 1) % (waiting.length || 1)];
     // The old chat entry remains above the task list for older hubs.
     body = (
@@ -291,15 +351,15 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
           className="text-clay flex min-h-8 w-full items-center gap-2 px-4 text-sm no-underline group-data-[collapsible=icon]:hidden">
           <ChevronRight className="size-4" />{tr("待处理", "Needs attention")} · {waiting.length}
         </Link> : null}
-        {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{pin.map(row)}</List></div></> : null}
-        <List>{timeline(open)}</List>
+        {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{lines(pin).map(treeRow)}</List></div></> : null}
+        <List>{timeline(lines(open))}</List>
         {/* a schedule's runs live in the ⏰ 定时任务 card (Y8XY), never in this list */}
         {ROW_SOURCES.filter((src) => src !== "schedule").map((src) => {
           const items = sources[src];
           if (!items.length) return null;
           // folded unless opened, or it holds the session open now
-          const shown = sourceOpen[src] ?? items.some((r) => rowRef(r) === ref);
-          const asking = items.filter(needsAttention).length;
+          const shown = sourceOpen[src] ?? withKids(tree, items).some((r) => rowRef(r) === ref);
+          const asking = withKids(tree, items).filter(needsAttention).length;
           return <div key={src} data-source-group={src}>
             <button type="button" onClick={() => setSourceOpen({ ...sourceOpen, [src]: !shown })} aria-expanded={shown}
               className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
@@ -308,7 +368,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
               <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{sourceLabel(src)}<span className="font-mono"> · {items.length}</span>
                 {asking ? <span className="text-destructive font-medium">{tr(` · ${asking} 个在问你`, ` · ${asking} asking`)}</span> : null}</span>
             </button>
-            {shown ? <List>{items.map(row)}</List> : null}
+            {shown ? <List>{lines(items).map(treeRow)}</List> : null}
           </div>;
         })}
         {gone.length ? <>
@@ -318,7 +378,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
             {goneOpen ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
             <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{tr("更多会话", "More sessions")}<span className="font-mono"> · {gone.length}</span>{runningHidden ? tr(` · ${runningHidden} 个运行中`, ` · ${runningHidden} running`) : null}</span>
           </button>
-          {goneOpen ? <List>{timeline(gone)}</List> : null}
+          {goneOpen ? <List>{timeline(lines(gone))}</List> : null}
         </> : null}
       </>
     );

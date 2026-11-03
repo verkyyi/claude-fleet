@@ -1,7 +1,7 @@
 import { schedulePath } from "./schedules";
 // A task opens its web conversation. Native interactions continue in iTerm2.
-import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { ArrowLeft, Info, MoreHorizontal, Play, Square, TerminalSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -12,7 +12,7 @@ import { viewAs } from "@/shared/viewAs";
 import { ChatThread, SyncNote, type Head } from "./pages/chat";
 import { RowPanel } from "./pages/sessions";
 import { useBack } from "./Shell";
-import { headMeta, isTerminal, openLine, rowAgent, rowMachine } from "./session-list";
+import { headMeta, isTerminal, openLine, rowAgent, rowMachine, sessionTree } from "./session-list";
 import { sessionPath, TermTag } from "./SessionList";
 import { copyOpen } from "./cli";
 import { rowWorker, type Row } from "./work";
@@ -35,7 +35,9 @@ export function Workspace({ r }: { r: Row }) {
   }, [params, setParams]);
   const pendingRecord = !r.live && !!r.board && ["queued", "starting", "not_seen"].includes(r.board.tag);
   const cancelRef = pendingStartRef(r);
-  const { reload } = useWorkRows();
+  const { reload, rows } = useWorkRows();
+  // a session another opened: 来自 <that one> › <this one>, the way back to it
+  const opener = useMemo(() => sessionTree(rows || []).up.get(r.id), [rows, r.id]);
   const { me } = useMe();
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState("");
@@ -109,6 +111,9 @@ export function Workspace({ r }: { r: Row }) {
       <header className={cn("border-border/70 flex shrink-0 items-center gap-2 border-b", cn("px-3 pb-2 md:px-4 md:pt-2", viewAs ? "pt-1" : "pt-[calc(env(safe-area-inset-top)+0.25rem)]"))}>
         <Button variant="ghost" size="icon" className="-ms-2 size-11 shrink-0 md:hidden" aria-label={tr("返回", "Back")} onClick={back}><ArrowLeft /></Button>
         <div className="min-w-0 flex-1">
+          {opener ? <p className="text-muted-foreground truncate text-xs" data-testid="ws-crumb">
+            {tr("来自 ", "From ")}<Link to={sessionPath(opener)} className="text-clay hover:text-clay/80 no-underline">{opener.title}</Link> › {r.title}
+          </p> : null}
           <h1 className="flex min-w-0 items-baseline gap-1.5 text-[15px] leading-tight font-semibold" title={r.title}>
             <span className="truncate">{r.title || r.code}</span>
             <TermTag r={r} />
