@@ -2474,6 +2474,7 @@ def board_apply(board, groups, shut, gone, here, me):
             e["state"] = r["state"]
         if r.get("tag"):
             e["sym"] = BOARD_SYM.get(r["tag"], "idle")
+        e["tag"] = r.get("tag") or ""
         e["depth"] = int(r.get("depth") or 0)
         e["foot"] = " · ".join(x for x in (e.get("text") or "", e["word"], " · ".join(
             x for x in (e.get("machine") or here, e.get("login") or me) if x)) if x)
@@ -2859,7 +2860,7 @@ def source_label(k):
             "api": "Via API" if en else "API 派发"}[k]
 
 
-SCHEDULE_DAY_RE = re.compile(r"(?:[\s_-]+\d{4}-\d{2}-\d{2}|\s+\d{2}-\d{2})(?:(?:\s+#|-)\d+)?$")
+SCHEDULE_DAY_RE = re.compile(r"(?:[\s_-]+\d{4}-\d{2}-\d{2}|\s+\d{2}-\d{2})(?:(?:\s+#|-)\d+|\(-?\d+\))?$")
 
 
 def schedule_label(title):
@@ -2881,6 +2882,63 @@ def schedule_runs(group, keep=(), lift=None):
         up = lift(e) if lift else (needs_attention(e) or task_status(e) in ("work", "pending") or e["target"] in keep)
         (g[2] if not g[2] or up else g[3]).append(e)
     return list(out.values())
+
+
+# --- 定时任务: one row per schedule, its runs under it (the session tree's fold) ---------
+# a run's board tag once it is over: its result (✓ / ✗) on its schedule's row
+SCHED_DONE_TAGS = ("completed", "retained_completed", "ended")
+SCHED_BAD_TAGS = ("failed", "cancelled", "ended_no_result", "refused", "stopped")
+
+
+def sched_key(e):
+    """A run's schedule: the hub's schedule_id, else its title without the day."""
+    return e.get("schedule_id") or "title:" + schedule_label(e.get("text") or e.get("name") or "")
+
+
+def sched_result(e):
+    """An ended run's result — "ok" / "bad" — or "" while it is not over."""
+    if task_status(e) != "quiet" and not e.get("lost"):
+        return ""
+    tag = e.get("tag") or ""
+    if tag in SCHED_BAD_TAGS:
+        return "bad"
+    if tag in SCHED_DONE_TAGS:
+        return "ok"
+    if tag or not (e.get("gone") or e.get("ended")):
+        return ""
+    return "bad" if e.get("sym") in ("fail", "exited") or e.get("state") == "failed" else "ok"
+
+
+def sched_when(ts, now=None):
+    """HH:MM today, MM-DD before."""
+    now = time.time() if now is None else now
+    t = time.localtime(ts)
+    return time.strftime("%H:%M" if t[:3] == time.localtime(now)[:3] else "%m-%d", t)
+
+
+def sched_parent(key, name, runs, now=None):
+    """The schedule's own row (synthetic): its name, its runs under it (newest
+    first, shut by default — tree-open's `sched:<key>`), the most urgent run's
+    status in its slot and the last ended run's ✓ / ✗ and time after its title."""
+    st = {task_status(r) for r in runs}
+    urgent = next((s for s in ("needs", "work", "loop", "pending") if s in st), "")
+    last = next((r for r in runs if sched_result(r)), None)
+    tail = ""
+    if last is not None:
+        at = last.get("act") or last.get("activity_at") or 0
+        tail = ("✓" if sched_result(last) == "ok" else "✗") + (" " + sched_when(at, now) if at else "")
+    return {"kind": "sess", "target": "sched:" + key, "board": "sched:" + key, "sched_parent": True,
+            "sched_newest": runs[0]["target"], "text": name, "name": name, "group": "queue", "state": "",
+            "source": "schedule", "agent": "", "repo": runs[0].get("repo") or "", "tags": [], "depth": 0,
+            "activity_at": max(int(r.get("activity_at") or 0) for r in runs), "dup_status": urgent,
+            "sched_tail": tail, "id": "", "foot": name}
+
+
+def sched_run(items, e):
+    """A schedule's own row stands for its newest run (↵, Tab); any other row is itself."""
+    if not e.get("sched_parent"):
+        return e
+    return next((x for x in items if x.get("kind") == "sess" and x.get("target") == e.get("sched_newest")), e)
 
 
 def needs_attention(e):
@@ -3070,7 +3128,8 @@ def tree_emit(root, kids, folds, dups=None):
         hid = [d for x in under if id(x) not in shown for d in [x] + dups.get(id(x), [])]
         shut = bool(under) and twisty == "shut"
         e.update(tree_prefix=prefix, tree_twisty=twisty if under else "", tree_depth=depth,
-                 tree_hidden_n=len([d for d in under if id(d) not in shown]) if shut else 0,
+                 tree_hidden_n=(len([d for d in (kids.get(id(e), []) if e.get("sched_parent") else under)
+                                     if id(d) not in shown]) if shut else 0),
                  tree_tone=row_tone(hid) if shut else "",
                  tree_hidden=(id(e) not in shown) if hidden is None else hidden,
                  tree_key=tree_key(e), tree_up=tree_key(up) if up is not None else "")
@@ -3147,7 +3206,8 @@ def tree_folds_load(fleet):
 def tree_toggle(folds, fleet, key, on, items=()):
     """→ / ← on a parent: remembered per 看台 view; the choices for rows no longer
     in the list are dropped as it is written. Returns the new choices."""
-    live = {tree_key(e) for e in items if e.get("kind") == "sess"}
+    live = {tree_key(e) for e in items if e.get("kind") == "sess"} | \
+        {"sched:" + sched_key(e) for e in items if e.get("kind") == "sess" and e.get("source") == "schedule"}
     folds = {k: v for k, v in (folds or {}).items() if not live or k in live}
     folds[key] = bool(on)
     try:
@@ -3230,30 +3290,32 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
         for e in history:
             put(e, "gone", folded=True)
         out += older
-    lift = lambda e: any(needs_attention(x) or task_status(x) in ("work", "pending") or x["target"] in keep
-                         for x in whole(e))
     for k in SECTION_SOURCES:
         group = sorted(sourced[k], key=newest)
         if not group:
             continue
+        tone = row_tone([x for e in group for x in whole(e)])
+        if k == "schedule":
+            # one row per schedule (its runs under it, shut by default): the
+            # heading counts schedules, not runs
+            scheds = {}
+            for e in group:
+                scheds.setdefault(sched_key(e), []).append(e)
+            out.append({"kind": "sec", "sec": "src-" + k, "text": source_label(k) + " · %d" % len(scheds),
+                        "n": len(scheds), "tone": tone})
+            for key, runs in scheds.items():
+                sp = sched_parent(key, schedule_label(runs[0].get("text") or runs[0].get("name") or ""), runs, now)
+                kids[id(sp)] = runs
+                for x in tree_emit(sp, kids, folds, dups):
+                    x.pop("sec", None)
+                    x["sec"] = "src-" + k
+                    out.append(x)
+            continue
         # its ▸ says what it holds, as a shut parent's does (row_tone) — no words
         out.append({"kind": "sec", "sec": "src-" + k, "text": source_label(k) + " · %d" % len(group), "n": len(group),
-                    "tone": row_tone([x for e in group for x in whole(e)])})
-        runs = schedule_runs(group, keep, lift) if k == "schedule" else [["", "", group, []]]
-        for key, name, shown, folded in runs:
-            for e in shown:
-                put(e, "src-" + k)   # folded with its heading; the one open now stays shown
-            if folded:
-                # one schedule, one line (X24T): its older runs behind a count,
-                # inside the group — shown only while the group is open too
-                sub = "sched-" + key
-                n = len(folded)
-                out.append({"kind": "sec", "sec": sub, "sec_parent": "src-" + k, "n": n,
-                            "tone": row_tone([x for e in folded for x in whole(e)]),
-                            "text": "  " + name + (" · %d earlier run%s" % (n, "" if n == 1 else "s") if ui_lang() == "en"
-                                                   else " · %d 次更早运行" % n)})
-                for e in folded:
-                    put(e, sub, sec_parent="src-" + k)
+                    "tone": tone})
+        for e in group:
+            put(e, "src-" + k)   # folded with its heading; the one open now stays shown
     if archived:
         out.append({"kind": "sec", "sec": "archived", "text": "Archived" if ui_lang() == "en" else "已归档", "n": len(archived)})
         out += archived
@@ -3265,7 +3327,8 @@ def visible(items, query, opened, current="", selected="", folds=None):
     history and the rows a shut ▸ hides without opening either — drawn flat."""
     items = compact_task_list(items, current, selected=selected, folds=folds)
     if query.split():
-        hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess" and (not e.get("archived") or "archived" in opened)]
+        hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess" and not e.get("sched_parent")
+                and (not e.get("archived") or "archived" in opened)]
         toks = query.split()
         if len(toks) == 1 and any(e.get("open_id") and id_code_hit(toks[0].lower(), e) for _, _, e in hits):
             hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
@@ -3337,7 +3400,7 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     gstyle = base + (("c1", "bold") if col and sym == "needs" else ())
     show_repo = width >= 60
     show_agent = width >= 40
-    agent = agent_word(e)
+    agent = "" if e.get("sched_parent") else agent_word(e)
     segs = [(" " * ICON_X, base), (gl[sym], gstyle), (" ", base)]
     used = sum(cells(t) for t, _ in segs)
     tail = (AGENT_W + 1 if show_agent else 0) + ((REPO_W + 2) if show_repo else 1)
@@ -3352,11 +3415,15 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     avail = room - cells(prefix) - cells(slot)
     more = " (%d)" % e["tree_hidden_n"] if twisty == "shut" and e.get("tree_hidden_n") else ""
     times = " ×%d" % e["dup_n"] if not flat and (e.get("dup_n") or 0) > 1 else ""
+    # a schedule's row: its last ended run, ✓ / ✗ and when (HH:MM today, MM-DD before)
+    tail = ("  " + e["sched_tail"]) if e.get("sched_tail") else ""
     if cells(more) > avail - 2:
         more = ""
     if cells(times) + cells(more) > avail - 2:
         times = ""
-    name = clip_name(e.get("text") or "", avail - cells(more) - cells(times), cells, clip)
+    if cells(times) + cells(more) + cells(tail) > avail - 2:
+        tail = ""
+    name = clip_name(e.get("text") or "", avail - cells(more) - cells(times) - cells(tail), cells, clip)
     tone = e.get("tree_tone") if twisty == "shut" else ""
     if prefix:
         segs.append((prefix, base + ("dim",)))
@@ -3368,7 +3435,9 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
         segs.append((times, base + ("dim",)))
     if more:
         segs.append((more, base + (tone_style("ask", col) if tone == "ask" else ("dim",))))
-    segs.append((" " * max(0, avail - cells(name) - cells(times) - cells(more)), base))
+    if tail:
+        segs.append((tail, base + ("dim",)))
+    segs.append((" " * max(0, avail - cells(name) - cells(times) - cells(more) - cells(tail)), base))
     if show_agent:
         # Agent after the title, a fixed aligned column; the plan marker stays visible
         if e.get("agent_basis") == "planned":
@@ -7286,7 +7355,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 mode, mat, mtitle, pend = "choice", 0, a["label"]({}), (a, {})
                 continue
             if 0 <= at < len(shown) and shown[at]["kind"] == "sess":
-                actions_page(shown[at])
+                actions_page(sched_run(items, shown[at]))
             continue
         if ch in ("\n", "\r", curses.KEY_ENTER):
             if not (0 <= at < len(shown)):
@@ -7342,6 +7411,10 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 if went:
                     return 0
                 continue
+            # a schedule's own row: ↵ goes to its newest run, as ↵ on that run would
+            e = sched_run(items, e)
+            if e.get("sched_parent"):
+                continue
             target = e.get("target") or ""
             if not target:
                 continue
@@ -7361,7 +7434,7 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         if ch == "\x14":
             # ⌃T (issue #3517): 置顶 / 取消置顶 the lit session, as its Tab menu would
             e = shown[at] if 0 <= at < len(shown) else {}
-            if e.get("kind") != "sess" or not e.get("target") or e.get("gone"):
+            if e.get("kind") != "sess" or not e.get("target") or e.get("gone") or e.get("sched_parent"):
                 continue
             anchor(e)
             if pick(ACTION["pin"], act_row(fleet, e)):
