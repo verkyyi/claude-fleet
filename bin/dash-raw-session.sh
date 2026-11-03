@@ -1407,6 +1407,10 @@ fi
 # Who opened it (task DDBQ): a person's session carries nothing.
 [ -n "$SOURCE" ] || case "$ORIGIN" in ''|hub) ;; *) SOURCE=agent ;; esac
 case "$SOURCE" in agent|schedule|api) stamp_option @session_source "$SOURCE" 2>/dev/null ;; esac
+# Who opened it, by ID (task PV5W): the spawn / task tool hands the caller's own
+# @fleet_id as $FLEET_FROM_FID, and the lists draw this session under it. Display
+# only — nothing routes, reports or reaps by it (the retired Parent stays retired).
+fleet_is_fid "${FLEET_FROM_FID:-}" && [ "$FLEET_FROM_FID" != "$fid" ] && stamp_option @from_fid "$FLEET_FROM_FID" 2>/dev/null
 # A scheduled run is about its schedule, not the prompt a person wrote once (X24T):
 # its name («<schedule> 10-30», fleet_schedule_run.py run_title) is its first
 # sentence — set before the agent starts, so set-claude-state.sh's first-prompt

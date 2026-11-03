@@ -49,6 +49,8 @@ WORKER_ACTIONS = ("worker_message", "worker_stop", "worker_resume", "worker_answ
                   "worker_switch", "worker_rename", "worker_reap_policy", "worker_pin", "worker_transfer")
 # worker_switch's optional `account`: a label in the accounts dir, one argv word.
 ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@-]{1,64}")
+# A session ID (@fleet_id): canonical lower-case UUID.
+FID_SHAPE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 # worker_rename's `name` (issue #2358): a window name — 1 to 64 characters, no
 # control character (a tab or newline would split the inventory's columns), not
 # blank. One argv word on the node; never parsed by a shell or tmux.
@@ -369,10 +371,17 @@ def inventory_row(parts):
     Column 36 (task HHV0): `cantalk=1` → `can_talk: true`, else `can_talk: false`
     (the web may only read it: an older Claude Code / mod / Codex); an older
     node's row has none: absent.
-    Last (task DDBQ): `source=agent|schedule|api` → `source`, who opened a
-    session no person opened; absent on a person's."""
+    Then (task DDBQ): `source=agent|schedule|api` → `source`, who opened a
+    session no person opened; absent on a person's.
+    Last (task PV5W): `from=<ID>` → `from`, the @fleet_id of the session whose
+    spawn / task tool opened it — the hub's list draws it under that session.
+    Display only; absent when it has none."""
     parts = list(parts)
     extra = {}
+    if len(parts) >= 37 and parts[-1].startswith("from="):
+        value = parts.pop()[5:]
+        if FID_SHAPE.fullmatch(value):
+            extra["from"] = value
     # Who opened it (task DDBQ): the very last column, only on a session no person
     # opened; absent ⇒ a person's.
     if len(parts) >= 37 and parts[-1].startswith("source="):

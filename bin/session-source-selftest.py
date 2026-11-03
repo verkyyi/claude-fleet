@@ -69,7 +69,7 @@ check("B: a scheduled run says schedule (python runner)", "'--source','schedule'
 check("B: a scheduled run says schedule (shell runner)", "--source schedule" in read("bin", "fleet-task-run.sh"))
 ctl = read("bin", "fleet-control-read.sh")
 SRC_FMT = "#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,}}"
-check("B: the inventory reads @session_source", SRC_FMT + "' 2>/dev/null) || cwds=''" in ctl
+check("B: the inventory reads @session_source", SRC_FMT + "\\t#{@from_fid}' 2>/dev/null) || cwds=''" in ctl
       and 'suffix += ("\\tsource=" + src) if src else ""' in ctl)
 # X24T: a window a scheduler opened before the stamp (reap origin probe, not a
 # test identity) is a schedule's — asked of a real tmux on an isolated socket.

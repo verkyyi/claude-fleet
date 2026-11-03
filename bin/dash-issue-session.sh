@@ -900,6 +900,9 @@ _sw+=(\; set-window-option -t "$win" @reap_policy "${REAP:-idle:2h}")
 # who opened it (task DDBQ): a session's spawn tool names its own key as --origin;
 # the hub / a person gives none or `hub` — a person's session carries nothing
 case "$ORIGIN" in ''|hub) ;; *) _sw+=(\; set-window-option -t "$win" @session_source agent) ;; esac
+# …and by ID (task PV5W): the spawn tool's caller ($FLEET_FROM_FID), so the lists
+# draw this session under it — display only, nothing routes or reaps by it
+fleet_is_fid "${FLEET_FROM_FID:-}" && _sw+=(\; set-window-option -t "$win" @from_fid "$FLEET_FROM_FID")
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) ;; *) _sw+=(\; set-window-option -t "$win" @task "$TASK_REF") ;; esac ;; esac
 [ -n "$REPO" ] && _sw+=(\; set-window-option -t "$win" @repo "$REPO")
 _sw+=(\; set-window-option -t "$win" @worktree "$wt")

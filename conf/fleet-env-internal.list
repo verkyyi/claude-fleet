@@ -253,6 +253,7 @@ FLEET_MCP_GATEWAY                  knob: 0 serves no mcp_list / mcp_enable / mcp
 FLEET_MCP_TEAM_FILE                handoff: the fleet/team layer's composed MCP file, read by the gateway when a lean worker does not mount it (fleet-launch-lib.sh → fleet_mcp_gateway.py, T716)
 FLEET_AS_KV                        handoff: the agent file fleet-task-record.sh dispatch just read (fleet-agent-def.py launch's lines), so dash-raw-session.sh reads it once a start (T716)
 FLEET_AS_KV_FOR                    handoff: which file / agent / dir FLEET_AS_KV answers (`<as>\t<for>\t<dir>`) — any other start reads its own (T716)
+FLEET_FROM_FID                     handoff: the calling session's @fleet_id, fleet-mcp.py spawn / task → the spawners' @from_fid and the record's from_fid — the lists draw the session under it; display only (task PV5W)
 FLEET_AUTHORITY_SEEN               handoff: a 看台's authority answer `<mode> <epoch s>` (go_new → dash-raw-session.sh), so a start asks the person's authority once (T716)
 FLEET_AUTHORITY_FRESH_SECS         knob: how long one authority answer stands for a start's gate / finish (dash-raw-session.sh, 30; 0 = ask every time — T716)
 FLEET_TIMING_WHAT                  handoff: `session.node` for a start the hub sent this machine, so its clock (from the node's acceptance) is its own run (fleet_control.py → dash-raw-session.sh / fleet_timing_at, T716)

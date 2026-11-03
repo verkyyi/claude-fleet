@@ -501,6 +501,33 @@ def hub_env(ttl):
     return env
 
 
+def caller_fid():
+    """The calling session's own @fleet_id — the credential's, else (the marker
+    road) its pane's; "" when neither is a canonical ID."""
+    fid = (CALLER["claims"] or {}).get("fid", "")
+    if not fid and os.environ.get("TMUX") and os.environ.get("TMUX_PANE"):
+        try:
+            fid = pane_opt("#{@fleet_id}")
+        except ToolFault:
+            fid = ""
+    return fid if FID_RE.fullmatch(fid or "") else ""
+
+
+def spawn_env(ttl):
+    """hub_env, plus the caller's ID as $FLEET_FROM_FID (task PV5W): the session it
+    opens is drawn under it in the lists. Display only — nothing routes, reports or
+    reaps by it (the retired Parent stays retired). Never an inherited value."""
+    env = hub_env(ttl)
+    fid = caller_fid()
+    if not fid and "FLEET_FROM_FID" not in os.environ:
+        return env
+    env = dict(env if env is not None else os.environ)
+    env.pop("FLEET_FROM_FID", None)
+    if fid:
+        env["FLEET_FROM_FID"] = fid
+    return env
+
+
 def log_call(tool, claims, verdict, why="", via=None):
     """One line per call: who (worker_id from the credential, or the window's marker),
     how it was known (cred | marker | badcred: one was presented and refused), and the
@@ -886,7 +913,7 @@ def tool_spawn(args):
     as_ = ["--as", args["agent"]] if args.get("agent") else []    # issue #3122
     model = ["--model", args["model"]] if args.get("model") else []   # task J7BN
     return script([str(BIN / "dash-issue-session.sh"), str(args["issue"])] + repo + reap + as_ + (["--agent", args["coding_agent"]] if args.get("coding_agent") else []) + model, SPAWN_TIMEOUT_S,
-                  env=hub_env(ASSERT_TTL_S))
+                  env=spawn_env(ASSERT_TTL_S))
 
 
 def tool_schedule(args):
@@ -946,7 +973,7 @@ def tool_task(args):
     if args.get("model"):
         argv += ["--model", args["model"]]   # task J7BN: a DeepSeek session, placed by the hub
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
-            env=hub_env(ASSERT_TTL_S))
+            env=spawn_env(ASSERT_TTL_S))
     out = {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
     # ONE code names it (EPIC T644 C3): stdout is the task's code, then T<n> (an older
     # hub: T<n> alone). `id` / `short` = the task's code — await / send / get take it;

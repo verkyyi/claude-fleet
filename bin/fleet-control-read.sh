@@ -253,6 +253,9 @@ case "$mode" in
     # A window opened before the stamp says it by its reap origin: `probe` is only
     # ever stamped by the two schedulers (fleet_schedule_run.py, fleet-task-run.sh)
     # and a test identity, so probe without @test_identity 1 is a schedule's (X24T).
+    # After it (task PV5W): `from=<ID>` — the @fleet_id of the session whose spawn /
+    # task tool opened this one (@from_fid); the hub's list draws it under that
+    # session. Display only. Absent when it has none.
     ttl=$'\n'; drepo=''; _nr=0
     while IFS= read -r _r; do
       [ -n "$_r" ] || continue
@@ -264,7 +267,7 @@ case "$mode" in
           print ENVIRON["FR"] "\t" substr($2, 2) "\t" t }' "$_f" 2>/dev/null)$'\n'
     done < <(fleet_repos "$sess" 2>/dev/null)
     [ "$_nr" = 1 ] || drepo=''   # a window with no repo column falls to the fleet's ONLY repo
-    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}\t#{?@turn_activity_at,#{@turn_activity_at},#{@claude_state_ts}}\t#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,}}' 2>/dev/null) || cwds=''
+    cwds=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t#{pane_current_path}\t#{@norepo}\t#{@cc_agent}\t#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}\t#{?@born,#{@born},#{window_created}}\t#{@reap_policy}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}\t\t#{@epic}\t#{?#{==:#{@backfill},failed},failed,}\t#{?#{==:#{@test_identity},1},1,}\t#{@task_line}\t#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}\t#{?#{==:#{@pin},1},1,}\t#{@loop}\t#{@claude_wait}\t#{?@turn_activity_at,#{@turn_activity_at},#{@claude_state_ts}}\t#{?@session_source,#{@session_source},#{?#{==:#{@reap_origin}/#{@test_identity},probe/},schedule,}}\t#{@from_fid}' 2>/dev/null) || cwds=''
     fleet_cfg_expected_load; fleet_cfg_broken_load     # broken (#2076): judged here too
     orep=''
     [ -s "$FLEET_CONF_DIR/global/orphan-reports.ndjson" ] && orep=$(python3 "$BIN/fleet-orphan-reports.py" cell 2>/dev/null)
@@ -383,7 +386,8 @@ from fleet_hub_common import inventory_row
 from fleet_park_metrics import inventory_park
 from fleet_loop_mark import parse, prune
 import re, time
-facts, sources = {}, {}
+facts, sources, froms = {}, {}, {}
+FID = re.compile(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 for raw in os.environ["TASK_FACTS"].splitlines():
     cells = raw.split("\t")
     if len(cells) >= 17:
@@ -393,6 +397,8 @@ for raw in os.environ["TASK_FACTS"].splitlines():
         facts[cells[0]] = (bool(plan.get("cron")), wait, activity)
         if len(cells) > 18 and cells[18] in ("agent", "schedule", "api"):
             sources[cells[0]] = cells[18]
+        if len(cells) > 19 and FID.fullmatch(cells[19]):
+            froms[cells[0]] = cells[19]
 census = json.loads(os.environ["PARK_CENSUS"])
 for line in sys.stdin:
     line = line.rstrip("\n")
@@ -405,6 +411,9 @@ for line in sys.stdin:
     # who opened it (task DDBQ): last, and only for a session a person did not open
     src = sources.get(line.split("\t", 1)[0])
     suffix += ("\tsource=" + src) if src else ""
+    # who opened it, by ID (task PV5W): after source=
+    fid = froms.get(line.split("\t", 1)[0])
+    suffix += ("\tfrom=" + fid) if fid else ""
     print(line + "\tpark=" + (json.dumps(p, separators=(",", ":")) if p else "") + suffix)'
 
     ;;
