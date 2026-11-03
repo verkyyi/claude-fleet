@@ -293,7 +293,7 @@ rm -f "$PSCALLS"
   PATH="$PST:$PATH"
   ps_table
   st_eq "ps_table: names the login's own table" "$FLEET_CONF_DIR/diskguard/ps-table" "${_FLEET_PS_TABLE:-}"
-  st_eq "ps_table: the table is 0600" "600" "$(stat -f %Lp "$_FLEET_PS_TABLE" 2>/dev/null || stat -c %a "$_FLEET_PS_TABLE" 2>/dev/null)"  # portable-ok: BSD/GNU both-ways
+  st_eq "ps_table: the table is 0600" "-rw-------" "$(ls -l "$_FLEET_PS_TABLE" 2>/dev/null | awk '{print substr($1, 1, 10)}')"
   st_eq "ps_table: never exported to what the tick starts" "none" "$(bash -c 'echo "${_FLEET_PS_TABLE:-none}"')"
   st_eq "ps_table: the rows read from the table are the live rows" "$live_rows" "$(fleet_proc_mem_rows)"
   st_eq "ps_table: the metrics claude count matches the live one" "$live_cl" \
