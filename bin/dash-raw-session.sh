@@ -1198,6 +1198,12 @@ fi
   # for every resume of this window.
   launch="'$BIN/fleet-session-wrap.sh'${AGENT:+ --agent $AGENT}${AS_ARG:+ --as $AS_ARG}${MODEL_ARG:+ --model $MODEL_ARG}"
   [ -n "$FILL_MARK" ] && launch="FLEET_WT_PENDING=$(printf '%q' "$FILL_MARK") $launch"
+  # A cold park's wake (fleet_park_cold.py warm → fleet-id.sh reopen): the wrapper
+  # holds the reopened window parked instead of starting the agent — only for a
+  # reopen of that very ID, never handed on to any other spawn.
+  if fleet_is_fid "${FLEET_PARK_RESTORE_FID:-}" && [ "$FLEET_PARK_RESTORE_FID" = "$REOPEN_FID" ]; then
+    launch="FLEET_PARK_RESTORE_FID=$FLEET_PARK_RESTORE_FID $launch"
+  fi
   # The window stamps its own repo identity BEFORE the launcher reads its conf
   # (issue #789 — see fleet_win_stamp_cmd).
   stamp=''; nsid=''

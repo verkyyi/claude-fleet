@@ -6881,6 +6881,20 @@ drill_wake_timeout() {
   WHAT='停放的会话接回超时：这一句退回（wake_timeout），种子被收回，晚到的接回不会再带着它开一轮；按时接回的第一句随启动进去'
 }
 
+# A cold park (FLEET_PARK_COLD=1): a held park cooled to no window and no process
+# must come back on a wake into its saved screen and the same conversation — never
+# a fresh one, never an ended ID; a wake that found no window used to answer
+# no_session and drop the sentence.
+drill_park_cold_wake() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-cold-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  grep -q 'fleet_park_cold.py" take' "$BIN/fleet-session-wrap.sh" \
+    || { WHY="fleet-session-wrap.sh no longer holds a cold park's reopened window parked"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='冷停放：窗口和进程收掉、ID 不结束；唤醒先重开到存好的屏幕，再接回同一个对话；开关关着什么都不写'
+}
+
 # An EPIC member whose window closed with no result while its record stayed open
 # (EPIC T497 C5): the batch read the record alone, so the member was `running` for
 # ever and the batch never finished; a member continued by hand (a new ID, prev the

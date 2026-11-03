@@ -171,6 +171,8 @@ FLEET_LAUNCH_CREATE                legacy: retired with the launch proof / start
 FLEET_ROLLBACK_GH                  seam: the gh command bin/fleet-release-rollback.sh runs (#4663)
 FLEET_ID_DIR                       path: the ID ledgers dir ($FLEET_CONF_DIR/ids — fleet_id.py ledger_dir; fleet_cfg_work_over, T569)
 FLEET_TASK_CLOSED_CMD              seam: answers `<T<n>>` instead of fleet_task_control.py closed — 0 closed · 1 open · 3 unknown (fleet_task_closed, fleet-cleanup-idle.py, #4897)
+FLEET_PARK_COLD_REOPEN_CMD         seam: run in place of `fleet-id.sh reopen <fid> --exec` when a cold park is warmed (fleet_park_cold.py)
+FLEET_PARK_COLD_WAKE_SECS          knob: how long a cold park's warm waits for the reopened window to hold parked (fleet_park_cold.py, 20)
 FLEET_PARK_RESTORE_FID             handoff: restore passes the verified identity to the holding wrapper before native resume (T949)
 FLEET_PARK_RESUME                  handoff: the wrapper marks a launch that wakes out of a park — the relay clears the saved screen at the agent's first text, the launch and the mod say nothing (EQBE)
 FLEET_VIEW_BLANK_PROC              seam: 1 = go_new's blank start runs `fleet-quick-dispatch.py send --blank` as a process, not in-process (fleet-panel-draft-selftest.py, T992)

@@ -122,6 +122,26 @@ class StopEntryTests(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(cli.stop_row(dict(name='task',key='@1',fleet_id=FID)),1)
 
+    def test_cli_key_alias_is_not_an_identity_change(self):
+        # a hub row of a keyed window carries <slug>:scratch-N as fleet_id (its
+        # worker_id's key half): the window's own UUID decides, no 「身份已变化」
+        answer = subprocess.CompletedProcess([],0,'@1|'+FID+'|T42|'+json.dumps(SNAP))
+        with patch.dict(os.environ,{'FLEET_SESSION':'fixture'}), \
+                patch.object(cli.subprocess,'run',return_value=answer), \
+                patch.object(control,'call',return_value=REPLY), \
+                patch.object(cli,'hub_write',side_effect=AssertionError('no worker_stop')), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.stop_row(dict(name='task',key='@1',fleet_id='owner-repo:scratch-71')),0)
+
+    def test_cli_other_identity_still_refuses(self):
+        answer = subprocess.CompletedProcess([],0,'@1|'+FID+'|T42|')
+        other = '00000000-0000-4000-8000-000000000001'
+        with patch.dict(os.environ,{'FLEET_SESSION':'fixture'}), patch.object(cli.subprocess,'run',return_value=answer), \
+                patch.object(cli,'hub_write',side_effect=AssertionError('no worker_stop')), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.stop_row(dict(name='task',key='@1',fleet_id=other)),1)
+        self.assertIn('身份已变化', err.getvalue())
+
     def test_cli_pending_remains_cancellation(self):
         row=dict(name='task',task='T42',record_only=True,pending_start=True,pending_start_explicit=True)
         with patch.object(cli,'cancel_pending_start',return_value=(0,'cancelled')) as cancel, \

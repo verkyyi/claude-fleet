@@ -342,6 +342,17 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # origins do not expire. Hub: fleet.session.reap_parked (default 3d).
 # @label=Reap an inactive parked conversation after @group=janitor @tier=advanced @scope=fleet @edit=str
 #FLEET_SESSION_REAP_PARKED=259200
+# Cold park (step 1, off by default): a held park older than FLEET_PARK_COLD_AFTER
+# — every one but the FLEET_PARK_WARM newest on the fleet — gives up its window,
+# wrappers and hold page; its ID and conversation stay, and a wake (web sentence,
+# fleet_park_wake) reopens the window into the saved screen first. Parks holding a
+# timer, a controlled task execution or anything live stay warm.
+# @label=Cold-park old parked sessions @group=janitor @tier=advanced @scope=fleet @edit=bool
+#FLEET_PARK_COLD=0
+# @label=Cold-park a session parked longer than @group=janitor @tier=advanced @scope=fleet @edit=int @unit=seconds
+#FLEET_PARK_COLD_AFTER=1800
+# @label=Newest parked sessions kept warm @group=janitor @tier=advanced @scope=fleet @edit=int
+#FLEET_PARK_WARM=10
 # @label=Park early under memory pressure below @group=janitor @tier=advanced @scope=fleet @edit=int @unit=percent
 #FLEET_PARK_MEM_PCT=15
 # A parked window shows its saved screen as it stood; the 看台's top line says

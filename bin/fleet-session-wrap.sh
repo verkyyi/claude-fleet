@@ -461,8 +461,11 @@ park_keyboard=''; park_attempt=''; park_failed=''; park_new=''
 park_seed=''   # the first sentence a wake carries into the resumed conversation
 # C3: restore brings back the holding wrapper without starting the native engine
 # ahead of its deadline. The disk contract is bound to both fid and conversation.
+# A cold park (fleet_park_cold.py) comes back the same way: its window reopened by
+# a wake, the saved screen first, the wake's sentence then taken as any park's.
 if [ "$intmux" = 1 ] && [ -n "${FLEET_PARK_RESTORE_FID:-}" ] \
-   && python3 "$BIN/fleet_park_wake.py" restore --fid "$FLEET_PARK_RESTORE_FID" --sid "$last_sid"; then
+   && { python3 "$BIN/fleet_park_wake.py" restore --fid "$FLEET_PARK_RESTORE_FID" --sid "$last_sid" \
+        || python3 "$BIN/fleet_park_cold.py" take --fid "$FLEET_PARK_RESTORE_FID" --sid "$last_sid"; }; then
   wset @fleet_id "$FLEET_PARK_RESTORE_FID"
   wset @loop "park=$FLEET_PARK_RESTORE_FID"
   wset "$(fleet_agent_get "${last_agent:-claude}" sid_window)" "$last_sid"
