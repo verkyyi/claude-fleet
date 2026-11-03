@@ -712,6 +712,20 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		rows = append(rows, r)
 	}
+	// 看不到会话 on a machine and login that report right now is a session that
+	// machine does not list — not a lost machine (PV5W): it never adds the list's
+	// 「+?」. A row whose machine reports nothing stays unknown.
+	reporting := map[string]bool{}
+	for _, fs := range live {
+		if fs.Availability == "online" {
+			reporting[fs.MachineName+"\x00"+fs.OSUser] = true
+		}
+	}
+	for i := range rows {
+		if rows[i].Tag == "not_seen" && rows[i].Lost && rows[i].Machine != "" && reporting[rows[i].Machine+"\x00"+rows[i].Login] {
+			rows[i].Lost = false
+		}
+	}
 	hidden, err := s.Store.HiddenHistory(owner, s.historyMirrorSession)
 	if err != nil {
 		return nil, err
@@ -751,7 +765,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		r.Source = boardSource(*r)
 	}
-	s.boardFrom(owner, kept, live)
+	s.boardFrom(owner, kept, live, ids)
 	b := finishBoard(kept)
 	b.SessionList = SessionListPreferences{MaxVisible: 10, IdleHours: 24}
 	if owner != "" {
@@ -1225,7 +1239,7 @@ func fromByKey(key string, at int64, self string, live []FleetSession) string {
 			continue
 		}
 		k, id := wstr(w, "key"), identityOf(w)
-		if id == "" || id == self || (k != key && (strings.Contains(key, ":") || !strings.HasSuffix(k, ":"+key))) {
+		if id == "" || id == self || !sameKey(k, key) {
 			continue
 		}
 		if born, ok := w["born"].(float64); !ok || born <= 0 || int64(born) > at {
@@ -1239,12 +1253,42 @@ func fromByKey(key string, at int64, self string, live []FleetSession) string {
 	return found
 }
 
+// sameKey: a session key as a record wrote it and as a session holds it — one
+// repo whatever its case (a record keeps the repo lower-cased), a bare key also
+// matching `<slug>:<key>`.
+func sameKey(held, want string) bool {
+	if held == "" || want == "" {
+		return false
+	}
+	if strings.EqualFold(held, want) {
+		return true
+	}
+	return !strings.Contains(want, ":") && strings.HasSuffix(strings.ToLower(held), ":"+strings.ToLower(want))
+}
+
+// fromByLedgerKey is fromByKey over the person's ID ledger (PV5W): the one ID
+// that opened under the key before the record was made and had not closed by
+// then — a caller with no window now (a cold park, or ended) is still found.
+func fromByLedgerKey(key string, at int64, self string, ids []store.BoardID) string {
+	found := ""
+	for _, b := range ids {
+		if b.ID == self || !sameKey(b.Key, key) || b.Opened <= 0 || b.Opened > at || (b.Closed > 0 && b.Closed < at) {
+			continue
+		}
+		if found != "" && found != b.ID {
+			return ""
+		}
+		found = b.ID
+	}
+	return found
+}
+
 // boardFrom checks each row's opener against this person's own sessions (task
 // PV5W): a row on this list, else the person's ID ledger. Another person's ID, an
 // unknown one and the operator's door ("" — everyone's rows) draw no relation. A
 // record from before from_fid names its caller by key: resolved through the
 // person's live sessions (fromByKey) first.
-func (s *Server) boardFrom(owner string, rows []BoardRow, live []FleetSession) {
+func (s *Server) boardFrom(owner string, rows []BoardRow, live []FleetSession, ids []store.BoardID) {
 	if owner == "" {
 		return
 	}
@@ -1257,6 +1301,9 @@ func (s *Server) boardFrom(owner string, rows []BoardRow, live []FleetSession) {
 			r.fromID = r.fromKey
 		} else {
 			r.fromID = fromByKey(r.fromKey, r.fromAt, r.ID, live)
+			if r.fromID == "" {
+				r.fromID = fromByLedgerKey(r.fromKey, r.fromAt, r.ID, ids)
+			}
 		}
 	}
 	byID := map[string]*BoardRow{}

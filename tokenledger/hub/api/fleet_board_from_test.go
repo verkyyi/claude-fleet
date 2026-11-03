@@ -279,3 +279,75 @@ func TestBoardNoBornIsNotEpoch(t *testing.T) {
 		t.Fatalf("no activity either: at = %d; want when it was heard", b.Rows[0].At)
 	}
 }
+
+// A cold park (no window, its ID open) is listed by its node as a parked row with
+// its key, so a task it dispatched still hangs under it; a caller with no row at
+// all is found by the key its ID opened under. 看不到会话 on a machine and login
+// that report right now is not a lost machine.
+func TestBoardColdParkAndLedgerKey(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	n := now.Unix()
+	const (
+		cold   = "0b7e8c1a-7777-4222-8333-000000000001"
+		ledger = "0b7e8c1a-7777-4222-8333-000000000002" // no window, no cold row: the ledger only
+	)
+	push := func(id, key string, closed bool) {
+		evs := []map[string]any{{"ev": "opened", "id": id, "seq": float64(1), "ts": float64(n - 3000), "agent": "claude", "title": "t" + id[len(id)-1:], "key": key}}
+		if closed {
+			evs = append(evs, map[string]any{"ev": "closed", "id": id, "seq": float64(2), "ts": float64(n - 10), "reason": "reaped"})
+		}
+		if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep1", Machine: "mac-b", Login: "alice", ID: id, Events: evs}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	push(ledger, "o-r:scratch-8", true)
+	rec := func(token, key string) store.FleetTask {
+		p := `{"dispatch":{"request_id":"orch:` + key + `:6d6375550bb5d74e"}}`
+		// made a minute ago, while the ledger-only caller was still open
+		r, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: token, AuthorityVersion: 1,
+			RequestedAgent: "default", ResolvedAgent: "claude", RequestPayload: p}, token, now.Add(-time.Minute))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	underCold := rec("under-cold", "O-R:scratch-7") // the repo's case differs: one repo
+	underLedger := rec("under-ledger", "o-r:scratch-8")
+	// a record whose session opened and is not listed by its machine: 看不到会话
+	unseenRec := rec("unseen", "hub")
+	push(unseenRec.FID, "", false)
+	fleet := "42f8e358-7cc0-5856-a353-8983a4b4c9a1"
+	wid := fleet + "/" + cold
+	live := []FleetSession{{WorkerID: &wid, MachineName: "mac-b", OSUser: "alice", Availability: "online",
+		Worker: map[string]any{"identity": cold, "key": "o-r:scratch-7", "state": "parked", "window_id": "", "cold": true,
+			"can_talk": false, "born": float64(n - 5000), "name": "Tokenman Optimize"}}}
+	b, err := s.buildBoard("gh:1", live, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]BoardRow{}
+	for _, r := range b.Rows {
+		got[r.ID] = r
+	}
+	if r := got[cold]; r.Tag != "session_parked" || r.Lost || r.CanTalk || r.Active {
+		t.Errorf("cold park: %+v", r)
+	}
+	if r := got[underCold.FID]; r.From != cold || r.Parent != cold {
+		t.Errorf("under a cold park: %+v", r)
+	}
+	if r := got[underLedger.FID]; r.From != ledger || !r.FromEnded || r.Parent != "" {
+		t.Errorf("by the ledger's key: %+v", r)
+	}
+	if r := got[unseenRec.FID]; r.Tag != "not_seen" || r.Lost {
+		t.Errorf("unseen on a reporting machine: %+v", r)
+	}
+	// the same row with its machine reporting nothing stays unknown
+	b, _ = s.buildBoard("gh:1", nil, now)
+	for _, r := range b.Rows {
+		if r.ID == unseenRec.FID && !r.Lost {
+			t.Errorf("unseen, machine silent: %+v", r)
+		}
+	}
+}

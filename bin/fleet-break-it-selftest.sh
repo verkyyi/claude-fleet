@@ -6906,6 +6906,17 @@ drill_park_cold_forgotten() {
   WHAT='冷停放仍是开着的会话：hub 存活上报带它、历史不记结束、看台那一行就地重开、保留期到了才结束 ID（keep 不过期）'
 }
 
+# A cold park is not in the node's inventory (only windows were), so the hub's list
+# drew it 看不到会话 on a lost machine — the 看台's count grew 「+?」 and the sessions
+# it dispatched lost their parent (PV5W). The inventory lists it now, never a target.
+drill_park_cold_hub_unseen() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/park-cold-inventory-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='冷停放作为「已停放、无窗口」上报：带会话名、出生、发起者，老记录推出仓库；动作与开会话的确认都不把它当窗口'
+}
+
 # An EPIC member whose window closed with no result while its record stayed open
 # (EPIC T497 C5): the batch read the record alone, so the member was `running` for
 # ever and the batch never finished; a member continued by hand (a new ID, prev the
