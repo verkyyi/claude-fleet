@@ -64,6 +64,65 @@ CREATE TABLE IF NOT EXISTS operations (
 """
 
 
+
+def cold_repo(fleet, worktree):
+    """The repo a cold park's worktree belongs to, for a record written before it
+    kept one (PV5W): the one hosted repo whose name the worktree's basename starts
+    with (`web-app-scratch-70` → owner/web-app), else none."""
+    base = re.sub(r"-(?:scratch|issue)-[0-9]+$", "", (worktree or "").rstrip("/").rsplit("/", 1)[-1])
+    hits = [r for r in fleet.get("repos") or [] if r.rsplit("/", 1)[-1] == base]
+    return hits[0] if len(hits) == 1 else ""
+
+
+def cold_opened(fid):
+    """When an ID's ledger opened (its first event's ts), else 0."""
+    try:
+        import fleet_id
+        with open(fleet_id.ledger_path(fid), encoding="utf-8") as f:
+            return int(json.loads(f.readline()).get("ts") or 0)
+    except (ImportError, OSError, ValueError, TypeError, AttributeError):
+        return 0
+
+
+def cold_workers(fleet):
+    """The fleet's cold parks (fleet_park_cold.py) as inventory rows (PV5W): a
+    parked session with no window — listed, never a target (find_workers skips
+    `cold`), so the hub's list keeps it parked, keyed and nested instead of 看不到会话."""
+    try:
+        import fleet_park_cold
+        recs = fleet_park_cold.records(fleet["name"])
+    except Exception:
+        return []
+    out = []
+    for r in recs:
+        fid = r.get("fid") or ""
+        if not is_identity(fid):
+            continue
+        # unknown in a fleet that hosts repos: `?`, which no key is made of (as the adapter's column 9)
+        repo = r.get("repo") or cold_repo(fleet, r.get("worktree")) or ("?" if fleet.get("repos") else "")
+        issue = int(r["issue"]) if str(r.get("issue") or "").isdigit() and int(r["issue"]) > 0 else None
+        scratch = r.get("raw") == "1" or bool(re.search(r"scratch-[0-9]+/?$", r.get("worktree") or ""))
+        key = worker_key(issue, scratch, r.get("worktree") or "", repo)
+        w = dict(worker_id=worker_identity(fleet["fleet_id"], key or fid), key=key, window_id="", issue=issue,
+                 repo=repo if repo and repo != "?" else None, scratch=scratch, worktree=r.get("worktree") or "", state="parked",
+                 lifecycle="awake", agent=r.get("agent") or fleet["agent"], handle="", identity=fid,
+                 name=r.get("name") or "", cold=True, can_talk=False)
+        born = str(r.get("born") or "")
+        if not born.isdigit():
+            born = str(cold_opened(fid))   # a record written before it kept one
+        if born.isdigit() and int(born) > 0:
+            w["born"] = int(born)
+        if is_identity(r.get("from_fid") or ""):
+            w["from"] = r["from_fid"]
+        if r.get("source") in ("agent", "schedule", "api"):
+            w["source"] = r["source"]
+        if r.get("pin") == "1":
+            w["pin"] = True
+        if r.get("reap"):
+            w["reap"] = r["reap"]
+        out.append(w)
+    return out
+
 class Unattempted(Fault):
     """A refusal raised before any side effect was attempted: always `failed`."""
 
@@ -395,6 +454,9 @@ class Control(NativeExitSubmission):
                                 # kept on the wire, always awake now.
                                 lifecycle="awake",
                                 agent=agent or fleet["agent"], handle=handle, **extra))
+        if not window:
+            seen = {w.get("identity") for w in workers}
+            workers += [w for w in cold_workers(fleet) if w["identity"] not in seen]
         return {"state": "running", "workers": workers, "park_metrics": park_summary(workers), "observed_at": now()}
 
     def id_presence(self):
@@ -411,7 +473,8 @@ class Control(NativeExitSubmission):
             else:
                 entry.update(state=snap["state"], observed_at=snap["observed_at"],
                              windows=[dict(identity=w.get("identity") or "", key=w.get("key") or "",
-                                           window_id=w.get("window_id") or "") for w in snap["workers"]])
+                                           window_id=w.get("window_id") or "") for w in snap["workers"]
+                                      if not w.get("cold")])
             out.append(entry)
         return {"fleets": out, "observed_at": now()}
 
@@ -423,9 +486,10 @@ class Control(NativeExitSubmission):
         snapshot = self.workers(fleet)
         if key.startswith("fid:") and is_identity(key[4:]):
             key = key[4:]            # a keyless session's address, as fleet-worker-stop.sh takes it
+        live = [w for w in snapshot["workers"] if not w.get("cold")]   # a cold park has no window to act on
         if is_identity(key):
-            return [w for w in snapshot["workers"] if w.get("identity") == key], snapshot
-        return [w for w in snapshot["workers"] if w["key"] == key
+            return [w for w in live if w.get("identity") == key], snapshot
+        return [w for w in live if w["key"] == key
                 or (":" not in key and (w["key"] or "").endswith(":" + key))], snapshot
 
     def target(self, fleet, key, action):
@@ -1136,17 +1200,21 @@ class Control(NativeExitSubmission):
                     # different worker, even if its window is visible.
                     raise Fault("UNKNOWN_OUTCOME", "Spawn receipt does not name the authorized execution owner")
 
+                def windowed(snapshot):
+                    # a cold park (PV5W) has no window: never the start's proof
+                    return [w for w in snapshot["workers"] if not w.get("cold")]
+
                 def started(snapshot):
                     if execution is not None:
-                        return [w for w in snapshot["workers"] if w.get("identity") == fid]
+                        return [w for w in windowed(snapshot) if w.get("identity") == fid]
                     if scratch or filed:
                         if fid:
-                            return [w for w in snapshot["workers"] if w.get("identity") == fid]
+                            return [w for w in windowed(snapshot) if w.get("identity") == fid]
                         # The receipt names the window: that row, and only that row.
-                        return [w for w in snapshot["workers"] if window and w["window_id"] == window and w["scratch"]]
+                        return [w for w in windowed(snapshot) if window and w["window_id"] == window and w["scratch"]]
                     # Match the spawned repo too (issue #1018): another repo's issue-N
                     # is a different worker.
-                    return [w for w in snapshot["workers"] if w["issue"] == params["issue"]
+                    return [w for w in windowed(snapshot) if w["issue"] == params["issue"]
                             and (not params.get("repo") or repo_named(w["repo"], params["repo"]))]
                 snapshot = self.workers(fleet, window if re.fullmatch(r"@[0-9]+", window) else "")
                 matches = started(snapshot)

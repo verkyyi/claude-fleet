@@ -153,6 +153,8 @@ class Cleaner:
                  "@fleet_role", "@reap_skip", "@test_identity", "@born", "@fleet_id",
                  "@origin", "@origin_fid", "@epic", "@prompt_track", "@prompted", "@agent_status",
                  "@task", "@task_flow", "@task_execution", "@migrating", "@claude_needs", "@pin", "@agent_def", "pane_pid",
+                 # PV5W: who opened it — a cold park's row keeps it on the lists
+                 "@from_fid", "@session_source",
                  # T694 (回收 B): where it came from, and what keeps it
                  "@reap_keep_by", "@reap_origin", "@origin_wid", "@reap_unreported",
                  # T810: handed to WebChat — the window is the way back (↵), kept
@@ -955,6 +957,13 @@ class Cleaner:
             fleet_park_cold.write(fid, dict(session=self.args.session, agent=agent, sid=sid or "",
                                             name=snap.get("window_name", ""), worktree=snap.get("@worktree", ""),
                                             since=snap.get("@park_since", ""),
+                                            # what the node's inventory lists it by while it has no
+                                            # window (PV5W): its key, birth, task and who opened it
+                                            repo=snap.get("@repo", ""), issue=snap.get("@issue", ""),
+                                            raw=snap.get("@raw", ""), born=snap.get("@born", ""),
+                                            task=snap.get("@task", ""), pin=snap.get("@pin", ""),
+                                            reap=snap.get("@reap_policy", ""), from_fid=snap.get("@from_fid", ""),
+                                            source=snap.get("@session_source", ""),
                                             # the same retention clock a warm park keeps (None = never: keep, …)
                                             due=fleet_reap_policy.parked_deadline(snap)))
         except (OSError, ValueError):

@@ -1370,11 +1370,17 @@ fid=$(fleet_window_fid "$SESS" "$win" "$SOCK" 2>/dev/null) || fid=''
 # backgrounded. A hook racing it may fill a lazy opened first.
 # Keep only this task's native-session continuity and worktree identity.
 _idwt=''; [ -n "${wt:-}" ] && [ "$NOREPO" != 1 ] && _idwt=$wt
+# …and its key (PV5W): a task it dispatches names it by that key, and the hub finds
+# the session by it even when it has no window (a cold park) or has ended
+_idkey=''
+if [ -n "$_idwt" ] && [ -n "$REPO_ARG" ] && _k=$(fleet_scratch_key "$_idwt") && [ -n "$_k" ]; then
+  _idkey="$(fleet_slug "$REPO_ARG"):$_k"
+fi
 fleet_is_fid "$fid" && bash "$BIN/fleet-id.sh" open "$fid" --window "$win" --socket "$SOCK" \
   --agent "${AGENT:-claude}" ${REPO_ARG:+--repo "$REPO_ARG"} ${NAME:+--title "$NAME"} \
   ${TASK_REF:+--task "$TASK_REF"} ${ID_TASK:+--task "$ID_TASK"} ${PREV_ID:+--prev "$PREV_ID"} \
   ${RESUME_SID:+--from-native "$RESUME_SID"} ${_idwt:+--worktree "$_idwt"} ${MODEL_ARG:+--model "$MODEL_ARG"} \
-  ${SOURCE:+--session_source "$SOURCE"} >/dev/null 2>&1
+  ${SOURCE:+--session_source "$SOURCE"} ${_idkey:+--key "$_idkey"} >/dev/null 2>&1
 # The worktree remembers its ID beside its record (C4): `fleet-id` in its git dir.
 [ -n "$_idwt" ] && fleet_is_fid "$fid" && fleet_worktree_id_mark "$_idwt" "$fid"
 fleet_window_born "$SESS" "$win" "$SOCK" >/dev/null 2>&1 || :   # its place on the list (#1750)

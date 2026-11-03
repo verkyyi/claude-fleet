@@ -83,6 +83,20 @@ def write(fid, record):
     return r
 
 
+def records(session=None):
+    """Every cold park of this login (of one fleet session, when named)."""
+    out = []
+    try:
+        dirs = sorted(gate.gate_root().iterdir())
+    except OSError:
+        return out
+    for d in dirs:
+        r = read(d.name) if gate.FID_RE.fullmatch(d.name) else None
+        if r and (session is None or r.get("session") == session):
+            out.append(r)
+    return out
+
+
 def clear(fid):
     try:
         path(fid).unlink()
