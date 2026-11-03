@@ -174,7 +174,7 @@ assert any(code("@2") in t for t, _ in fv.id_page(by["@2"], 100)), fv.id_page(by
 assert by["@2"]["agent"] == "codex" and by["@1"]["agent"] == "claude", (by["@2"]["agent"], by["@1"]["agent"])
 assert by["@4"]["agent"] == "" and fv.agent_word(by["@4"]) == "未知", by["@4"]["agent"]
 seg = fv.row_segs(by["@4"], 100, qo.cells, qo.clip)
-assert seg[3][0].startswith("未知") and "dim" in seg[3][1], seg[3]
+assert seg[-2][0].strip().startswith("未知") and "dim" in seg[-2][1], seg[-2]   # Agent after the title
 assert by["@7"]["agent"] == "claude"          # no ID, no ledger: the producer's word, as before
 assert by["@8"]["agent"] == "codex", by["@8"]   # C17: no segment, no opened agent ⇒ the window's @cc_agent
 assert by["@9"]["agent"] == "codex", by["@9"]   # C17: nor a window word ⇒ the hub record's actual_agent

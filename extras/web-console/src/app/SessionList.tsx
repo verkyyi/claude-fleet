@@ -17,16 +17,16 @@ import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
 import { Failed, Loading } from "./parts";
 import {
-  compactRows, fromLine, fromRow, isTerminal, listItem, listRows, listStatus, listStatusLabel, needsAttention, ROW_SOURCES, rowMeta, rowRef, searchRows,
-  sessionTree, sourceLabel, treeContext, treeLines, withKids, type CompactGroups, type GroupSource, type TreeLine,
+  compactRows, foldedDup, isTerminal, listItem, listRows, listStatus, listStatusLabel, members, needsAttention, ROW_SOURCES, rowMeta, rowRef, searchRows,
+  signalOf, sourceLabel, treeContext, treeLines, urgentOf, withKids, type CompactGroups, type GroupSource, type Signal, type TreeLine,
 } from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
 import type { Glyph, Row, Tone, WhyTone } from "./work";
 
-const Spin: FC<{ className?: string; label?: boolean }> = ({ className, label }) => <Loader className={cn("animate-spin motion-reduce:animate-none [animation-duration:2.4s]", className)} />;
+// working is a still glyph: nothing in a list spins or pulses
 export const GLYPH: Record<Glyph, LucideIcon | FC<{ className?: string }>> = {
-  ask: CircleAlert, fail: CircleX, work: Spin, pr: GitPullRequest, done: CircleCheck, idle: CircleDot, wait: Clock,
+  ask: CircleAlert, fail: CircleX, work: Loader, pr: GitPullRequest, done: CircleCheck, idle: CircleDot, wait: Clock,
 };
 export const TONE: Record<Tone, string> = {
   ask: "text-clay", fail: "text-destructive", ok: "text-ok", muted: "text-muted-foreground",
@@ -124,9 +124,10 @@ function useLongPress(on: () => void, ms = 300) {
 }
 
 // Reserve the same slot for quiet rows; unread replies only affect title weight.
+// Still, never animated: working is a glyph, not a motion.
 const RowGlyph: FC<{ r: Row }> = ({ r }) => {
   const { kind } = listStatus(r);
-  const Icon = kind === "ask" ? CircleAlert : kind === "pending" ? Clock : kind === "work" ? Spin : kind === "loop" ? Repeat2 : null;
+  const Icon = kind === "ask" ? CircleAlert : kind === "pending" ? Clock : kind === "work" ? Loader : kind === "loop" ? Repeat2 : null;
   return <span data-status-slot className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
     {Icon ? <Icon className={cn("size-4", kind === "ask" ? "text-clay" : "text-muted-foreground")} /> : null}
   </span>;
@@ -153,49 +154,52 @@ const rowCls = "text-foreground hover:text-foreground flex items-center gap-3 no
 
 // Where a row sits in the session tree (子会话挂在发起会话下面): its line, its
 // twisty's toggle, whether the list has any tree at all (the twisty's slot is
-// kept only then), a search hit's parent title, the 「来自 X（已结束）」 line
-// and the row it opens.
+// kept only then), a search hit's parent title, and — a line standing for
+// same-title duplicates — the row whose status it draws and how many it holds.
 type TreeProps = { line?: TreeLine; onToggle?: (id: string, open: boolean) => void; treeOn?: boolean;
-  context?: string; from?: string; fromTo?: Row };
+  context?: string; urgent?: Row; dupes?: number };
 const INDENT = ["", "w-4", "w-8"];
+// what a folded line's hidden rows say: asking (clay) over working (green) over nothing
+export const SIGNAL: Record<Signal, string> = { ask: "text-clay", work: "text-ok", "": "text-muted-foreground" };
 
-// ▾ open · ▸ folded (green while something folded under it works); a row
-// with nothing under it keeps the same width so the titles line up.
+// ▾ open · ▸ folded (clay while something folded under it asks, else green
+// while one works); a row with nothing under it keeps the same width so the
+// titles line up.
 const Twisty: FC<{ line?: TreeLine; onToggle?: (id: string, open: boolean) => void }> = ({ line, onToggle }) => {
   if (!line?.kids) return <span data-twisty-slot className="w-3 shrink-0 group-data-[collapsible=icon]:hidden" aria-hidden />;
   const toggle = (e: { preventDefault: () => void; stopPropagation: () => void }) => { e.preventDefault(); e.stopPropagation(); onToggle?.(line.r.id, !line.open); };
   return <span role="button" tabIndex={0} data-twisty aria-expanded={line.open} aria-label={line.open ? tr("收起子会话", "Collapse") : tr("展开子会话", "Expand")}
     onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggle(e); }} onPointerDown={(e) => e.stopPropagation()}
     className={cn("w-3 shrink-0 cursor-pointer text-center text-xs leading-none group-data-[collapsible=icon]:hidden",
-      !line.open && line.hiddenWork ? "text-ok" : "text-muted-foreground hover:text-foreground")}>{line.open ? "▾" : "▸"}</span>;
+      line.open ? "text-muted-foreground hover:text-foreground" : SIGNAL[line.signal])}>{line.open ? "▾" : "▸"}</span>;
 };
 
-const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void } & TreeProps> = ({ r, variant, active, onPress, line, onToggle, treeOn, context, from, fromTo }) => {
+const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void } & TreeProps> = ({ r, variant, active, onPress, line, onToggle, treeOn, context, urgent = r, dupes = 1 }) => {
   const { seen, markSeen, replied } = useWorkRows();
   const it = listItem(r, seen);
   const press = useLongPress(() => onPress(r));
   const isNew = !!replied[r.id] && !active;
-  const status = listStatusLabel(r);
+  const status = listStatusLabel(urgent);
   // asking the person: said by colour alone — the glyph and the title in clay
-  const asking = listStatus(r).kind === "ask";
+  const asking = listStatus(urgent).kind === "ask";
   const body = (
     <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} aria-label={[context, it.title, status].filter(Boolean).join(" · ")} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
-      className={cn(rowCls, listStatus(r).unknown && "opacity-60", variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
+      className={cn(rowCls, listStatus(urgent).unknown && "opacity-60", variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
       {line?.depth ? <span className={cn("shrink-0 group-data-[collapsible=icon]:hidden", INDENT[line.depth])} aria-hidden /> : null}
-      <RowGlyph r={r} />
+      <RowGlyph r={urgent} />
       {treeOn ? <Twisty line={line} onToggle={onToggle} /> : null}
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal", asking && "text-clay")}>
         <span className="min-w-0 truncate">{context ? <span className="text-muted-foreground font-normal">{context} › </span> : null}{r.board?.schedule_id && <span className="mr-1 rounded bg-clay/10 px-0.5" aria-label={tr("定时运行", "Scheduled run")}>⏰</span>}{it.title}</span>
-        {line && !line.open && line.hidden ? <span data-tree-hidden className="text-muted-foreground shrink-0 font-normal">({line.hidden})</span> : null}
+        {dupes > 1 ? <span data-dupes className="text-muted-foreground shrink-0 font-normal">×{dupes}</span> : null}
+        {line && !line.open && line.hidden ? <span data-tree-hidden className={cn("shrink-0", line.signal === "ask" ? "text-clay font-medium" : "text-muted-foreground font-normal")}>({line.hidden})</span> : null}
       </span>
     </Link>
   );
-  // under the title, apart from the row's own link: who opened it, when that one has ended
-  const fromCls = cn("text-muted-foreground block truncate text-xs no-underline group-data-[collapsible=icon]:hidden pb-1",
-    variant === "page" ? treeOn ? "ps-17 pe-4" : "ps-11 pe-4" : treeOn ? "ps-15 pe-2" : "ps-9 pe-2");
-  const fromEl = from ? fromTo ? <Link to={sessionPath(fromTo)} data-from-line className={cn(fromCls, "hover:text-foreground")}>{from}</Link>
-    : <span data-from-line className={fromCls}>{from}</span> : null;
-  if (variant === "page") return <li><div className="flex items-center"><div className="min-w-0 flex-1">{body}</div><ArchiveButton row={r} /></div>{fromEl}</li>;
+  // why it is still open stays in the hover / long-press / detail — under the
+  // title only for a parked one: that asks the person
+  const why = r.board?.tag === "parked" && r.why ? <RowWhy r={r} className={cn("truncate pb-1 text-xs group-data-[collapsible=icon]:hidden",
+    variant === "page" ? treeOn ? "ps-17 pe-4" : "ps-11 pe-4" : treeOn ? "ps-15 pe-2" : "ps-9 pe-2")} /> : null;
+  if (variant === "page") return <li><div className="flex items-center"><div className="min-w-0 flex-1">{body}</div><ArchiveButton row={r} /></div>{why}</li>;
   return (
     <SidebarMenuItem>
       <div className="flex items-center"><div className="min-w-0 flex-1"><Tooltip delayDuration={200}>
@@ -204,7 +208,7 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
         </TooltipTrigger>
         <TooltipContent side="right" align="start" className="max-w-80 text-xs leading-relaxed"><RowDetail r={r} /></TooltipContent>
       </Tooltip></div><ArchiveButton row={r} /></div>
-      {fromEl}
+      {why}
     </SidebarMenuItem>
   );
 };
@@ -303,10 +307,11 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const { tree } = grouped;
   const treeOn = tree.kids.size > 0;
   const row = (r: Row, x: TreeProps = {}) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed}
-    treeOn={treeOn} onToggle={toggle} from={fromLine(tree, r)} fromTo={fromLine(tree, r) ? fromRow(allRows || [], r) : undefined} {...x} />;
+    treeOn={treeOn} onToggle={toggle} {...x} />;
   const lines = (roots: Row[]) => treeLines(roots, tree, opened, ref);
-  const flat = (items: Row[]): TreeLine[] => items.map((r) => ({ r, depth: 0, kids: 0, open: false, hidden: 0, hiddenWork: false }));
-  const treeRow = (l: TreeLine) => row(l.r, { line: l });
+  const flat = (items: Row[]): TreeLine[] => items.map((r) => ({ r, depth: 0, kids: 0, open: false, hidden: 0, signal: "" }));
+  // a line standing for same-title duplicates draws the most urgent one's status and ×N
+  const treeRow = (l: TreeLine) => row(l.r, { line: l, urgent: urgentOf(tree, l.r), dupes: members(tree, l.r).length });
   const List = variant === "side" ? SidebarMenu : "ul";
   // a day heading above each tree's root; what hangs under it follows it
   const timeline = (items: TreeLine[]) => {
@@ -325,25 +330,34 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   };
   const searching = !!q.trim();
   const web = <WebChatRow key="web" variant={variant} active={webActive} />;
+  const archiveToggle = <button type="button" aria-pressed={showArchived} data-archive-toggle onClick={() => { previous.current = undefined; setShowArchived(!showArchived); }} className="text-muted-foreground px-4 py-2 text-sm">{showArchived ? tr("返回会话", "Back to sessions") : tr(`已归档 · ${archivedCount}`, `Archived · ${archivedCount}`)}</button>;
   let body: ReactNode;
   if (showArchived) {
     const found = searching ? searchRows(ordered, q) : ordered;
-    body = found.length ? <List>{timeline(flat(found))}</List> : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有已归档会话", "No archived sessions")}</p>;
+    body = <>
+      {archiveToggle}
+      <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档会停止会话并从列表隐藏；还在运行的会先问你。取消归档即可恢复显示。", "Archiving stops a session and hides it; a running one asks first. Unarchive to show it again.")}</p>
+      {found.length ? <List>{timeline(flat(found))}</List> : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有已归档会话", "No archived sessions")}</p>}
+    </>;
   } else if (searching) {
-    // a hit nested under another says whose: 父标题 › 子标题 — folded ones are found too
+    // a hit nested under another says whose: 父标题 › 子标题 — folded ones and
+    // same-title duplicates are found too, each on its own
     const found = searchRows(ordered, q);
     const webHit = `${tr("我的对话", "My chat")} chat`.toLowerCase().includes(q.trim().toLowerCase());
     body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map((r) => row(r, { context: treeContext(tree, r) }))}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
   } else {
     const { pin, open, gone, sources } = grouped;
-    const runningHidden = withKids(tree, gone).filter((r) => listStatus(r).kind === "work").length;
+    const everyRow = (roots: Row[]) => withKids(tree, roots).flatMap((r) => members(tree, r));
+    const runningHidden = everyRow(gone).filter((r) => listStatus(r).kind === "work").length;
     // A count, not a group (task DDBQ): the rows stay in time order; the count
     // opens the next one that needs the person, after the one open now —
-    // a folded source group's and one nested under another included.
-    const waiting = withKids(tree, [...pin, ...open, ...ROW_SOURCES.flatMap((s) => sources[s])]).filter(needsAttention);
+    // a folded source group's, one folded under another and a folded
+    // duplicate included (opened, it is the session open now: drawn).
+    const waiting = everyRow([...pin, ...open, ...ROW_SOURCES.flatMap((s) => sources[s])]).filter(needsAttention);
     const nextWaiting = waiting[(waiting.findIndex((r) => rowRef(r) === ref) + 1) % (waiting.length || 1)];
-    // The old chat entry remains above the task list for older hubs.
+    // PIN → the list → More → ⏰ schedules → API → archived. The old chat entry
+    // remains above the task list for older hubs.
     body = (
       <>
         {oldRoad ? <List>{web}</List> : null}
@@ -353,24 +367,6 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
         </Link> : null}
         {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{lines(pin).map(treeRow)}</List></div></> : null}
         <List>{timeline(lines(open))}</List>
-        {/* a schedule's runs live in the ⏰ 定时任务 card (Y8XY), never in this list */}
-        {ROW_SOURCES.filter((src) => src !== "schedule").map((src) => {
-          const items = sources[src];
-          if (!items.length) return null;
-          // folded unless opened, or it holds the session open now
-          const shown = sourceOpen[src] ?? withKids(tree, items).some((r) => rowRef(r) === ref);
-          const asking = withKids(tree, items).filter(needsAttention).length;
-          return <div key={src} data-source-group={src}>
-            <button type="button" onClick={() => setSourceOpen({ ...sourceOpen, [src]: !shown })} aria-expanded={shown}
-              className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
-                variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
-              {shown ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
-              <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{sourceLabel(src)}<span className="font-mono"> · {items.length}</span>
-                {asking ? <span className="text-destructive font-medium">{tr(` · ${asking} 个在问你`, ` · ${asking} asking`)}</span> : null}</span>
-            </button>
-            {shown ? <List>{lines(items).map(treeRow)}</List> : null}
-          </div>;
-        })}
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
@@ -380,6 +376,26 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
           </button>
           {goneOpen ? <List>{timeline(lines(gone))}</List> : null}
         </> : null}
+        {/* a schedule's runs live in the ⏰ 定时任务 card (Y8XY), never in this list */}
+        <div data-schedule-slot className={variant === "side" ? "pt-2" : undefined}><ScheduleGroup phone={variant === "page"} /></div>
+        {ROW_SOURCES.filter((src) => src !== "schedule").map((src) => {
+          const items = sources[src];
+          if (!items.length) return null;
+          // folded unless opened, or it holds the session open now; its chevron
+          // says what is inside by colour alone, as a folded tree's ▸ does
+          const shown = sourceOpen[src] ?? withKids(tree, items).some((r) => rowRef(r) === ref);
+          const signal: Signal = signalOf(tree, withKids(tree, items));
+          return <div key={src} data-source-group={src}>
+            <button type="button" onClick={() => setSourceOpen({ ...sourceOpen, [src]: !shown })} aria-expanded={shown}
+              className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
+                variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
+              {shown ? <ChevronDown className={cn("size-4 shrink-0", SIGNAL[signal])} /> : <ChevronRight className={cn("size-4 shrink-0", SIGNAL[signal])} />}
+              <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{sourceLabel(src)}<span className="font-mono"> · {items.length}</span></span>
+            </button>
+            {shown ? <List>{lines(items).map(treeRow)}</List> : null}
+          </div>;
+        })}
+        {archiveToggle}
       </>
     );
   }
@@ -388,18 +404,15 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
       onPointerCancel={() => setPointing(false)} onPointerUp={(e) => { if (e.pointerType !== "mouse") setPointing(false); }}
       onKeyDownCapture={() => { setFocused(true); clearTimeout(keyTimer.current); keyTimer.current = window.setTimeout(() => setFocused(false), 1200); }} onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false); }}>
       <SearchBox />
-      <button type="button" aria-pressed={showArchived} onClick={() => { previous.current = undefined; setShowArchived(!showArchived); }} className="text-muted-foreground px-4 py-2 text-sm">{showArchived ? tr("返回会话", "Back to sessions") : tr(`已归档 · ${archivedCount}`, `Archived · ${archivedCount}`)}</button>
-      {showArchived ? <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档会停止会话并从列表隐藏；还在运行的会先问你。取消归档即可恢复显示。", "Archiving stops a session and hides it; a running one asks first. Unarchive to show it again.")}</p> : null}
       {body}
       {variant === "page" ? <PressSheet r={pressed} onClose={() => setPressed(null)} /> : null}
     </div>
   );
 };
 
-// The phone's first screen: the list, and 新建 at the bottom right.
+// The phone's first screen: the list (its ⏰ schedules card under 更多会话), and 新建 at the bottom.
 export const SessionListPage: FC = () => (
   <div className="pb-[calc(env(safe-area-inset-bottom)+5rem)]">
-    <ScheduleGroup phone />
     <SessionRows variant="page" />
     <NewFab />
   </div>

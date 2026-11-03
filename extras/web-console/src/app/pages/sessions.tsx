@@ -38,7 +38,7 @@ import { NewDialog, reposOf } from "../NewDialog";
 import { GLYPH, TONE } from "../SessionList";
 import { useWorkRows } from "../work-rows";
 import { CopyLine, useInstallLine } from "../cli";
-import { openLine, sessionTree, treeAt } from "../session-list";
+import { fromRow, openLine, sessionTree, treeAt } from "../session-list";
 import { GROUPS, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Row, type Tone } from "../work";
 
 const BADGE: Record<Tone, string> = {
@@ -218,8 +218,22 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
   // the session tree: the session that opened this one, and the ones it opened
   const tree = useMemo(() => sessionTree(all || []), [all]);
   const opener = tree.up.get(r.id);
-  const opened = tree.kids.get(r.id) || [];
+  const opened = (tree.kids.get(r.id) || []).flatMap((k) => tree.dupes.get(k.id) || [k]);
   const treeTime = treeAt(tree);
+  // the same-title sessions the list folds into one line with this one (同名会话)
+  const same = (tree.dupes.get(tree.dupOf.get(r.id) || "") || []).filter((x) => x.id !== r.id);
+  // an opener the list does not nest it under (it has ended): its title, and a way to it when the console has one
+  const ended = !opener && r.board?.from_ended && r.board.from_title ? r.board.from_title : "";
+  const endedRow = ended ? fromRow(all || [], r) : undefined;
+  const rowList = (rows: Row[], testid: string) => <div className="divide-y rounded-lg border" data-testid={testid}>
+    {rows.map((k) => {
+      const Icon = GLYPH[k.glyph];
+      return <button key={k.id} type="button" onClick={() => onOpen(k)} className="hover:bg-muted/60 flex w-full items-center gap-2 px-3 py-2 text-left">
+        <Icon className={cn("size-4 shrink-0", TONE[k.tone])} aria-hidden />
+        <span className="min-w-0 flex-1 truncate">{k.title}</span><span className="text-muted-foreground shrink-0 text-xs">{ago(new Date(treeTime(k)).toISOString())}</span>
+      </button>;
+    })}
+  </div>;
   const members = r.kids.filter((k) => tree.up.get(k.id)?.id !== r.id); // an EPIC's, not the tree's
   const pr = t ? taskPR(t) : null;
   const landing = t ? taskLanding(t) : "";
@@ -231,6 +245,8 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
       <div className="space-y-1">
         {opener ? <p className="text-muted-foreground min-w-0 truncate text-sm" data-testid="tree-crumb">
           {tr("来自 ", "From ")}<button type="button" onClick={() => onOpen(opener)} className={linkCls}>{opener.title}</button> › {r.title}
+        </p> : ended ? <p className="text-muted-foreground min-w-0 truncate text-sm" data-testid="tree-crumb">
+          {tr("来自 ", "From ")}{endedRow ? <button type="button" onClick={() => onOpen(endedRow)} className={linkCls}>{ended}</button> : ended}{tr("（已结束）", " (ended)")} › {r.title}
         </p> : null}
         <div className="flex min-w-0 max-w-full items-baseline gap-2 pe-6">
           {r.code ? <span className="text-clay shrink-0 font-mono text-sm">{r.code}</span> : null}
@@ -273,17 +289,8 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         {/^[\w.-]+\/[\w.-]+$/.test(ticket.repo) ? <a href={`https://github.com/${ticket.repo}/issues/${ticket.n}`} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "break-all")}>
           {ticket.repo}#{ticket.n} <ArrowUpRight className="inline size-3.5" aria-hidden /></a> : <span className="break-all">{ticket.repo}#{ticket.n}</span>}
       </Field> : null}
-      {opened.length ? <Field label={tr(`派出的会话 · ${opened.length}`, `Sessions it opened · ${opened.length}`)}>
-        <div className="divide-y rounded-lg border" data-testid="tree-kids">
-          {opened.map((k) => {
-            const Icon = GLYPH[k.glyph];
-            return <button key={k.id} type="button" onClick={() => onOpen(k)} className="hover:bg-muted/60 flex w-full items-center gap-2 px-3 py-2 text-left">
-              <Icon className={cn("size-4 shrink-0", TONE[k.tone])} aria-hidden />
-              <span className="min-w-0 flex-1 truncate">{k.title}</span><span className="text-muted-foreground shrink-0 text-xs">{ago(new Date(treeTime(k)).toISOString())}</span>
-            </button>;
-          })}
-        </div>
-      </Field> : null}
+      {opened.length ? <Field label={tr(`派出的会话 · ${opened.length}`, `Sessions it opened · ${opened.length}`)}>{rowList(opened, "tree-kids")}</Field> : null}
+      {same.length ? <Field label={tr(`同名会话 · ${same.length}`, `Same-title sessions · ${same.length}`)}>{rowList(same, "same-title")}</Field> : null}
       {!cli && members.length ? <Field label={tr(`成员 ${members.length}`, `Members ${members.length}`)}>
         <div className="divide-y rounded-lg border">
           {members.map((k) => {

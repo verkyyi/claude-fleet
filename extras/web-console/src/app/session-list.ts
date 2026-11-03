@@ -56,8 +56,16 @@ export const sourceLabel = (s: GroupSource) => s === "schedule" ? tr("定时任�
 // session that opened it, whatever its own group or state. Never under a
 // schedule run (those live in the ⏰ card, not this list). An older hub's
 // parent (an EPIC's members) carries no `from`: flat, as before.
-export type Tree = { up: Map<string, Row>; kids: Map<string, Row[]> };
+// Duplicates fold (同名会话): siblings opened by the same session (nested under
+// the same row, or both top level with the same `from`), same title, same
+// source, are ONE line — the newest — with ×N; the rest leave the list (a
+// search still finds them). Never a row without `from`, a pinned one, or one
+// that has sessions of its own under it. `dupes`: each shown row's cluster,
+// newest first; `dupOf`: every clustered row → the one shown.
+export type Tree = { up: Map<string, Row>; kids: Map<string, Row[]>; dupes: Map<string, Row[]>; dupOf: Map<string, string> };
 const activityOf = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+const ownAt = (r: Row) => r.board?.tree_at ? Math.max(r.board.tree_at * 1000, activityOf(r)) : activityOf(r);
+const sameTitle = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
 export function sessionTree(rows: Row[]): Tree {
   const byID = new Map(rows.map((r) => [r.id, r]));
   const up = new Map<string, Row>();
@@ -70,17 +78,42 @@ export function sessionTree(rows: Row[]): Tree {
     for (let p = up.get(r.id), n = 0; p && n <= rows.length; p = up.get(p.id), n++)
       if (p === r) { up.delete(r.id); break; }
   }
+  const parents = new Set([...up.values()].map((p) => p.id));
+  const clusters = new Map<string, Row[]>();
+  for (const r of rows) {
+    if (!r.board?.from || r.group === "pin" || parents.has(r.id)) continue;
+    const key = [up.get(r.id)?.id ?? "", r.board.from, sameTitle(r.title), rowSource(r)].join("\t");
+    (clusters.get(key) ?? clusters.set(key, []).get(key)!).push(r);
+  }
+  const dupes = new Map<string, Row[]>();
+  const dupOf = new Map<string, string>();
+  for (const c of clusters.values()) {
+    if (c.length < 2) continue;
+    c.sort((a, b) => ownAt(b) - ownAt(a) || a.id.localeCompare(b.id));
+    dupes.set(c[0].id, c);
+    for (const r of c) dupOf.set(r.id, c[0].id);
+  }
   const kids = new Map<string, Row[]>();
   for (const r of rows) {
     const p = up.get(r.id);
-    if (p) (kids.get(p.id) ?? kids.set(p.id, []).get(p.id)!).push(r);
+    if (p && (dupOf.get(r.id) ?? r.id) === r.id) (kids.get(p.id) ?? kids.set(p.id, []).get(p.id)!).push(r);
   }
-  const tree = { up, kids };
+  const tree = { up, kids, dupes, dupOf };
   const at = treeAt(tree);
   for (const k of kids.values()) k.sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
   return tree;
 }
-const NO_TREE: Tree = { up: new Map(), kids: new Map() };
+const NO_TREE: Tree = { up: new Map(), kids: new Map(), dupes: new Map(), dupOf: new Map() };
+// A duplicate folded into another line: off the list, still searched.
+export const foldedDup = (tree: Tree, r: Row) => (tree.dupOf.get(r.id) ?? r.id) !== r.id;
+// The rows a line stands for: itself, or its whole cluster.
+export const members = (tree: Tree, r: Row) => tree.dupes.get(r.id) || [r];
+// The status a folded line draws: the most urgent of its cluster — asking >
+// working > the line's own.
+export function urgentOf(tree: Tree, r: Row): Row {
+  const c = members(tree, r);
+  return c.find((x) => listStatus(x).kind === "ask") || c.find((x) => listStatus(x).kind === "work") || r;
+}
 // A tree's activity (epoch ms): the hub's tree_at, else the row's own; never
 // older than anything nested under it.
 export function treeAt(tree: Tree): (r: Row) => number {
@@ -89,14 +122,14 @@ export function treeAt(tree: Tree): (r: Row) => number {
     const m = memo.get(r.id);
     if (m !== undefined) return m;
     memo.set(r.id, activityOf(r)); // a guard while it is worked out
-    const own = r.board?.tree_at ? Math.max(r.board.tree_at * 1000, activityOf(r)) : activityOf(r);
-    const v = Math.max(own, ...(tree.kids.get(r.id) || []).map(at));
+    const v = Math.max(ownAt(r), ...(tree.kids.get(r.id) || []).map(at));
     memo.set(r.id, v);
     return v;
   };
   return at;
 }
-// Everything nested under r, depth first, siblings newest first.
+// Everything nested under r, depth first, siblings newest first (a folded
+// duplicate is its line's, not a row of its own).
 export function descendants(tree: Tree, r: Row): Row[] {
   return (tree.kids.get(r.id) || []).flatMap((k) => [k, ...descendants(tree, k)]);
 }
@@ -104,55 +137,50 @@ export function descendants(tree: Tree, r: Row): Row[] {
 export const withKids = (tree: Tree, roots: Row[]) => roots.flatMap((r) => [r, ...descendants(tree, r)]);
 const depthIn = (tree: Tree, r: Row) => { let d = 0; for (let p = tree.up.get(r.id); p; p = tree.up.get(p.id)) d++; return d; };
 
+// What a set of hidden rows says on the line that hides them — asking the
+// person over working over nothing: the ▸ / chevron's colour, the (N)'s.
+export type Signal = "ask" | "work" | "";
+export const signalOf = (tree: Tree, rows: Row[]): Signal => {
+  const all = rows.flatMap((x) => members(tree, x));
+  return all.some(needsAttention) ? "ask" : all.some((x) => listStatus(x).kind === "work") ? "work" : "";
+};
+
 // One drawn line of the tree: at most two steps in (deeper drawn at two).
 // `kids` its direct children; collapsed, `hidden` how many under it are not
-// drawn and `hiddenWork` whether one of those is working (the ▸ turns green).
-export type TreeLine = { r: Row; depth: number; kids: number; open: boolean; hidden: number; hiddenWork: boolean };
-// Open by default while anything under it works, waits to start or needs the
-// person; a person's own toggle (`opened`, kept in this browser) wins.
-export const treeOpenByDefault = (tree: Tree, r: Row) => descendants(tree, r).some((x) => {
-  const k = listStatus(x).kind;
-  return needsAttention(x) || k === "work" || k === "pending";
-});
+// drawn and `signal` what the hidden ones say (the ▸ in clay or green).
+export type TreeLine = { r: Row; depth: number; kids: number; open: boolean; hidden: number; signal: Signal };
+// Folded unless the person opened it (`opened`, kept in this browser):
+// collapsed hides everything under it — asking too; the line says so by
+// colour. Only the session open now stays drawn (待处理 · N reaches a hidden
+// ask that way), at its own depth.
 export function treeLines(roots: Row[], tree: Tree, opened: Record<string, boolean> = {}, current = ""): TreeLine[] {
   const out: TreeLine[] = [];
   const visit = (r: Row, depth: number) => {
     const kids = tree.kids.get(r.id) || [];
-    const open = kids.length ? opened[r.id] ?? treeOpenByDefault(tree, r) : false;
-    const line: TreeLine = { r, depth: Math.min(depth, 2), kids: kids.length, open, hidden: 0, hiddenWork: false };
+    const open = kids.length ? opened[r.id] ?? false : false;
+    const line: TreeLine = { r, depth: Math.min(depth, 2), kids: kids.length, open, hidden: 0, signal: "" };
     out.push(line);
     if (!kids.length) return;
     if (open) { for (const k of kids) visit(k, depth + 1); return; }
-    // collapsed: one asking the person (and the one open now) is never hidden —
-    // drawn at its own depth, the topmost of each such branch
     const all = descendants(tree, r);
-    const forced = new Set(all.filter((x) => needsAttention(x) || (!!current && rowRef(x) === current)).map((x) => x.id));
     const from = out.length;
-    for (const x of all) {
-      if (!forced.has(x.id)) continue;
-      let covered = false;
-      for (let p = tree.up.get(x.id); p && p !== r; p = tree.up.get(p.id)) if (forced.has(p.id)) { covered = true; break; }
-      if (!covered) visit(x, depth + depthIn(tree, x) - depthIn(tree, r));
-    }
+    const cur = current ? all.find((x) => members(tree, x).some((m) => rowRef(m) === current)) : undefined;
+    if (cur) visit(cur, depth + depthIn(tree, cur) - depthIn(tree, r));
     const drawn = new Set(out.slice(from).map((l) => l.r.id));
     const hidden = all.filter((x) => !drawn.has(x.id));
     line.hidden = hidden.length;
-    line.hiddenWork = hidden.some((x) => listStatus(x).kind === "work");
+    line.signal = signalOf(tree, hidden);
   };
   for (const r of roots) visit(r, 0);
   return out;
 }
-// The session that opened r when the list does not nest it there (it has
-// ended, or sits elsewhere): the row the console can open for it, if any.
+// The session that opened r, when the console has a row for it (the detail
+// pane's 来自 …).
 export function fromRow(rows: Row[], r: Row): Row | undefined {
   const f = r.board?.from;
   if (!f) return undefined;
   return rows.find((x) => x !== r && (x.id === f || x.live?.ident === f || x.board?.history?.id === f || x.ended?.ident === f));
 }
-// 「来自 X（已结束）」under a row the list does not nest: only an ended opener
-// with a title says it.
-export const fromLine = (tree: Tree, r: Row) => !tree.up.has(r.id) && r.board?.from && r.board.from_ended && r.board.from_title
-  ? tr(`来自 ${r.board.from_title}（已结束）`, `From ${r.board.from_title} (ended)`) : "";
 // A search hit nested under another: 父标题 › 子标题.
 export const treeContext = (tree: Tree, r: Row) => tree.up.get(r.id)?.title || "";
 // One schedule, one line (task X24T): inside 定时任务 a schedule's runs fold
@@ -215,8 +243,8 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   const prefs = listPreferences(options.preferences);
   const tree = sessionTree(rows);
   const at = treeAt(tree);
-  const whole = (r: Row) => [r, ...descendants(tree, r)];
-  const roots = rows.filter((r) => !tree.up.has(r.id));
+  const whole = (r: Row) => [r, ...descendants(tree, r)].flatMap((x) => members(tree, x));
+  const roots = rows.filter((r) => !tree.up.has(r.id) && !foldedDup(tree, r));
   const byAt = (a: Row, b: Row) => at(b) - at(a) || a.id.localeCompare(b.id);
   const grouped = (s: GroupSource) => roots.filter((r) => r.group !== "pin" && groupSource(r) === s).sort(byAt);
   const sources = { schedule: grouped("schedule"), api: grouped("api") };
@@ -247,7 +275,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
     const used = new Set<string>();
     const refresh = (before: Row[] = []) => before.flatMap((r) => {
       const fresh = byID.get(r.id);
-      if (!fresh || tree.up.has(r.id)) return [];
+      if (!fresh || tree.up.has(r.id) || foldedDup(tree, r)) return [];
       used.add(r.id); return [fresh];
     });
     const stable: CompactGroups = { pin: refresh(previous.pin), open: refresh(previous.open), gone: refresh(previous.gone),
