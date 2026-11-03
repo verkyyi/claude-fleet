@@ -954,7 +954,9 @@ class Cleaner:
         try:
             fleet_park_cold.write(fid, dict(session=self.args.session, agent=agent, sid=sid or "",
                                             name=snap.get("window_name", ""), worktree=snap.get("@worktree", ""),
-                                            since=snap.get("@park_since", "")))
+                                            since=snap.get("@park_since", ""),
+                                            # the same retention clock a warm park keeps (None = never: keep, …)
+                                            due=fleet_reap_policy.parked_deadline(snap)))
         except (OSError, ValueError):
             return False
         if not self.close(window, snap, lambda: not self.busy(window, snap), end=False):
@@ -1643,7 +1645,44 @@ class Cleaner:
                 return 75
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 print(f"idle reap deferred {window}: {exc}", file=__import__("sys").stderr)
+        if not self.args.only:
+            self.cold_expire()
         return 0
+
+    def cold_expire(self):
+        """A cold park past its retention (cold.json's `due`, the warm park's own
+        parked_deadline) ends as a reaped park does: a history row, its ID closed
+        `parked`, the record gone. No `due` (keep, …) never expires."""
+        import fleet_park_cold
+        import fleet_session_gate
+        try:
+            records = sorted(fleet_session_gate.gate_root().glob("*/" + fleet_park_cold.NAME))
+        except OSError:
+            return
+        for path in records:
+            fid = path.parent.name
+            rec = fleet_park_cold.read(fid)
+            if not rec or rec.get("session") != self.args.session:
+                continue
+            due = rec.get("due")
+            if not isinstance(due, int) or self.now < due or fleet_session_gate.window(fid) is not None:
+                continue
+            if self.args.dry_run:
+                print("would-expire-cold:" + fid)
+                continue
+            wt = rec.get("worktree") or ""
+            m = re.search(r"(?:^|-)(scratch|issue)-(\d+)$", Path(wt).name) if wt else None
+            if m and self.args.repo:
+                try:
+                    run("bash", str(BIN / "fleet-history.sh"), "record-closed", "--repo", self.args.repo,
+                        "--session", self.args.session, "--key", m[1] + "-" + m[2], "--worktree", wt,
+                        "--title", rec.get("name") or "",
+                        "--summary", "Cold park past its parked retention; conversation and worktree kept")
+                except (OSError, subprocess.SubprocessError):
+                    continue
+            self.end_id(fid, "parked")
+            fleet_park_cold.clear(fid)
+            print("expired-cold:" + fid)
 
 
 def main():

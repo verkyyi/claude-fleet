@@ -6895,6 +6895,17 @@ drill_park_cold_wake() {
   WHAT='冷停放：窗口和进程收掉、ID 不结束；唤醒先重开到存好的屏幕，再接回同一个对话；开关关着什么都不写'
 }
 
+# A cold park forgotten by everything that used to read windows: the hub closed
+# its ID as gone, the history wrote it closed-unlanded, the list dropped its row,
+# and its retention never ran — so it could never wake, or never end.
+drill_park_cold_forgotten() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-cold-selftest.py" Kept 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='冷停放仍是开着的会话：hub 存活上报带它、历史不记结束、看台那一行就地重开、保留期到了才结束 ID（keep 不过期）'
+}
+
 # An EPIC member whose window closed with no result while its record stayed open
 # (EPIC T497 C5): the batch read the record alone, so the member was `running` for
 # ever and the batch never finished; a member continued by hand (a new ID, prev the

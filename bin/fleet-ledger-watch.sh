@@ -278,6 +278,8 @@ EOF
       case "$cur_keys" in *$'\n'"$p_key"$'\n'*) continue ;; esac   # still live → not vanished
       # …or the same window under another key (its identity, #4899)
       [ -n "$p_fid" ] && case "$cur_keys" in *$'\n'"fid:$p_fid"$'\n'*) continue ;; esac
+      # …or cooled (fleet_park_cold.py): its window went, the session did not
+      [ -n "$p_fid" ] && [ -f "${FLEET_GATE_DIR:-$FLEET_CONF_DIR/session-gate}/$p_fid/cold.json" ] && continue
       vanished=$((vanished + 1))
       # `<owner/name>#<key>` (#790) → that repo's ledger, bare key.
       p_repo=$repo

@@ -152,6 +152,17 @@ EOF
     if [ -n "$rows" ]; then
       live=$(printf '%s\n' "$rows" | awk 'NF == 2 {print $1}')
       noagent=$(printf '%s\n' "$rows" | awk 'NF == 2 && $2 == "0" {print $1}')
+    fi
+    # A cold park (fleet_park_cold.py) is an open session with no window: live,
+    # with no agent — so the hub keeps its ID and a wake can reopen it.
+    if [ -n "$scanned" ]; then
+      for _cold in "${FLEET_GATE_DIR:-$FLEET_CONF_DIR/session-gate}"/*/cold.json; do
+        [ -f "$_cold" ] || continue
+        _cold=${_cold%/cold.json}; _cold=${_cold##*/}
+        fleet_is_fid "$_cold" || continue
+        live="$live"$'\n'"$_cold"; noagent="$noagent"$'\n'"$_cold"
+      done
+      unset _cold
     fi ;;
 esac
 cmd=$1; shift

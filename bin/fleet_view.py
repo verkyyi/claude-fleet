@@ -2347,6 +2347,23 @@ BOARD_SYM = {"asking": "needs", "waiting_you": "needs", "failed": "fail", "refus
              "parked": "needs", "stopped": "fail"}
 
 
+def cold_here(fid):
+    """A cold park of this login (session-gate/<fid>/cold.json): no window, the
+    session open — its row reopens it here, never a far switch."""
+    if not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", fid or ""):
+        return False
+    conf = os.environ.get("FLEET_CONF_DIR") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "claude-fleet")
+    return os.path.isfile(os.path.join(os.environ.get("FLEET_GATE_DIR") or os.path.join(conf, "session-gate"),
+                                       fid, "cold.json"))
+
+
+def cold_row(e, fid):
+    """A board row of a cold park: a parked session here, opened by its ID."""
+    e.update(target="cold:" + fid, far=False, record_only=False, cold=True, open=True,
+             state="parked", sym=BOARD_SYM["parked"])
+
+
 def board_apply(board, groups, shut, gone, here, me):
     """Re-lay the list on the hub's one list: (groups, gone) in its order. A row
     is matched to an entry by its session's ID (fid), else its worker_id (another
@@ -2383,6 +2400,9 @@ def board_apply(board, groups, shut, gone, here, me):
                 e["gone"] = True
                 # this machine's and login's own closed ID: 恢复 reopens it here
                 e["home"] = (r.get("machine") or here) == here and (r.get("login") or me) == me
+            elif ((r.get("machine") or here) == here and (r.get("login") or me) == me
+                    and cold_here(r.get("id") or "")):
+                cold_row(e, r["id"])
         else:
             used.add(id(e))
             if r.get("title"):
@@ -2392,6 +2412,8 @@ def board_apply(board, groups, shut, gone, here, me):
                 # record's row (counted, nothing to act on — it is not running)
                 e.pop("gone", None)
                 e.update(record_only=True, ledger=True, open=True, far=True, target="id:" + r["id"])
+                if cold_here(r.get("id") or ""):
+                    cold_row(e, r["id"])
         e["board"] = r.get("id")
         e["archived"] = bool(r.get("archived"))
         e["worker_id"] = r.get("worker_id") or ""
@@ -3459,6 +3481,18 @@ def resolve(vid, target, row, fleet, inventory=None):
     this fleet (its UUID = the registry's fuid=) by @fleet_id; anything else far."""
     if target.startswith("@"):
         return target, False
+    if target.startswith("cold:"):
+        # a cold park here (fleet_park_cold.py): its window reopened into the
+        # saved screen first, then found by its ID like any window of this fleet
+        fid = target[len("cold:"):]
+        try:
+            sys.path.insert(0, str(Path(__file__).absolute().parent))
+            import fleet_park_cold
+            fleet_park_cold.warm(fid)
+        except (ImportError, OSError, ValueError):
+            pass
+        matches = [w for w, v in (windows(fleet) if inventory is None else inventory).items() if v[0] == fid]
+        return (matches[0] if len(matches) == 1 else ""), False
     uuid, _, fid = target.partition("/")
     if fid and uuid and uuid == row.get("fuid"):
         matches = [w for w, v in (windows(fleet) if inventory is None else inventory).items() if v[0] == fid]
