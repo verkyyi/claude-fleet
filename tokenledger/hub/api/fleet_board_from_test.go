@@ -143,3 +143,77 @@ func TestBoardFromNothingSaid(t *testing.T) {
 		t.Errorf("rows = %+v", b.Rows)
 	}
 }
+
+// A record from before from_fid names its caller by key in its dispatch
+// request_id (`orch:<slug>:<key>:<hash>`): the one live session that held that
+// key before the record was made is its opener; a key two live sessions answer
+// to, or whose holder is younger than the record (a recycled scratch number),
+// draws nothing.
+func TestBoardFromByKey(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	n := now.Unix()
+	const (
+		opener = "0b7e8c1a-3333-4222-8333-000000000001"
+		young  = "0b7e8c1a-3333-4222-8333-000000000002" // holds scratch-9, born after the record
+		twinA  = "0b7e8c1a-3333-4222-8333-000000000003"
+		twinB  = "0b7e8c1a-3333-4222-8333-000000000004"
+		byID   = "0b7e8c1a-3333-4222-8333-000000000005" // a keyless caller: its ID in the key
+	)
+	rec := func(token, title, key string) store.FleetTask {
+		p := `{"title":"` + title + `","dispatch":{"request_id":"orch:` + key + `:6d6375550bb5d74e"}}`
+		r, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: title, AuthorityVersion: 1,
+			RequestedAgent: "default", ResolvedAgent: "claude", RequestPayload: p}, token, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	viaKey := rec("a", "by key", "o-r:scratch-1")
+	viaBare := rec("b", "bare key", "scratch-1")
+	viaYoung := rec("c", "recycled", "o-r:scratch-9")
+	viaTwin := rec("d", "twin", "o-r:scratch-5")
+	viaID := rec("e", "by id", byID)
+	viaHub := rec("f", "the person", "hub")
+	fleet := "42f8e358-7cc0-5856-a353-8983a4b4c9a1"
+	sess := func(ident, key string, born int64) FleetSession {
+		wid := fleet + "/" + ident
+		w := map[string]any{"identity": ident, "key": key, "state": "working", "name": key, "born": float64(born), "worker_id": wid}
+		return FleetSession{WorkerID: &wid, MachineName: "mac-b", OSUser: "alice", Availability: "online", Worker: w}
+	}
+	live := []FleetSession{
+		sess(opener, "o-r:scratch-1", n-600),
+		sess(young, "o-r:scratch-9", n+60),
+		sess(twinA, "o-r:scratch-5", n-600),
+		sess(twinB, "o-r:scratch-5", n-300),
+		sess(byID, "", n-600),
+	}
+	b, err := s.buildBoard("gh:1", live, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]BoardRow{}
+	for _, r := range b.Rows {
+		got[r.ID] = r
+	}
+	for id, want := range map[string]string{viaKey.FID: opener, viaBare.FID: opener, viaID.FID: byID,
+		viaYoung.FID: "", viaTwin.FID: "", viaHub.FID: ""} {
+		if r := got[id]; r.From != want || (want != "" && r.Parent != want) {
+			t.Errorf("%s: from %q parent %q; want %q", r.Title, r.From, r.Parent, want)
+		}
+	}
+	// the new from_fid wins over the key
+	p := `{"from_fid":"` + twinA + `","dispatch":{"request_id":"orch:o-r:scratch-1:6d6375550bb5d74e"}}`
+	both, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "both", AuthorityVersion: 1,
+		RequestedAgent: "default", ResolvedAgent: "claude", RequestPayload: p}, "g", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ = s.buildBoard("gh:1", live, now)
+	for _, r := range b.Rows {
+		if r.ID == both.FID && r.From != twinA {
+			t.Errorf("from_fid and key: from %q; want %q", r.From, twinA)
+		}
+	}
+}
