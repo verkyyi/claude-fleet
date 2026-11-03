@@ -175,6 +175,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureLinkStats(); err != nil {
 		return err
 	}
+	// What the views see of reaching their sessions and links (task FQAR).
+	if err := s.ensureReachStats(); err != nil {
+		return err
+	}
 	// Per-person usage against a person's budget (claude-fleet#1977).
 	if err := s.ensureFleetPersonUsage(); err != nil {
 		return err

@@ -2835,6 +2835,17 @@ drill_hub_session_list_scan() {
   SECS=$(since "$t0")
 }
 
+# FQAR: the view→machine road through the peer relay broke while /status stayed green.
+drill_status_relay_blind() {
+  CAP=240; local t0
+  t0=$(now)
+  WHAT='relay 组件经公网地址开回声，426 前门判失败、三分钟开事件；看台上报只收哈希与计数，公开汇总样本不足 20 显示「—」'
+  go_half '^(TestReachCanaryProbeAndRelayComponent|TestReachStatsIngest|TestReachPublicFoldAndSuppression|TestPublicHealthReachShape)$' ./hub/api; case $? in
+    1) return 1 ;;
+  esac
+  SECS=$(since "$t0")
+}
+
 # This file runs part 1/3 using bin/break-it-durations.txt; the rest are its
 # part files (issue #2694). A weight change must select the whole family.
 : "${BREAK_PART:=1/3}"

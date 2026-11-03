@@ -27,7 +27,7 @@ const HealthPath = "/v1/health"
 
 // Only fixed display identifiers cross the API. URLs and upstream responses
 // never enter the status tables, including the administrator's response.
-var healthComponents = []string{"claudefleet", "ccquota", "tokenman", "core", "wechat", "workbench", "notify", "releases"}
+var healthComponents = []string{"claudefleet", "ccquota", "tokenman", "core", "wechat", "workbench", "notify", "releases", "relay"}
 
 func healthKnown(k string) bool {
 	for _, v := range healthComponents {
@@ -120,6 +120,10 @@ func (s *Server) healthTargets() map[string]string {
 	if u, e := url.Parse(s.FleetPublicURL); e == nil && u.Host != "" {
 		targets["core"] = u.Scheme + "://" + u.Host + healthHubPath
 	}
+	// The relay canary through the same public address (task FQAR, reach_canary.go).
+	if t := reachCanaryTarget(s.FleetPublicURL); t != "" {
+		targets["relay"] = t
+	}
 	if base := strings.TrimRight(os.Getenv("FLEET_NOTIFY_KF_URL"), "/"); base != "" {
 		targets["notify"] = base + "/healthz"
 	}
@@ -174,6 +178,14 @@ func (s *Server) probeHealth(ctx context.Context, now time.Time) {
 					}
 				}
 			}
+		case "relay":
+			if target := targets[k]; target != "" {
+				state = "ok"
+				err = probeReachCanary(c, target)
+				if err == nil && time.Since(start) > healthSlow {
+					err = errors.New("slow")
+				}
+			}
 		default:
 			if target := targets[k]; target != "" {
 				state = "ok"
@@ -199,6 +211,8 @@ func (s *Server) probeHealth(ctx context.Context, now time.Time) {
 		}
 	}
 	_ = s.Store.PruneHealth(now.Add(-8 * 24 * time.Hour))
+	// The views' reach rows go 90 days on (task FQAR); nothing else prunes them.
+	_ = s.Store.PruneReachStats(now.Add(-store.ReachKeep))
 }
 
 type healthLink struct {
