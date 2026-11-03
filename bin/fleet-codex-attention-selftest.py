@@ -160,6 +160,19 @@ class MonitorEvents(unittest.TestCase):
         return {'method':'thread/status/changed','params':{'threadId':identifier,
                 'status':{'type':state,'activeFlags':list(flags)}}}
 
+    def test_long_idle_slows_the_monitor_and_work_keeps_two_seconds(self):
+        # 36 Codex sessions × two tmux forks every 2 s slowed one machine's tmux:
+        # a session done (nothing asked) past IDLE_AFTER is looked at every IDLE_SECS
+        old=str(int(a.time.time())-1000)
+        with patch.dict(os.environ,{'FLEET_CODEX_ATTENTION_IDLE_SECS':'6','FLEET_CODEX_ATTENTION_IDLE_AFTER':'300'}):
+            self.options='done|||'+old
+            self.now+=2;self.monitor.tick()
+            self.assertEqual(self.monitor.next_at,self.now+6)
+            for state in ('working|||'+old,'needs|ask|ask|'+old,'done|||'+str(int(a.time.time()))):
+                self.options=state
+                self.now+=7;self.monitor.tick()
+                self.assertEqual(self.monitor.next_at,self.now+2,state)
+
     def test_idle_reuses_connection_and_only_reconciles_every_thirty_seconds(self):
         self.native.events.append(self.status('idle'))
         for _ in range(30):self.tick()
