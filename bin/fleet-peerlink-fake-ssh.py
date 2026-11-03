@@ -133,6 +133,17 @@ def master(o):
     if os.path.exists(d("nodns", host)):
         sys.stderr.write("ssh: Could not resolve hostname %s: nodename nor servname provided, or not known\n" % host)
         return 255
+    # the hub's relay (FQAR's fallback, `ProxyCommand=… peer-proxy <m>`): it reaches
+    # <m> only while $FAKESSH_DIR/relay/<m> exists — a relay to a dead machine fails
+    # as the real one does (the hub's 426 / no link there)
+    proxy = [x for x in o["opts"] if x.startswith("ProxyCommand=") and " peer-proxy " in x]
+    if proxy:
+        m = proxy[0].rsplit(" ", 1)[-1]
+        if not os.path.exists(d("relay", m)):
+            sys.stderr.write("fleet connect: hub refused the connection: 426 Upgrade Required\n"
+                             "kex_exchange_identification: Connection closed by remote host\n")
+            return 255
+        log("relay %s" % m)
     if os.path.exists(d("down", host)):
         sys.stderr.write("ssh: connect to host %s port %s: Connection refused\n" % (host, o.get("p") or "22"))
         return 255

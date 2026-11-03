@@ -92,8 +92,22 @@ host key check the hub's word whatever address is dialled.
 
 state.json (peerlink/): {v, pid, ts, me, views, hub_down, links[{machine, login, host,
 route, sock, pid, phase up|connecting|verifying|down, since, last_check, rtt_ms, fails,
-err, bad_since, want_ts, strikes, probe_strikes}], events[{ts, machine, login, what}], mode, peers_err} — C1's
+err, bad_since, want_ts, strikes, probe_strikes, cause, err_ts, down_since, up_since, route_kind, streak,
+next_try, check_ms, relay_err}], events[{ts, machine, login, what}], mode, peers_err} — C1's
 top line, the doctor and C10 read it.
+
+The ledger (task FQAR): logs/peerlink.ndjson, one JSON line per transition — {ts, machine,
+login, route tailnet|lan|entry|peer-relay|hub-relay, event up|down|retry|probe, cause
+ok|auth|hostkey|http4xx|http5xx|dns|timeout|network|check|unknown, detail, gap_s, rtt_ms};
+the hub ingests this exact shape. Failures by class: a refusal (4xx · auth · a host key)
+waits FLEET_PEERLINK_REFUSED_BACKOFF (60 s) doubling to _MAX (600 s) and a request does
+not hurry it; anything else 1 → BACKOFF_MAX, a request hurrying it to WAKE_MIN (5 s) after
+the last try. FLEET_PEERLINK_RELAY_AFTER (3) failures in a row add the hub's relay as one
+more route (`hub-relay`, FLEET_PEERLINK_RELAY_FALLBACK=0: never); a host key mismatch
+asks the hub afresh once (FLEET_PEER_CERT_FRESH=1: re-pinned); a link down
+FLEET_PEERLINK_ALERT_SECS (120 s; a refusal _ALERT_REFUSED_SECS, 60 s) leaves one notice;
+every up link is probed end to end (`-O check` + `true`) at least every
+FLEET_PEERLINK_E2E_SECS (60 s), the quiet beat included.
 
 Seams: FLEET_PEERLINK_SSH (else FLEET_REMOTE_SSH_CMD, else ssh) · FLEET_PEERLINK_CERT_CMD
 (else `bash fleet-peer-cert.sh`) · FLEET_PEERLINK_PEERS_CMD (else `bash fleet-peer-list.sh`) ·
@@ -165,6 +179,126 @@ CHECK_STRIKES = max(1, int(fenv("FLEET_PEERLINK_CHECK_STRIKES", 3)))
 PROBE_WAIT = max(0.5, fenv("FLEET_PEERLINK_PROBE_WAIT", 10))
 PROBE_STRIKES = max(1, int(fenv("FLEET_PEERLINK_PROBE_STRIKES", 3)))
 MAX_EVENTS = 50
+# issue FQAR — retry by error class, the relay fallback, the alert, the ledger:
+# a refusal (HTTP 4xx, auth, a host key the hub does not vouch for) is not retried
+# every beat — it waits REFUSED_BACKOFF, doubling to REFUSED_BACKOFF_MAX; a request
+# (`.wake`) brings a down link's next try forward only to WAKE_MIN after its last
+# (a pane waiting on 「正在连…」 wakes the keeper every second — FQAR saw 260,496
+# failures on one link); after RELAY_AFTER failures in a row the hub's relay is
+# one more route (RELAY_FALLBACK=0: never); ALERT_SECS (ALERT_REFUSED_SECS for a
+# refusal) down ⇒ one notice; E2E_SECS: an up link's `-O check` + `true` at least
+# this often even on the quiet beat, booked as `probe` in logs/peerlink.ndjson
+REFUSED_BACKOFF = max(1.0, fenv("FLEET_PEERLINK_REFUSED_BACKOFF", 60))
+REFUSED_BACKOFF_MAX = max(REFUSED_BACKOFF, fenv("FLEET_PEERLINK_REFUSED_BACKOFF_MAX", 600))
+WAKE_MIN = max(0.0, fenv("FLEET_PEERLINK_WAKE_MIN", 5))
+RELAY_AFTER = max(1, int(fenv("FLEET_PEERLINK_RELAY_AFTER", 3)))
+ALERT_SECS = fenv("FLEET_PEERLINK_ALERT_SECS", 120)
+ALERT_REFUSED_SECS = fenv("FLEET_PEERLINK_ALERT_REFUSED_SECS", 60)
+E2E_SECS = max(5.0, fenv("FLEET_PEERLINK_E2E_SECS", 60))
+LEDGER_MAX = int(fenv("FLEET_PEERLINK_LEDGER_MAX", 5 * 1024 * 1024))
+REFUSED = ("http4xx", "auth", "hostkey")
+CAUSES = ("ok", "auth", "hostkey", "http4xx", "http5xx", "dns", "timeout", "network", "check", "unknown")
+
+
+def say(msg):
+    """One line of the keeper's own log (launchd / systemd stderr), timestamped."""
+    sys.stderr.write("%s fleet-peerlink: %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S%z"), msg))
+    sys.stderr.flush()
+
+
+_CAUSE_RX = [
+    ("hostkey", re.compile(r"host key verification failed|remote host identification has changed|"
+                           r"host key for .* has changed|no matching host key|主机钥匙", re.I)),
+    ("auth", re.compile(r"permission denied|authentication fail|too many authentication|登录不符|"
+                        r"节点令牌|\b401\b|certificate expired|not authori[sz]ed", re.I)),
+    ("http4xx", re.compile(r"(?:HTTP|refused the connection:|（)\s*4\d\d\b|\b4\d\d (?:upgrade|forbidden|not found|"
+                           r"too many|gone|conflict)|upgrade required|\bforbidden\b|TOO_MANY|NOT_OWNER", re.I)),
+    ("http5xx", re.compile(r"(?:HTTP|refused the connection:|（)\s*5\d\d\b|\b50[234]\b|bad gateway|"
+                           r"service unavailable|gateway time", re.I)),
+    ("dns", re.compile(r"could not resolve|nodename nor servname|name or service not known|"
+                       r"temporary failure in name resolution|no address associated|name resolution", re.I)),
+    ("timeout", re.compile(r"timed out|timeout|no master after|did not answer|没回应|没有回应", re.I)),
+    ("network", re.compile(r"connection refused|no route to host|network is unreachable|connection reset|"
+                           r"closed by remote host|connection closed|broken pipe|kex_exchange|curl exit|"
+                           r"入口不在|could not be reached|host is down|新通道开不了", re.I)),
+    ("check", re.compile(r"-O check|控制文件|主进程|换了主人", re.I)),
+]
+
+
+def classify(why):
+    """An error line (or a whole ssh .err) → the short class the ledger, the
+    retry and the alert go by (FQAR): the first rule that matches, in order —
+    a host key or a refusal outranks the network noise ssh prints after it."""
+    t = why or ""
+    if not t.strip():
+        return "unknown"
+    for cause, rx in _CAUSE_RX:
+        if rx.search(t):
+            return cause
+    return "unknown"
+
+
+CAUSE_WORDS = {"ok": "正常", "auth": "认证被拒", "hostkey": "主机钥匙对不上", "http4xx": "入口拒绝（4xx）",
+               "http5xx": "入口出错（5xx）", "dns": "域名解析不了", "timeout": "超时", "network": "网络不通",
+               "check": "连接检查失败", "unknown": "原因不明"}
+
+
+def logs_dir():
+    """$FLEET_CONF_DIR/logs — where every fleet log of this login lives."""
+    return os.path.join(CONF, "logs")
+
+
+def ledger_path():
+    return env("FLEET_PEERLINK_LEDGER", os.path.join(logs_dir(), "peerlink.ndjson"))
+
+
+def _redact(text):
+    try:
+        sys.path.insert(0, BIN)
+        import fleet_clientlog
+        return fleet_clientlog.redact(text)
+    except Exception:  # noqa: BLE001 — a log line, never a crash
+        return text
+
+
+def ledger_write(rec):
+    """One JSON line onto logs/peerlink.ndjson (FQAR; the hub ingests this exact
+    schema — ts · machine · login · route · event · cause · detail · gap_s · rtt_ms);
+    past LEDGER_MAX it moves to .1. Never the keeper's failure."""
+    p = ledger_path()
+    try:
+        os.makedirs(os.path.dirname(p), mode=0o700, exist_ok=True)
+        try:
+            if os.path.getsize(p) >= LEDGER_MAX:
+                os.replace(p, p + ".1")
+        except OSError:
+            pass
+        line = json.dumps(rec, ensure_ascii=False, sort_keys=False) + "\n"
+        fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, line.encode("utf-8", "replace"))
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def notice_cmd():
+    c = env("FLEET_PEERLINK_NOTICE_CMD")
+    return shlex.split(c) if c else [sys.executable, os.path.join(BIN, "fleet_notice.py")]
+
+
+def notice(args):
+    """fleet_notice.py <args> off the beat (a thread): the one message book."""
+    def go():
+        try:
+            subprocess.run(notice_cmd() + args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    return t
 
 
 def me_login():
@@ -272,14 +406,37 @@ def route_candidates(machine, routes):
     hub's routes — tailnet (only with a tailnet here), a LAN on this network, the
     entry port, any other direct line (never the relay: ssh cannot ride it); else
     the bare name (no hub, nothing known — the old way)."""
+    return [c[:3] for c in route_candidates_k(machine, routes)]
+
+
+_LAN_NETS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10")
+
+
+def _private(host):
+    """An address on a home / office network (RFC 1918, ULA, link-local) — not
+    ipaddress's is_private, which also counts the documentation ranges."""
+    import ipaddress
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host.endswith(".local") or host.endswith(".lan")
+    return any(ip.version == ipaddress.ip_network(n).version and ip in ipaddress.ip_network(n) for n in _LAN_NETS)
+
+
+def route_candidates_k(machine, routes):
+    """route_candidates with each route's class as a 4th field — the ledger's
+    `route` (FQAR): tailnet · lan · entry · peer-relay (· hub-relay, added by the
+    keeper's fallback). A bare name or FLEET_REMOTE_SSH's word is the tailnet's
+    (a machine's name resolves only there); another direct line is lan when its
+    address is private, else entry."""
     h = ssh_host_set(machine)
     if h:
-        return [(h, 0, h)]
+        return [(h, 0, h, "lan" if _private(h) else "tailnet")]
     # T1243: an entry with jump is a door, not this pod's sshd. The door
     # accepts device keys, not our peer certificate. Reach the pod over the
     # hub's owner-scoped peer relay; SSH still authenticates and checks its key.
     if any(isinstance(r, dict) and r.get("jump") for r in routes or []):
-        return [(machine, 0, "peer-relay")]
+        return [(machine, 0, "peer-relay", "peer-relay")]
     rows = [r for r in routes or [] if isinstance(r, dict) and safe(str(r.get("host") or "").strip("[]").replace(":", "."))
             and r.get("kind", "direct") == "direct"]
     fc = connect_mod()
@@ -289,21 +446,22 @@ def route_candidates(machine, routes):
             port = int(r.get("port") or 0)
         except (TypeError, ValueError):
             port = 0
-        c = (str(r["host"]).strip("[]"), port, "%s %s%s" % (r.get("name") or "?", r["host"], ":%d" % port if port else ""))
+        host = str(r["host"]).strip("[]")
+        lab = "%s %s%s" % (r.get("name") or "?", r["host"], ":%d" % port if port else "")
         if fc is None:
-            other.append(c)
+            other.append((host, port, lab, "lan" if _private(host) else "entry"))
         elif fc.is_tailnet(r):
             if fc.has_tailnet():
-                tail.append(c)
+                tail.append((host, port, lab, "tailnet"))
         elif fc.is_lan(r):
             if fc.lan_reachable(r):
-                lan.append(c)
+                lan.append((host, port, lab, "lan"))
         elif fc.is_entry(r):
-            entry.append(c)
+            entry.append((host, port, lab, "entry"))
         else:
-            other.append(c)
+            other.append((host, port, lab, "lan" if _private(host) else "entry"))
     out = tail + lan + entry + other
-    return out or [(machine, 0, machine)]
+    return out or [(machine, 0, machine, "tailnet")]
 
 
 def sock_path(machine, login):
@@ -495,11 +653,16 @@ def master_check(sock, host):
     return rc == 0, pid
 
 
-def peer_opts(machine):
+def peer_opts(machine, fresh=False):
     """(opts, err): the certificate's ssh options without its `-l` (the link says
-    which login), [] when no hub is here (rc 3), err on a hub that said no / is down."""
+    which login), [] when no hub is here (rc 3), err on a hub that said no / is down.
+    fresh (FQAR): skip fleet-peer-cert.sh's cache — the hub is asked again, so the
+    host keys it vouches for NOW (a pod rebuilt with a new key) are re-pinned."""
+    e = dict(os.environ)
+    if fresh:
+        e["FLEET_PEER_CERT_FRESH"] = "1"
     try:
-        r = subprocess.run(cert_cmd() + [machine, "view"], stdin=subprocess.DEVNULL,
+        r = subprocess.run(cert_cmd() + [machine, "view"], stdin=subprocess.DEVNULL, env=e,
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, "入口不在：%s" % e
@@ -583,6 +746,25 @@ class Link:
         self.last_loss = 0.0
         self.strikes = 0            # `-O check`s failed in a row while the master lived
         self.probe_strikes = 0      # channel probes failed in a row while the master lived
+        # FQAR: the class of the last error, when, and since when the link is down
+        self.cause = prev.get("cause") or ("ok" if not self.err else classify(self.err))
+        self.err_ts = float(prev.get("err_ts") or 0)
+        self.down_since = 0.0       # the first failure since it was last up (the alert's clock)
+        self.up_since = 0.0
+        self.streak = 0             # attempts failed in a row (the relay fallback's count)
+        self.round_soft = False     # a failure in this route round that was not a refusal
+        self.refused_backoff = 0.0
+        self.last_try = 0.0
+        self.kind = prev.get("route_kind") or ""
+        self.fresh_cert = False     # the next certificate asked afresh (host keys re-pinned)
+        self.repinned = False       # tried once this outage
+        self.hub_relay = False      # the hub can relay (a node credential: the cert came from it)
+        self.mark_ts = 0.0          # the ledger's last up / down for this link (gap_s)
+        self.mark = ""              # "up" | "down"
+        self.alerted = ""           # the notice tag raised for this outage
+        self.check_ms = None
+        self.ledger_probe = 0.0
+        self.relay_err = ""
 
     def name(self):
         return "%s@%s" % (self.machine, self.login)
@@ -598,7 +780,10 @@ class Link:
                 "sock": self.sock, "pid": self.pid, "phase": self.phase, "since": self.since,
                 "last_check": self.last_check, "rtt_ms": self.rtt_ms, "fails": self.fails,
                 "err": self.err, "bad_since": self.bad_since, "want_ts": self.want_ts,
-                "strikes": self.strikes, "probe_strikes": self.probe_strikes}
+                "strikes": self.strikes, "probe_strikes": self.probe_strikes,
+                "cause": self.cause, "err_ts": self.err_ts, "down_since": self.down_since,
+                "up_since": self.up_since, "route_kind": self.kind, "streak": self.streak,
+                "next_try": round(self.next_try, 3), "check_ms": self.check_ms, "relay_err": self.relay_err}
 
 
 class Keeper:
@@ -658,23 +843,120 @@ class Keeper:
         self.active_until = max(self.active_until, time.time() + ACTIVE_SECS)
         self.events.append({"ts": round(time.time(), 3), "machine": l.machine, "login": l.login, "what": what})
         self.events = self.events[-MAX_EVENTS:]
-        sys.stderr.write("fleet-peerlink: %s %s\n" % (l.name(), what))
-        sys.stderr.flush()
+        say("%s %s" % (l.name(), what))
 
-    def fail(self, l, why, now):
+    def ledger(self, l, event, cause, detail, now, rtt=None):
+        """One line of logs/peerlink.ndjson (FQAR). gap_s: seconds since this
+        link's previous up / down (null for its first)."""
+        gap = round(now - l.mark_ts, 3) if l.mark_ts else None
+        if event in ("up", "down"):
+            l.mark_ts, l.mark = now, event
+        ledger_write({"ts": round(now, 3), "machine": l.machine, "login": l.login,
+                      "route": l.kind or "tailnet", "event": event,
+                      "cause": cause if cause in CAUSES else "unknown",
+                      "detail": _redact(" ".join(str(detail or "").split()))[:300],
+                      "gap_s": gap, "rtt_ms": rtt})
+
+    def went_down(self, l, why, cause, now):
+        """The up → down edge (or the first failure of a link never up): booked
+        once; the attempts after it are `retry`."""
+        if not l.down_since:
+            l.down_since = now
+        if l.mark != "down":
+            self.ledger(l, "down", cause, why, now)
+            l.up_since = 0.0
+        else:
+            self.ledger(l, "retry", cause, why, now)
+
+    def cands(self, l):
+        """The routes this link dials: the hub's, plus (FQAR) the hub's relay once
+        RELAY_AFTER attempts in a row failed — when the hub can relay at all."""
+        c = route_candidates_k(l.machine, l.routes)
+        if (l.streak >= RELAY_AFTER and l.hub_relay and env("FLEET_PEERLINK_RELAY_FALLBACK", "1") != "0"
+                and not any(x[3] in ("peer-relay", "hub-relay") for x in c)):
+            c = c + [(l.machine, 0, "hub-relay", "hub-relay")]
+        return c
+
+    def fail(self, l, why, now, detail=""):
+        """One attempt failed. By its class (FQAR): a host key the hub may since
+        vouch for anew is asked again once, at once; the next route at once; once
+        every route was tried, a round that only met refusals (4xx · auth · host
+        key) waits REFUSED_BACKOFF doubling to REFUSED_BACKOFF_MAX — a refusal does
+        not change in two seconds — any other the 1 → BACKOFF_MAX doubling."""
+        cause = classify(detail or why)
         l.fails += 1
-        l.err = why
+        if l.kind == "hub-relay" and l.err:
+            # the fallback failed too: the link's own error (the doctor's, the
+            # alert's) stays the direct route's; the relay's is beside it
+            l.relay_err = why
+        else:
+            l.err, l.cause = why, cause
+        l.err_ts = now
         if not l.bad_since:
             l.bad_since = now
         l.phase = "down"
-        # the next route at once; the backoff doubles once every route was tried
+        l.streak += 1
+        self.went_down(l, why, cause, now)
+        if cause == "hostkey" and not l.repinned:
+            l.repinned = l.fresh_cert = True
+            l.next_try = now
+            self.event(l, "主机钥匙对不上：向入口重新要这台的钥匙再试")
+            return
+        if cause not in REFUSED:
+            l.round_soft = True
         l.route_i += 1
-        if l.route_i < len(route_candidates(l.machine, l.routes)):
+        if l.route_i < len(self.cands(l)):
             l.next_try = now
             return
         l.route_i = 0
-        l.backoff = min(BACKOFF_MAX, max(1.0, l.backoff * 2 if l.backoff else 1.0))
-        l.next_try = now + l.backoff
+        soft, l.round_soft = l.round_soft, False
+        if soft:
+            l.refused_backoff = 0.0
+            l.backoff = min(BACKOFF_MAX, max(1.0, l.backoff * 2 if l.backoff else 1.0))
+            l.next_try = now + l.backoff
+        else:
+            l.refused_backoff = min(REFUSED_BACKOFF_MAX, l.refused_backoff * 2 if l.refused_backoff else REFUSED_BACKOFF)
+            l.next_try = now + l.refused_backoff
+
+    def hub_fail(self, l, why, now):
+        """The hub gave no certificate: no route would do better. A refusal waits
+        REFUSED_BACKOFF doubling; a hub that is down or erring is asked again
+        after TICK doubling to BACKOFF_MAX — a request still asks at once (WAKE_MIN)."""
+        cause = classify(why)
+        l.fails += 1
+        l.err, l.cause, l.err_ts = why, cause, now
+        l.bad_since = l.bad_since or now
+        l.phase = "down"
+        l.streak += 1
+        self.went_down(l, why, cause, now)
+        if cause in REFUSED:
+            l.refused_backoff = min(REFUSED_BACKOFF_MAX, l.refused_backoff * 2 if l.refused_backoff else REFUSED_BACKOFF)
+            l.next_try = now + l.refused_backoff
+        else:
+            l.backoff = min(BACKOFF_MAX, max(TICK, l.backoff * 2 if l.backoff else TICK))
+            l.next_try = now + l.backoff
+
+    def alert(self, l, now):
+        """FQAR: a wanted link down ALERT_SECS (ALERT_REFUSED_SECS for a refusal)
+        raises one notice naming the cause; it coming back greys it to 「已恢复」."""
+        if l.phase == "up":
+            if l.alerted:
+                notice(["amend", l.alerted, "info", "到 %s（%s）的连接已恢复" % (l.machine, l.login)])
+                l.alerted = ""
+            return
+        if l.alerted or not l.down_since:
+            return
+        limit = ALERT_REFUSED_SECS if l.cause in REFUSED else ALERT_SECS
+        if now - l.down_since < limit:
+            return
+        l.alerted = "peerlink:%s@%s:%d" % (l.machine, l.login, int(l.down_since))
+        text = "到 %s（%s）的连接断了 %s · %s：%s" % (
+            l.machine, l.login, ago(now - l.down_since), CAUSE_WORDS.get(l.cause, l.cause),
+            _redact(" ".join((l.err or "").split()))[:120])
+        notice(["notify", "error" if l.cause in REFUSED else "warn", text,
+                "--next", "fleet-peerlink.py status 看详情；在那台机器上的会话暂时进不去",
+                "--source", "peerlink", "--kind", "alert", "--tag", l.alerted, "--no-draw"])
+        self.event(l, "提醒：" + text)
 
     def drop(self, l, why, now, exit_master=True):
         """Kill the master, clear the path, rebuild on the next beat."""
@@ -701,8 +983,14 @@ class Keeper:
             self.event(l, why)
 
     def probe_good(self, l, ms):
-        """A channel probe answered: its round trip booked, a strike streak cleared."""
+        """A channel probe answered: its round trip booked, a strike streak cleared;
+        once a minute (E2E_SECS) a `probe` line in the ledger (FQAR)."""
         l.rtt_ms = ms
+        now = time.time()
+        if now - l.ledger_probe >= E2E_SECS - 1:
+            l.ledger_probe = now
+            self.ledger(l, "probe", "ok", "check %s · true %dms" % (
+                "%dms" % l.check_ms if isinstance(l.check_ms, int) else "—", ms), now, rtt=ms)
         if l.probe_strikes:
             self.event(l, "新通道恢复（之前 %d 次不通）" % l.probe_strikes)
             l.probe_strikes = 0
@@ -718,20 +1006,20 @@ class Keeper:
                 l.rebuild_why = "adopted"
             return
         unlink(l.sock)
-        opts, why = peer_opts(l.machine)
+        l.last_try = now
+        opts, why = peer_opts(l.machine, fresh=l.fresh_cert)
+        l.fresh_cert = False
         if opts is None:
-            # asking again is cheap (the cert's connect is bounded), so a hub that
-            # comes back is noticed within a beat, not after a doubled backoff
+            # a hub that is down is asked again soon (TICK doubling to BACKOFF_MAX,
+            # and a request asks at once); a refusal waits minutes (FQAR)
             self.hub_down = why
-            i = l.route_i
-            self.fail(l, why, now)
-            l.route_i = i
-            l.backoff, l.next_try = 0.0, now + TICK
+            self.hub_fail(l, why, now)
             return
         self.hub_down = ""
-        cands = route_candidates(l.machine, l.routes)
-        l.host, l.port, l.route = cands[l.route_i % len(cands)]
-        if l.route == "peer-relay":
+        l.hub_relay = bool(opts)
+        cands = self.cands(l)
+        l.host, l.port, l.route, l.kind = cands[l.route_i % len(cands)]
+        if l.kind in ("peer-relay", "hub-relay"):
             proxy = [sys.executable, os.path.abspath(__file__), "peer-proxy", l.machine]
             opts += ["-o", "ProxyCommand=" + " ".join(shlex.quote(a) for a in proxy)]
         argv = ssh_cmd() + opts + (["-p", str(l.port)] if l.port else []) + ["-M", "-N", "-o", "ControlPersist=no", "-o", "ServerAliveInterval=2",
@@ -751,12 +1039,23 @@ class Keeper:
             return
         l.pid, l.since, l.phase = l.proc.pid, now, "connecting"
 
-    def last_err(self, l):
+    def err_lines(self, l):
         try:
-            lines = [x for x in open(l.sock[:-5] + ".err", encoding="utf-8", errors="replace").read().splitlines() if x.strip()]
-            return lines[-1] if lines else ""
+            return [x for x in open(l.sock[:-5] + ".err", encoding="utf-8", errors="replace").read().splitlines() if x.strip()]
         except OSError:
+            return []
+
+    def last_err(self, l):
+        """The line that says why: the one the class comes from (a ProxyCommand's
+        «426» before ssh's «Connection closed»), else ssh's last."""
+        lines = self.err_lines(l)
+        if not lines:
             return ""
+        whole = classify("\n".join(lines[-20:]))
+        for x in lines[-20:]:
+            if classify(x) == whole:
+                return x
+        return lines[-1]
 
     def step(self, l, now):
         if l.phase == "down":
@@ -805,8 +1104,14 @@ class Keeper:
             l.phase, l.since, l.last_check = "up", now, now
             l.err, l.bad_since = "", 0.0
             self.event(l, l.rebuild_why or "built")
+            self.ledger(l, "up", "ok", "%s via %s" % (l.rebuild_why or "built", l.route), now)
             l.rebuild_why = ""
             l.last_probe = 0.0
+            l.cause, l.streak, l.round_soft, l.refused_backoff = "ok", 0, False, 0.0
+            l.repinned, l.down_since, l.up_since, l.ledger_probe = False, 0.0, now, now
+            l.relay_err = ""
+            if l.kind == "hub-relay":
+                l.route_i = 0       # the next rebuild tries the direct routes first again
             return
         # up: file there · master alive · -O check answers · a channel opens
         why = ""
@@ -815,7 +1120,10 @@ class Keeper:
         elif l.pid and not l.alive():
             why = "主进程没了"
         else:
+            t_check = time.time()
             rc, pid, err = master_check_rc(l.sock, l.host)
+            if rc == 0:
+                l.check_ms = int((time.time() - t_check) * 1000)
             if rc != 0:
                 if not os.path.exists(l.sock):
                     why = "控制文件没了"
@@ -871,7 +1179,8 @@ class Keeper:
             again = now - l.since <= 60 and now - l.last_loss <= 60
             self.drop(l, "重建：" + why, now)
             l.fails += 1
-            l.err = why
+            l.err, l.cause, l.err_ts = why, classify(why), now
+            self.went_down(l, why, l.cause, now)
             l.bad_since = l.bad_since or now
             l.last_loss = now
             l.backoff = min(BACKOFF_MAX, max(1.0, l.backoff * 2 if l.backoff else 1.0)) if again else 0.0
@@ -881,7 +1190,7 @@ class Keeper:
                 self.start(l, now)
             return
         l.last_check = now
-        if not l.probe and now - l.last_probe >= PROBE:
+        if not l.probe and now - l.last_probe >= min(PROBE, E2E_SECS):
             # a channel opened on the master, timed: the round trip, and the proof
             # a new channel still opens (the certificate is long gone by now)
             res = []
@@ -984,9 +1293,13 @@ class Keeper:
                 if why:
                     if l.phase != "down" or os.path.exists(l.sock):
                         self.drop(l, why, now)
+                    self.ledger(l, "down", "ok", why, now)
+                    if l.alerted:
+                        notice(["amend", l.alerted, "info", "到 %s（%s）的连接已关闭（%s）" % (l.machine, l.login, why)])
                     del self.links[k]
                     continue
             self.step(l, now)
+            self.alert(l, now)
         if not any(l.phase == "down" and l.err.startswith("入口") for l in self.links.values()):
             self.hub_down = ""
 
@@ -1002,7 +1315,18 @@ class Keeper:
                 continue
             if l.phase != "down":
                 self.drop(l, "关闭：管理者退出", now)
+                self.ledger(l, "down", "ok", "关闭：管理者退出", now)
         self.save(now)
+
+    def on_wake(self, now):
+        """A request (#4359): look now, and a down link is tried now — except
+        (FQAR) a refusal waits its backoff out, and any other down link is tried
+        no sooner than WAKE_MIN after its last try (a pane waiting on 「正在连…」
+        wakes the keeper every second)."""
+        self.active_until = max(self.active_until, now + ACTIVE_SECS)
+        for l in self.links.values():
+            if l.phase == "down" and l.cause not in REFUSED:
+                l.next_try = min(l.next_try, max(now, l.last_try + WAKE_MIN))
 
     def woken(self):
         m = wake_mtime()
@@ -1020,7 +1344,7 @@ class Keeper:
     def run(self):
         holder = self.lock()
         if holder:
-            sys.stderr.write("fleet-peerlink: another keeper holds %s (pid %s) — exiting\n" % (LOCK, holder))
+            say("another keeper holds %s (pid %s) — exiting" % (LOCK, holder))
             return 3
         stop = []
         signal.signal(signal.SIGTERM, lambda *_: stop.append(1))
@@ -1032,15 +1356,11 @@ class Keeper:
                 if not self.still_mine():
                     holder = self.lock()
                     if holder:
-                        sys.stderr.write("fleet-peerlink: %s now belongs to pid %s — this keeper quits\n" % (LOCK, holder))
+                        say("%s now belongs to pid %s — this keeper quits" % (LOCK, holder))
                         return 0      # its masters are the new keeper's to adopt
                 self.heartbeat()
                 if self.woken():
-                    # a request (#4359): look now, and a down link is tried now
-                    self.active_until = max(self.active_until, now + ACTIVE_SECS)
-                    for l in self.links.values():
-                        if l.phase == "down":
-                            l.next_try = min(l.next_try, now)
+                    self.on_wake(now)
                 if env("FLEET_PEERLINK", "1") != "0":
                     self.beat(now)
                 active = time.time() < self.active_until
@@ -1076,6 +1396,11 @@ class Keeper:
                         self.probe_good(l, ms)
                     # a request (#4359)
                     if wake_mtime() != self.wake_seen:
+                        break
+                    # FQAR: every up link is probed end to end at least every
+                    # E2E_SECS, the quiet beat included
+                    if any(l.phase == "up" and not l.probe and time.time() - l.last_probe >= E2E_SECS
+                           for l in self.links.values()):
                         break
                     # quiet, the state's ts still says "running" (STALE)
                     if time.time() - self.saved_at >= max(1.0, STALE / 3):
@@ -1296,7 +1621,8 @@ def judge():
         else:
             parts.append("%s 重连中（%s）· 失败 %d" % (name, err, int(l.get("fails") or 0)))
             continue
-        parts.append("%s 连不上：%s · 失败 %d" % (name, err, int(l.get("fails") or 0)))
+        parts.append("%s 连不上：%s · 失败 %d%s" % (name, err, int(l.get("fails") or 0),
+                                                 " · 中转也不通：%s" % l["relay_err"][:80] if l.get("relay_err") else ""))
     md = st.get("mode") or "demand"
     if links:
         head = "%d 条常开连接（%s）" % (len(links), "全连" if md == "all" else "按需")

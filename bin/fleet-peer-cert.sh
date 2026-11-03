@@ -54,7 +54,8 @@
 # Seams: FLEET_HUB_CURL (default `curl`) is the transport; FLEET_PEER_KEY the
 # key path; FLEET_PEER_CERT_SECS the life asked for (default 300 — the hub caps
 # it at 300 whatever is asked); FLEET_PEER_CERT_MARGIN how many seconds before
-# expiry a cached certificate stops being reused (default 30).
+# expiry a cached certificate stops being reused (default 30); FLEET_PEER_CERT_FRESH=1
+# asks the hub even with a reusable certificate cached (the host keys re-pinned).
 set -uo pipefail
 
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -134,7 +135,10 @@ emit() {
   printf '%s\n' -l "$1"
 }
 keypub=$(awk '{ print $2; exit }' "$KEY.pub" 2>/dev/null)
-if [ -s "$CERT" ] && [ -n "$keypub" ] && read -r m_until m_login m_key m_alias 2>/dev/null < "$CERT.meta"; then
+# FLEET_PEER_CERT_FRESH=1 (FQAR): no reuse — the hub is asked again, so the host keys
+# it vouches for now replace the ones pinned under fleet-<alias> (the peerlink keeper
+# sets it once after «host key verification failed»: a pod rebuilt with a new key)
+if [ "${FLEET_PEER_CERT_FRESH:-0}" != 1 ] && [ -s "$CERT" ] && [ -n "$keypub" ] && read -r m_until m_login m_key m_alias 2>/dev/null < "$CERT.meta"; then
   case "$m_until" in ''|*[!0-9]*) m_until=0 ;; esac
   if [ "$m_key" = "$keypub" ] && [ -n "$m_login" ] && [ -n "$m_alias" ] \
      && { [ "$m_alias" = - ] || awk -v a="fleet-$m_alias" '$1 == a { f = 1 } END { exit !f }' "$KH" 2>/dev/null; } \
