@@ -546,6 +546,17 @@ if [ "$DRY" != 1 ]; then
   done
 fi
 
+# --- a live session's window never stays labelled a shell (task PV5W) --------------
+# A window marked a panel that still carries its session and its own wrapper pane
+# (fleet-window-carry.sh stripped it before it learned to refuse) gets its role and
+# name back, so the lists show it and the 看台 can open it again.
+if [ "$DRY" != 1 ] && [ -f "$BIN/fleet-window-carry.sh" ]; then
+  for s in ${SESSIONS[@]+"${SESSIONS[@]}"}; do
+    hout=$(fleet_timebox 20 bash "$BIN/fleet-window-carry.sh" --heal "$(fleet_socket "$s")" 2>/dev/null)
+    [ -z "$hout" ] || log "$s: $(printf '%s' "$hout" | paste -sd';' -)"
+  done
+fi
+
 # --- the peer queue (issue #1647) ---------------------------------------------------
 # A report or message whose recipient could not take it (no live Claude, an inbox
 # that would not answer, a failed wake) waits in fleets/<sess>/peer-queue for the

@@ -1037,6 +1037,33 @@ drill_window_renamed() {
 
 # break-pane (issue #1844): the agent pane broken out with prefix ! takes the
 # session's identity with it, so its recovery page still resumes the conversation.
+# A pane whose @wrap_win went stale showing up in another window stripped a LIVE
+# session's window: renamed `<name>-shell`, marked a panel — the lists dropped it,
+# the 看台 offered only 归档 (task PV5W, WS6B). The carry now refuses while the old
+# window keeps its own wrapper pane, and --heal gives a stripped one back.
+drill_stale_wrap_strips_live() {
+  CAP=10; local t0 L="breakit-carry-$$" a b out
+  t0=$(now)
+  tmux -L "$L" -f /dev/null new-session -d -s s -n live 'exec sleep 600' || { WHY="cannot start an isolated tmux"; return 1; }
+  a=$(tmux -L "$L" display -p -t s:live '#{window_id}')
+  tmux -L "$L" set-option -p -t "$a" @wrap_win "$a"
+  tmux -L "$L" set-option -w -t "$a" @fleet_id 1f0e0000-0000-4000-8000-0000000000aa
+  tmux -L "$L" set-option -w -t "$a" @fleet_role worker
+  b=$(tmux -L "$L" new-window -d -P -F '#{window_id}' -t s: -n other 'exec sleep 600')
+  tmux -L "$L" set-option -p -t "$b" @wrap_win "$a"           # the stale stamp
+  TMUX="/tmp/$L,0,0" PATH="$PATH" bash -c "tmux() { command tmux -L '$L' \"\$@\"; }; export -f tmux; bash '$BIN/fleet-window-carry.sh' '$b'"
+  out="$(tmux -L "$L" display -p -t "$a" '#{@fleet_role}|#{window_name}|#{@fleet_id}')"
+  [ "$out" = "worker|live|1f0e0000-0000-4000-8000-0000000000aa" ] \
+    || { tmux -L "$L" kill-server; WHY="a live window was stripped: [$out]"; return 1; }
+  tmux -L "$L" set-option -w -t "$a" @fleet_role panel; tmux -L "$L" rename-window -t "$a" live-shell
+  bash "$BIN/fleet-window-carry.sh" --heal "$L" >/dev/null
+  out="$(tmux -L "$L" display -p -t "$a" '#{@fleet_role}|#{window_name}')"
+  tmux -L "$L" kill-server 2>/dev/null
+  [ "$out" = "worker|live" ] || { WHY="--heal left [$out]"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='留着自己 wrapper 窗格的窗口不被搬走身份；已被标成 panel / -shell 的活会话由 --heal 改回'
+}
+
 drill_break_pane() {
   CAP=10; BREAK_SOCK="$WORK/sock-bp"; local c="$WORK/bp" t0 hook ap ow nw v
   hook=$(grep 'fleet-window-carry.sh' "$ROOT/conf/tmux-attention.conf" | grep '^set-hook' | sed "s#~/.claude/fleet/bin/#$BIN/#")
