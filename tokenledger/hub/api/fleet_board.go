@@ -539,6 +539,17 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if v, ok := w["born"].(float64); ok {
 			r.At = int64(v)
 		}
+		if r.At <= 0 {
+			// no birth stamp (an older wrapper): its last activity, else when it was
+			// last heard — never the epoch (「49 万小时前」, task PV5W)
+			r.At = r.ActivityAt
+			if v, ok := w["activity_at"].(float64); ok && v > 0 && v <= float64(now.Unix()) {
+				r.At = int64(v)
+			}
+			if r.At <= 0 && !fs.ObservedAt.IsZero() {
+				r.At = fs.ObservedAt.Unix()
+			}
+		}
 		if v, ok := w["activity_at"].(float64); ok && v > float64(r.ActivityAt) && v <= float64(now.Unix()) {
 			r.ActivityAt = int64(v)
 		}
@@ -926,26 +937,36 @@ func finishBoard(rows []BoardRow) *Board {
 			rows[i].Parent = rows[p].ID
 		}
 	}
-	// a tree's activity: its own and every row nested under it (task PV5W);
-	// siblings newest tree first
-	treeAt := make([]int64, len(rows))
+	// a tree's activity (task PV5W): its root's own, and of each row nested under
+	// it only what the person would want to see move — its start, and its latest
+	// activity once it asks or has ended — never its every turn, so a busy child
+	// does not shuffle the list. Siblings sort by the same signal.
+	treeAt, signal := make([]int64, len(rows)), make([]int64, len(rows))
 	var tree func(i int) int64
 	tree = func(i int) int64 {
 		if treeAt[i] != 0 {
 			return treeAt[i]
 		}
-		at := rows[i].ActivityAt
-		if at <= 0 {
-			at = rows[i].At
+		own := rows[i].ActivityAt
+		if own <= 0 {
+			own = rows[i].At
 		}
-		treeAt[i] = at
+		sig := rows[i].At
+		if (rows[i].Group == "ask" || rows[i].Group == "gone") && rows[i].ActivityAt > sig {
+			sig = rows[i].ActivityAt
+		}
+		treeAt[i], signal[i] = own, sig
 		for _, k := range kids[i] {
-			if t := tree(k); t > at {
-				at = t
+			tree(k)
+			if signal[k] > own {
+				own = signal[k]
+			}
+			if signal[k] > sig {
+				sig = signal[k]
 			}
 		}
-		treeAt[i] = at
-		return at
+		treeAt[i], signal[i] = own, sig
+		return own
 	}
 	for i := range rows {
 		tree(i)
@@ -953,8 +974,8 @@ func finishBoard(rows []BoardRow) *Board {
 	for p := range kids {
 		ks := kids[p]
 		sort.SliceStable(ks, func(a, b int) bool {
-			if treeAt[ks[a]] != treeAt[ks[b]] {
-				return treeAt[ks[a]] > treeAt[ks[b]]
+			if signal[ks[a]] != signal[ks[b]] {
+				return signal[ks[a]] > signal[ks[b]]
 			}
 			return rows[ks[a]].ID < rows[ks[b]].ID
 		})
