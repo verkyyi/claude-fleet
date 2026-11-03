@@ -2124,6 +2124,30 @@ EOF
   printf ' — WEDGED:%s (socket left by a dying tmux server; every client gets "server exited unexpectedly" — fleet-up.sh or the next fleet-restore --auto clears it)' "$w"
 }
 
+# ---- the execution region (task J7BN P1, FQAR) --------------------------------
+# A mainland pod (extras/managed-node/render.py exec_region cn) reaches no
+# Anthropic or OpenAI endpoint: only a DeepSeek profile starts there. The pod's
+# env carries FLEET_EXEC_REGION=cn and fleet-node-linux.py writes it into
+# /etc/fleet-devnet.env, which every shell exports — a daemon started outside a
+# login shell reads it from that file. The ONE reader of the rule: fleet-claude.sh
+# and fleet-codex.sh refuse by it, and what the fleet opens on its own (the
+# first-login guide) asks it which model to open on.
+#   fleet_exec_region   → cn, or nothing
+#   fleet_region_model  → the model profile a Claude session must start on here
+#                         (deepseek on cn); rc 1 = no restriction
+fleet_exec_region() {
+  local r="${FLEET_EXEC_REGION:-}" f="${FLEET_DEVNET_ENV:-/etc/fleet-devnet.env}"
+  if [ -z "$r" ] && [ -r "$f" ]; then
+    r=$(sed -n 's/^FLEET_EXEC_REGION=//p' "$f" 2>/dev/null | head -n 1)   # tolerant by design: no line = no region
+  fi
+  case "$r" in cn) printf cn ;; esac
+  return 0
+}
+fleet_region_model() {
+  [ "$(fleet_exec_region)" = cn ] || return 1
+  printf deepseek
+}
+
 # ---- the first-login guide (issues #1169 / #1204 / #1215) --------------------
 # The guide is a pinned scratch window running /fleet-onboard. Two halves decide
 # whether it is ALIVE, and both must hold:
@@ -2195,25 +2219,31 @@ fleet_guide_alive() { fleet_guide_spoke && fleet_guide_running "$1"; }
 # and a scratch worktree of the fleet's (starter) repo cost a `git fetch` + a
 # whole checkout before the agent even started: on a loaded Linux node that alone
 # outlasted the collector's 30 s guide phase, which killed the open every tick.
+# On a machine whose region allows only one model profile (fleet_region_model —
+# a mainland pod: DeepSeek, FQAR) the guide opens on it: opened on the fleet's
+# default it was refused at every start and reopened every three minutes. A
+# guide window running another model is retired and opened anew, not respawned
+# (its command would be refused the same).
 fleet_guide_respawn() {
-  local sess="$1" bin name wid pin nsid sep='|'
+  local sess="$1" bin name wid pin nsid wmodel gm sep='|'
   bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  while IFS="$sep" read -r name wid pin nsid; do
+  gm=$(fleet_region_model) || gm=''
+  while IFS="$sep" read -r name wid pin nsid wmodel; do
     [ "$name" = guide ] || continue
     [ "$pin" = 1 ] || return 1
-    if [ -n "$nsid" ]; then
+    if [ -n "$nsid" ] || { [ -n "$gm" ] && [ "$wmodel" != "$gm" ]; }; then
       rm -f "$FLEET_CONF_DIR/global/onboard.shown"   # our own reopen, no one's close (#4852)
       fleet_win_retire "$wid" "$sess" closed
       tmux -L "$sess" kill-window -t "$wid" >/dev/null 2>&1 || return 1
-      TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo "$sess" || return 1
+      TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo ${gm:+--model "$gm"} "$sess" || return 1
     else
       tmux -L "$sess" respawn-window -k -t "$wid" >/dev/null 2>&1 || return 1
     fi
     return 0
   done <<EOF
-$(tmux -L "$sess" list-windows -t "$sess" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}${sep}#{@norepo_sid}" 2>/dev/null)
+$(tmux -L "$sess" list-windows -t "$sess" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}${sep}#{@norepo_sid}${sep}#{?@cc_model_fixed,#{@cc_model},}" 2>/dev/null)
 EOF
-  TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo "$sess" || return 1
+  TMUX='' bash "$bin/dash-raw-session.sh" --name guide --prompt /fleet-onboard --pin --no-repo ${gm:+--model "$gm"} "$sess" || return 1
 }
 
 # ---- the guide's retry budget (issue #2424) ----------------------------------
@@ -2228,6 +2258,13 @@ EOF
 #                          FLEET_GUIDE_STUCK_SECS (1800; 0 = never) from
 #                          onboard.stuck.ts the tick lifts it with a fresh budget
 #                          — a load spike or an admission refusal passes.
+# global/onboard.stuck.refused  the launcher REFUSED the guide's start
+#                          (@launch_refused on its pane — the region, the
+#                          DeepSeek road, a credential, an account; FQAR): the
+#                          tick stops at once, not after the budget, and a
+#                          policy refusal (region / deepseek) is not lifted by
+#                          FLEET_GUIDE_STUCK_SECS — waiting changes nothing; a
+#                          person's `fleet guide` clears it.
 # global/onboard.dismissed the person closed the pinned guide window — a clear
 #                          «not now». The pending marker goes with it; nothing
 #                          reopens it until they ask (`fleet guide`).
@@ -2253,13 +2290,22 @@ fleet_guide_tried() {
 fleet_guide_rearm() {
   local g="$FLEET_CONF_DIR/global"
   [ -d "$g" ] || mkdir -p "$g" 2>/dev/null || return 0
-  rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.dismissed" "$g/onboard.openfail" "$g/onboard.shown"
+  rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.stuck.refused" "$g/onboard.dismissed" "$g/onboard.openfail" "$g/onboard.shown"
   printf '0\n' > "$g/onboard.tries"
   if [ ! -e "$g/onboarded" ] && [ "${FLEET_ONBOARD:-1}" != 0 ]; then
     : > "$g/onboard.pending"
     date +%s > "$g/onboard.retry"
   fi
   return 0
+}
+
+# fleet_guide_wanted — rc 0 while the guide is still the fleet's to open: on,
+# pending, not onboarded, not dismissed. Otherwise a pinned guide window is
+# nobody's to bring back — fleet-restore.sh does not resurrect it (FQAR).
+fleet_guide_wanted() {
+  local g="$FLEET_CONF_DIR/global"
+  [ "${FLEET_ONBOARD:-1}" != 0 ] && [ -f "$g/onboard.pending" ] \
+    && [ ! -e "$g/onboarded" ] && [ ! -e "$g/onboard.dismissed" ]
 }
 
 # ---- a person, not a login (issue #4852) -------------------------------------
@@ -2322,6 +2368,25 @@ fleet_guide_wid() {
   done <<EOF
 $(tmux -L "$1" list-windows -t "$1" -F "#{window_name}${sep}#{window_id}${sep}#{@pin}" 2>/dev/null)
 EOF
+  return 1
+}
+
+# fleet_guide_refused <session> → the @launch_refused word on the pinned guide's
+# pane (fleet-launch-lib.sh's fleet_launch_refused: region, deepseek, cred, …);
+# rc 1 when its launcher refused nothing.
+fleet_guide_refused() {
+  local wid r
+  wid=$(fleet_guide_wid "$1") || return 1
+  r=$(tmux -L "$1" show-options -pqv -t "$wid" @launch_refused 2>/dev/null)
+  [ -n "$r" ] || return 1
+  printf '%s' "$r"
+}
+# fleet_guide_refusal_holds — the stop on file is a policy refusal (region /
+# deepseek) that no wait lifts.
+fleet_guide_refusal_holds() {
+  case "$(cat "$FLEET_CONF_DIR/global/onboard.stuck.refused" 2>/dev/null)" in
+    region|deepseek) return 0 ;;
+  esac
   return 1
 }
 
@@ -2461,19 +2526,32 @@ fleet_guide_tick() {
       fleet_win_retire "$wid" "$sock" closed
       tmux -L "$sock" kill-window -t "$wid" >/dev/null 2>&1
     done
-    rm -f "$g/onboard.shown" "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.openfail"
+    rm -f "$g/onboard.shown" "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.stuck.refused" "$g/onboard.openfail"
     printf '0\n' > "$g/onboard.tries"
     return 0
   fi
   for sock in $sockets; do
     if fleet_guide_confirmed "$sock"; then
       date '+%Y-%m-%d %H:%M:%S' > "$g/onboarded"
-      rm -f "$g/onboard.pending" "$g/onboard.stuck" "$g/onboard.tries" "$g/onboard.shown"
+      rm -f "$g/onboard.pending" "$g/onboard.stuck" "$g/onboard.stuck.refused" "$g/onboard.tries" "$g/onboard.shown"
       return 0
     fi
   done
   sock=${sockets%%$'\n'*}
   stamp=$(date +%s)
+  # Refused by its launcher (FQAR): the start will be refused the same at every
+  # open — a mainland pod refusing an Anthropic model reopened it every three
+  # minutes, forever. Stop now, saying the word, with no budget spent on it.
+  local refused
+  if [ ! -s "$g/onboard.stuck" ] && refused=$(fleet_guide_refused "$sock"); then
+    printf '启动被拒（%s）· 第 %s 次 · %s\n' "$refused" "$(fleet_guide_tries)" "$(date '+%Y-%m-%d %H:%M')" > "$g/onboard.stuck"
+    printf '%s\n' "$refused" > "$g/onboard.stuck.refused"
+    printf '%s\n' "$stamp" > "$g/onboard.stuck.ts"
+    fleet_guide_stuck_mark "$sock"
+    local ab; ab="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fleet-alerts.sh"
+    [ -f "$ab" ] && bash "$ab" event onboard-stuck "新手引导没开：$(head -n 1 "$g/onboard.stuck" 2>/dev/null)（fleet guide 重试）" >/dev/null 2>&1
+    return 0
+  fi
   # Stopped: keep the reason on the window, reopen nothing — until the stop is
   # FLEET_GUIDE_STUCK_SECS old (issue #3320): then a fresh budget, because what
   # stopped it (a loaded machine, an admission refusal, a lapsed login) passes.
@@ -2482,10 +2560,10 @@ fleet_guide_tick() {
     case "$life" in ''|*[!0-9]*) life=1800 ;; esac
     since=$(cat "$g/onboard.stuck.ts" 2>/dev/null || true)
     case "$since" in ''|*[!0-9]*) since=$stamp; printf '%s\n' "$stamp" > "$g/onboard.stuck.ts" ;; esac
-    if [ "$life" = 0 ] || [ $((stamp - since)) -lt "$life" ]; then
+    if [ "$life" = 0 ] || [ $((stamp - since)) -lt "$life" ] || fleet_guide_refusal_holds; then
       fleet_guide_stuck_mark "$sock"; return 0
     fi
-    rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts"
+    rm -f "$g/onboard.stuck" "$g/onboard.stuck.ts" "$g/onboard.stuck.refused"
     printf '0\n' > "$g/onboard.tries"
     printf '0\n' > "$g/onboard.retry"
   fi

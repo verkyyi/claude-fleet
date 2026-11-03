@@ -3552,6 +3552,33 @@ drill_guide_spare_login() {
   WHAT="没人来过的登录：节拍不开引导、把旧版留下的置顶 guide 关掉（不算「不要」）；人第一次 attach 立刻开；开过又被关（tries 已清零）记 dismissed，不再拉回"
 }
 
+# guide-region-refused (FQAR, a mainland pod): the guide opened on the fleet's
+# default model, fleet-claude.sh refused it at every start, and the tick reopened
+# it every three minutes. fleet-guide-region-selftest.sh runs it for real on an
+# isolated server (legs A–C); held here by name.
+drill_guide_region_refused() {
+  CAP=10; local t0
+  t0=$(now)
+  suite_holds fleet-guide-region-selftest.sh 'cn: the guide opens on DeepSeek' \
+    'refused: a region stop is not lifted by time' 'cn only in the devnet file' || return 1
+  grep -q 'fleet_region_model' "$BIN/fleet-claude.sh" \
+    || { WHY="fleet-claude.sh no longer refuses by fleet_region_model: the guide and the launcher read two rules"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="cn 上引导带 --model deepseek 开；启动器拒了当拍就停（onboard.stuck「启动被拒（region）」），区域的停止不随时间解除（fleet-guide-region-selftest.sh 真跑，这里按名守住）"
+}
+
+# guide-restore-over (FQAR): onboarded written, the pinned guide killed by hand —
+# the pullback brought it back from its PIN row within seconds. Legs D–E of
+# fleet-guide-region-selftest.sh run restore / --auto for real; held here by name.
+drill_guide_restore_over() {
+  CAP=10; local t0
+  t0=$(now)
+  suite_holds fleet-guide-region-selftest.sh 'onboarded: restore does not reopen the pinned guide' \
+    'pullback: the killed pinned guide stays closed' 'still pending: restore brings the guide back' || return 1
+  SECS=$(since "$t0")
+  WHAT="引导结束后（onboarded / dismissed）restore 不重开置顶 guide；pullback 从不拉回它，同一张图里的普通会话照拉（fleet-guide-region-selftest.sh 真跑，这里按名守住）"
+}
+
 drill_cold_fill_fails() {
   # issue #2237: the cold start opens the agent's window before the tree is
   # checked out; a checkout that fails must take that window (and the worktree)
