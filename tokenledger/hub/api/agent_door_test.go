@@ -318,7 +318,7 @@ func TestRedirectMatches(t *testing.T) {
 }
 
 func TestPublicDialerRefusesPrivate(t *testing.T) {
-	for _, a := range []string{"127.0.0.1:443", "10.0.0.1:443", "192.168.1.1:443", "169.254.169.254:80", "100.100.1.1:443", "[::1]:443"} {
+	for _, a := range []string{"127.0.0.1:443", "10.0.0.1:443", "192.168.1.1:443", "169.254.169.254:80", "100.100.1.1:443", "[::1]:443"} { // oss-ok: the private ranges the CIMD dialer must refuse
 		if err := publicDialer.Control("tcp", a, nil); err == nil {
 			t.Errorf("%s allowed", a)
 		}
@@ -334,7 +334,7 @@ func TestOAuthConsentSurvivesSignIn(t *testing.T) {
 	q := url.Values{"response_type": {"code"}, "client_id": {"https://claude.ai/oauth/mcp-oauth-client-metadata"},
 		"redirect_uri": {"https://claude.ai/api/mcp/auth_callback"}, "code_challenge": {strings.Repeat("c", 43)},
 		"code_challenge_method": {"S256"}, "state": {strings.Repeat("s", 300)}, "scope": {"read talk start stop answer"},
-		"resource": {"https://claudefleet.24haowan.com/mcp"}}
+		"resource": {"https://hub.example.com/mcp"}}
 	to := oauthConsentPagePath + "?" + q.Encode()
 	if len(to) <= appReturnMax || !appReturnOK(to) {
 		t.Fatalf("a %d-byte consent address is not carried back through the sign-in", len(to))
