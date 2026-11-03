@@ -119,17 +119,18 @@ func (s *Server) handleAuthServerMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	base := s.oauthIssuer(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"issuer":                                         base,
-		"authorization_endpoint":                         base + OAuthAuthorizePath,
-		"token_endpoint":                                 base + OAuthTokenPath,
-		"registration_endpoint":                          base + OAuthRegisterPath,
-		"response_types_supported":                       []string{"code"},
-		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":               []string{"S256"},
-		"token_endpoint_auth_methods_supported":          []string{"none"},
-		"scopes_supported":                               oauthScopesSupported(),
-		"client_id_metadata_document_supported":          true,
-		"authorization_response_iss_parameter_supported": true,
+		"issuer":                                           base,
+		"authorization_endpoint":                           base + OAuthAuthorizePath,
+		"token_endpoint":                                   base + OAuthTokenPath,
+		"registration_endpoint":                            base + OAuthRegisterPath,
+		"response_types_supported":                         []string{"code"},
+		"grant_types_supported":                            []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":                 []string{"S256"},
+		"token_endpoint_auth_methods_supported":            []string{"none", privateKeyJWT},
+		"token_endpoint_auth_signing_alg_values_supported": []string{"RS256"},
+		"scopes_supported":                                 oauthScopesSupported(),
+		"client_id_metadata_document_supported":            true,
+		"authorization_response_iss_parameter_supported":   true,
 	})
 }
 
@@ -309,25 +310,12 @@ func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient,
 	mu, _ := cimdLocks.LoadOrStore(id, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
-	raw, err := cimdFetch(ctx, id)
+	doc, err := cimdDocument(ctx, id, true)
 	if err != nil {
-		return c, fmt.Errorf("client metadata document: %v", err)
-	}
-	var doc struct {
-		ClientID     string   `json:"client_id"`
-		ClientName   string   `json:"client_name"`
-		RedirectURIs []string `json:"redirect_uris"`
-		AuthMethod   string   `json:"token_endpoint_auth_method"`
-		AuthMethods  []string `json:"token_endpoint_auth_methods_supported"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return c, errors.New("client metadata document is not JSON")
-	}
-	if doc.ClientID != id {
-		return c, errors.New("client metadata document names another client_id")
+		return c, err
 	}
 	if !cimdPublicOK(doc.AuthMethod, doc.AuthMethods) {
-		return c, errors.New("only public clients: the client metadata document must allow token_endpoint_auth_method none")
+		return c, errors.New("the client metadata document must use token_endpoint_auth_method none or private_key_jwt")
 	}
 	if len(doc.RedirectURIs) == 0 || len(doc.RedirectURIs) > 10 {
 		return c, errors.New("client metadata document needs 1 to 10 redirect_uris")
@@ -345,14 +333,57 @@ func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient,
 	return c, s.Store.PutOAuthClient(c)
 }
 
-// cimdPublicOK says whether a metadata document's client may sign in here as
-// a public client: it prefers none, or lists none among the methods it
-// supports. ChatGPT's document prefers private_key_jwt and lists
-// ["none", "private_key_jwt"]; this server advertises only none, so such a
-// client sends no assertion and PKCE binds the code (task T4DN). A document
-// that allows no public sign-in is refused.
+// cimdDoc is the part of a Client ID Metadata Document the hub reads.
+type cimdDoc struct {
+	ClientID     string          `json:"client_id"`
+	ClientName   string          `json:"client_name"`
+	RedirectURIs []string        `json:"redirect_uris"`
+	AuthMethod   string          `json:"token_endpoint_auth_method"`
+	AuthMethods  []string        `json:"token_endpoint_auth_methods_supported"`
+	JWKSURI      string          `json:"jwks_uri"`
+	JWKS         json.RawMessage `json:"jwks"`
+}
+
+// cimdDocTTL is how long a fetched document answers the token endpoint from
+// memory: a sign-in reads it at the authorize step and again at the token one.
+const cimdDocTTL = 10 * time.Minute
+
+type cimdDocEntry struct {
+	doc cimdDoc
+	at  time.Time
+}
+
+var cimdDocs sync.Map // client_id → cimdDocEntry
+
+// cimdDocument fetches (or, unless fresh, recalls) and checks a client's
+// metadata document: JSON naming its own URL as client_id.
+func cimdDocument(ctx context.Context, id string, fresh bool) (cimdDoc, error) {
+	if e, ok := cimdDocs.Load(id); ok && !fresh && time.Since(e.(cimdDocEntry).at) < cimdDocTTL {
+		return e.(cimdDocEntry).doc, nil
+	}
+	raw, err := cimdFetch(ctx, id)
+	if err != nil {
+		return cimdDoc{}, fmt.Errorf("client metadata document: %v", err)
+	}
+	var doc cimdDoc
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return doc, errors.New("client metadata document is not JSON")
+	}
+	if doc.ClientID != id {
+		return doc, errors.New("client metadata document names another client_id")
+	}
+	cimdDocs.Store(id, cimdDocEntry{doc, time.Now()})
+	return doc, nil
+}
+
+// cimdPublicOK says whether a metadata document's client may sign in here at
+// all: it uses no client authentication, or private_key_jwt (verified against
+// its own published keys — clientAuth), or lists none among what it supports.
+// ChatGPT's document prefers private_key_jwt and lists ["none",
+// "private_key_jwt"] (task T4DN). A client_secret method is refused: a
+// metadata document has no secret.
 func cimdPublicOK(method string, supported []string) bool {
-	if method == "" || method == "none" {
+	if method == "" || method == "none" || method == privateKeyJWT {
 		return true
 	}
 	for _, m := range supported {
@@ -651,7 +682,11 @@ func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	clientID := r.PostForm.Get("client_id")
+	clientID, err := s.clientAuth(r, now)
+	if err != nil {
+		oauthError(w, http.StatusUnauthorized, "invalid_client", err.Error())
+		return
+	}
 	switch r.PostForm.Get("grant_type") {
 	case "authorization_code":
 		c, err := s.Store.TakeOAuthCode(HashToken(r.PostForm.Get("code")), now)

@@ -1325,7 +1325,10 @@ expiry (30 days default, a year at most), a revocation, a call count.
   day), PKCE S256 only, exact redirects (loopback port-insensitive), `iss` in the
   response, the console's consent page (`/app/oauth/authorize`, after the hub's own
   sign-in), access tokens `tma_…` for an hour, refresh `tmr_…` rotated — a replayed one
-  revokes the grant.
+  revokes the grant. A metadata-document client that declares `private_key_jwt`
+  (ChatGPT) authenticates at the token endpoint with an RFC 7523 RS256 assertion
+  signed by a key at its `jwks_uri` (`api/oauth_client_auth.go`; jti once across
+  replicas); one that declares `none` and a DCR client are public.
 - **The door** (`api/agent_door.go`, `agentAdmit`): `/mcp` only — the same bearer
   on any other route is 401; the person with role user (an admin's agent sees only
   their own); `FleetPrincipal.Grant` carries the scopes into `authorize`, so a write
