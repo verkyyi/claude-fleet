@@ -185,6 +185,23 @@ def popup(data, pane, socket):
         pending.close()
 
 
+def _env_secs(name, default):
+    try:
+        return max(1.0, float(os.environ.get(name, '') or default))
+    except ValueError:
+        return float(default)
+
+
+def idle_after():
+    """Seconds a session sits done (no question) before the monitor slows."""
+    return _env_secs('FLEET_CODEX_ATTENTION_IDLE_AFTER', 300)
+
+
+def idle_secs():
+    """The monitor's interval for such a long-idle session (2 s otherwise)."""
+    return _env_secs('FLEET_CODEX_ATTENTION_IDLE_SECS', 6)
+
+
 class Monitor:
     def __init__(self, remote, env):
         self.remote, self.pane = remote, env.get('TMUX_PANE', '')
@@ -274,6 +291,13 @@ class Monitor:
             observed_state = tm(['display-message', '-p', '-t', self.pane,
                                  '#{@claude_state}|#{@claude_needs}|#{@codex_attention}|#{@claude_state_ts}']).split('|', 3)
             state, why, before, state_ts = (observed_state + [''] * 4)[:4]
+            if (state == 'done' and not why and not before and state_ts.isdigit()
+                    and time.time() - int(state_ts) >= idle_after()):
+                # A long-idle session asks nothing: its next turn's start is the
+                # hooks' word, not this monitor's. Two tmux forks every 2 s per
+                # Codex session (36 on one machine) slowed every other window's
+                # tmux; idle, the next look waits FLEET_CODEX_ATTENTION_IDLE_SECS.
+                self.next_at = time.monotonic() + idle_secs()
             binding = tuple(data.get(key) for key in ('owner', 'session_id', 'home', 'remote'))
             if binding != self.binding:
                 self.close()
