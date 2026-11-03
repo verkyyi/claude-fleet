@@ -313,21 +313,8 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   // a line standing for same-title duplicates draws the most urgent one's status and ×N
   const treeRow = (l: TreeLine) => row(l.r, { line: l, urgent: urgentOf(tree, l.r), dupes: members(tree, l.r).length });
   const List = variant === "side" ? SidebarMenu : "ul";
-  // a day heading above each tree's root; what hangs under it follows it
-  const timeline = (items: TreeLine[]) => {
-    let previous = "";
-    const today = new Date(now).toDateString();
-    const yesterdayDate = new Date(now); yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-    return items.flatMap(l => {
-      const r = l.r;
-      if (l.depth) return [treeRow(l)];
-      const day = new Date(r.at).toDateString();
-      const label = day === today ? tr("今天", "Today") : day === yesterdayDate.toDateString() ? tr("昨天", "Yesterday") : new Date(r.at).toLocaleDateString();
-      const heading = day !== previous ? <li key={`day-${r.id}`} className="px-4 pt-3 pb-1 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">{label}</li> : null;
-      previous = day;
-      return heading ? [heading, treeRow(l)] : [treeRow(l)];
-    });
-  };
+  // one list in activity order, no day headings (task PV5W)
+  const timeline = (items: TreeLine[]) => items.map(treeRow);
   const searching = !!q.trim();
   const web = <WebChatRow key="web" variant={variant} active={webActive} />;
   const archiveToggle = <button type="button" aria-pressed={showArchived} data-archive-toggle onClick={() => { previous.current = undefined; setShowArchived(!showArchived); }} className="text-muted-foreground px-4 py-2 text-sm">{showArchived ? tr("返回会话", "Back to sessions") : tr(`已归档 · ${archivedCount}`, `Archived · ${archivedCount}`)}</button>;
