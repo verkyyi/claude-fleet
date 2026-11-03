@@ -17,8 +17,9 @@ _fl_lib="$BIN/fleet-launch-lib.sh"   # beside this script, else beside its link'
 # shellcheck source=/dev/null
 . "$_fl_lib"
 # A mainland pod (task J7BN P1: render.py sets FLEET_EXEC_REGION=cn) reaches no
-# OpenAI endpoint: Codex never starts there. Unset ⇒ as before.
-if [ "${FLEET_EXEC_REGION:-}" = cn ]; then
+# OpenAI endpoint: Codex never starts there. Unset ⇒ as before (fleet-lib's
+# fleet_exec_region, the rule's one reader — FQAR).
+if [ "$(fleet_exec_region)" = cn ]; then
   printf 'fleet-codex: this machine is in the mainland region (FLEET_EXEC_REGION=cn) — Codex does not start here; open a DeepSeek session (--model deepseek|deepseek-pro)\n' >&2
   fleet_launch_refused region; exit 1
 fi

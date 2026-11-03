@@ -1,3 +1,4 @@
+# guide-region-refused, guide-restore-over (FQAR): first costs guessed (both hold fleet-guide-region-selftest.sh by name), until the next CI refresh.
 # disk-gate-starves-park, native-worktree-pileup, cache-pileup: first costs from local selftest wall times (T1253), until the next CI refresh.
 # reopen-claude-on-codex-fleet: first cost from a local PASS wall time (6.1 s), until the next CI refresh.
 # credproxy-hub-url-moved: first cost from a local PASS wall time (1.1 s), until the next CI refresh.
@@ -205,6 +206,8 @@
 0.7 go-shard-drops-test
 0.4 guide-admission-room
 3.5 guide-killed-midopen
+0.2 guide-region-refused
+0.2 guide-restore-over
 2.4 guide-retry-forever
 1.5 guide-spare-login
 0.1 heartbeat-sys-blocked

@@ -503,6 +503,10 @@ pullback_scan() {
     printf '%s\n' "$live" | grep -qxF "$fid" && continue
     IFS=$'\t' read -r _ wname wpath wsid _ wstate _ <<<"$line"
     echo "$wname" | grep -qE "$PANEL_RE" && continue
+    # The pinned first-login guide is fleet_guide_tick's to open (FQAR): a guide
+    # that is gone was closed — the tick reads that as a «no» — and pulling it back
+    # resurrected it within seconds of a kill, onboarded or not.
+    restore_is_guide "$mf" "$fid" "$wname" && continue
     [ -n "$wsid" ] && [ "$wsid" != - ] && printf '%s\n' "$lsid" | grep -qxF "$wsid" && continue
     case "$wstate" in done|exited)
       python3 "$BIN/fleet_park_wake.py" restore --fid "$fid" --sid "$wsid" --owned 2>/dev/null || continue ;;
@@ -515,6 +519,14 @@ pullback_scan() {
     log "pullback: $sess/$wname ($fid) gone while ${wstate:--} — queued for the next tick"
   done < <(fleet_restore_wins <(fleet_restore_map_prune "$mf"))
   return 0
+}
+
+# restore_is_guide <map> <fleet_id> <name> — rc 0 when the row is the pinned
+# first-login guide (`guide` with a PIN row by its identity — fleet-lib's
+# fleet_guide_* own it).
+restore_is_guide() {
+  [ "$3" = guide ] && [ -n "$2" ] || return 1
+  awk -F'\t' -v f="$2" '$1 == "PIN" && $2 == f { found = 1; exit } END { exit !found }' "$1" 2>/dev/null
 }
 
 # pullback_pending — queue every live fleet's vanished sessions; rc 0 when any
@@ -677,6 +689,14 @@ restore() {
       # belongs to $HOME's project dir, so it resumes there whatever its cwd was.
       [ "${wrepo:-}" = - ] && wpath="$HOME"
       echo "$wname" | grep -qE "$PANEL_RE" && continue
+      # The pinned first-login guide once it is no longer wanted (FQAR): onboarded,
+      # dismissed or switched off, it is nobody's session to bring back — a crash
+      # or planned restart used to reopen it from its PIN row.
+      if restore_is_guide "$mf" "${wtag#WIN:}" "$wname" && ! fleet_guide_wanted; then
+        say "    · $wname: the onboarding guide is over — not reopened"
+        log "skip $sess/$wname guide-over (onboarded / dismissed)"
+        continue
+      fi
       # A 看台's peer window (`@<machine>[·<login>]`, issue #3829) is an ssh onto
       # another machine, never a session here; a map written before the snapshot
       # learned to drop it still names one, with a conversation guessed by mtime.
