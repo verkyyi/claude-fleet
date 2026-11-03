@@ -3797,7 +3797,7 @@ drill_agent_grant_escapes() {
 drill_oauth_redirect_hijack() {
   CAP=120; local t0
   t0=$(now)
-  _drill_go_tests 'TestOAuthRoundTrip TestOAuthCIMDClient TestRedirectMatches TestPublicDialerRefusesPrivate' \
+  _drill_go_tests 'TestOAuthRoundTrip TestOAuthCIMDClient TestOAuthCIMDChatGPTDocument TestOAuthPrivateKeyJWT TestRedirectMatches TestPublicDialerRefusesPrivate' \
     "$ROOT/tokenledger/hub/api/agent_door_test.go" \
     'OAuth：只回跳到登记过的地址（本机回环只忽略端口）、PKCE S256 必须、code 只能用一次、刷新令牌被重放就整条连接撤销、CIMD 只取公网地址（go test）' || return 1
   SECS=$(since "$t0")

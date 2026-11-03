@@ -3,7 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -373,5 +379,137 @@ func TestAgentKeyRidesAReplicaHopOnly(t *testing.T) {
 	}
 	if c := call("replica-secret"); c == http.StatusUnauthorized {
 		t.Fatal("a replica hop carrying an agent key is refused at the door")
+	}
+}
+
+// ChatGPT's metadata document (as published): it prefers private_key_jwt and
+// supports none, so it signs in (with an assertion — TestOAuthPrivateKeyJWT);
+// one that wants a client secret is refused.
+func TestOAuthCIMDChatGPTDocument(t *testing.T) {
+	h := newAgentHarness(t)
+	id := "https://chatgpt.com/oauth/abc123/client.json"
+	saved := cimdFetch
+	t.Cleanup(func() { cimdFetch = saved })
+	doc := map[string]any{"client_id": id, "client_name": "ChatGPT",
+		"redirect_uris":                         []string{"https://chatgpt.com/connector_platform_oauth_redirect"},
+		"token_endpoint_auth_method":            "private_key_jwt",
+		"token_endpoint_auth_methods_supported": []string{"none", "private_key_jwt"},
+		"jwks_uri":                              "https://chatgpt.com/oauth/jwks.json"}
+	cimdFetch = func(context.Context, string) ([]byte, error) { return json.Marshal(doc) }
+	q := url.Values{"response_type": {"code"}, "client_id": {id}, "redirect_uri": {"https://chatgpt.com/connector_platform_oauth_redirect"},
+		"code_challenge": {pkceS256(strings.Repeat("w", 43))}, "code_challenge_method": {"S256"}}
+	if code, req := jsonAsPerson(t, h, http.MethodGet, MeOAuthRequestPath+"?"+q.Encode(), pAlice, nil); code != 200 {
+		t.Fatalf("ChatGPT's document: HTTP %d %v", code, req)
+	}
+	if !cimdPublicOK("private_key_jwt", []string{"none", "private_key_jwt"}) || !cimdPublicOK("private_key_jwt", []string{"private_key_jwt"}) ||
+		cimdPublicOK("client_secret_basic", nil) || !cimdPublicOK("", nil) {
+		t.Fatal("cimdPublicOK")
+	}
+}
+
+// signAssertion is an RS256 client assertion with the given claims.
+func signAssertion(t *testing.T, key *rsa.PrivateKey, kid string, claims map[string]any) string {
+	t.Helper()
+	hd, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": kid, "typ": "JWT"})
+	pl, _ := json.Marshal(claims)
+	in := base64.RawURLEncoding.EncodeToString(hd) + "." + base64.RawURLEncoding.EncodeToString(pl)
+	sum := sha256.Sum256([]byte(in))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return in + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+// ChatGPT's way end to end: its document prefers private_key_jwt, so the token
+// endpoint wants an assertion signed by a key at its jwks_uri — none, a wrong
+// audience, a stranger's key or a replayed jti is invalid_client; a good one
+// gets tokens, and a refresh needs a fresh assertion too.
+func TestOAuthPrivateKeyJWT(t *testing.T) {
+	h := newAgentHarness(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := rsa.GenerateKey(rand.Reader, 2048)
+	jwk := map[string]any{"keys": []map[string]string{{"kty": "RSA", "kid": "k1", "alg": "RS256",
+		"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": "AQAB"}}}
+	id := "https://chatgpt.example/oauth/abc/client.json"
+	redirect := "https://chatgpt.example/connector_platform_oauth_redirect"
+	sf, sj := cimdFetch, jwksFetch
+	t.Cleanup(func() {
+		cimdFetch, jwksFetch = sf, sj
+		cimdDocs.Delete(id)
+		clientJWKS.Delete("https://chatgpt.example/oauth/jwks.json")
+	})
+	cimdFetch = func(context.Context, string) ([]byte, error) {
+		return json.Marshal(map[string]any{"client_id": id, "client_name": "ChatGPT", "redirect_uris": []string{redirect},
+			"token_endpoint_auth_method": "private_key_jwt", "token_endpoint_auth_methods_supported": []string{"none", "private_key_jwt"},
+			"jwks_uri": "https://chatgpt.example/oauth/jwks.json"})
+	}
+	jwksFetch = func(context.Context, string) ([]byte, error) { return json.Marshal(jwk) }
+
+	var md map[string]any
+	agentGetJSON(t, h.http.URL+authServerMetaPath, &md)
+	if fmt.Sprint(md["token_endpoint_auth_methods_supported"]) != "[none private_key_jwt]" {
+		t.Fatalf("metadata: %v", md["token_endpoint_auth_methods_supported"])
+	}
+
+	verifier := strings.Repeat("z", 50)
+	code := func() string {
+		q := url.Values{"response_type": {"code"}, "client_id": {id}, "redirect_uri": {redirect},
+			"code_challenge": {pkceS256(verifier)}, "code_challenge_method": {"S256"}}
+		c, ans := jsonAsPerson(t, h, http.MethodPost, MeOAuthApprovePath, pAlice,
+			map[string]any{"query": q.Encode(), "permissions": []string{"talk"}, "approve": true})
+		u, _ := url.Parse(fmt.Sprint(ans["redirect"]))
+		if c != 200 || u.Query().Get("code") == "" {
+			t.Fatalf("approve: HTTP %d %v", c, ans)
+		}
+		return u.Query().Get("code")
+	}
+	tokURL := h.http.URL + OAuthTokenPath
+	claims := func(aud, jti string) map[string]any {
+		return map[string]any{"iss": id, "sub": id, "aud": aud, "jti": jti,
+			"iat": time.Now().Unix(), "exp": time.Now().Add(2 * time.Minute).Unix()}
+	}
+	form := func(c, assertion string) url.Values {
+		v := url.Values{"grant_type": {"authorization_code"}, "code": {c}, "client_id": {id},
+			"redirect_uri": {redirect}, "code_verifier": {verifier}}
+		if assertion != "" {
+			v.Set("client_assertion_type", jwtBearerAssertion)
+			v.Set("client_assertion", assertion)
+		}
+		return v
+	}
+	c1 := code()
+	for name, a := range map[string]string{
+		"no assertion":   "",
+		"wrong audience": signAssertion(t, key, "k1", claims("https://elsewhere.example/token", "j-aud")),
+		"stranger's key": signAssertion(t, other, "k1", claims(tokURL, "j-key")),
+		"unknown kid":    signAssertion(t, key, "k9", claims(tokURL, "j-kid")),
+	} {
+		if st, out := agentPostForm(t, tokURL, form(c1, a)); st != 401 || out["error"] != "invalid_client" {
+			t.Fatalf("%s: HTTP %d %v", name, st, out)
+		}
+	}
+	good := signAssertion(t, key, "k1", claims(tokURL, "j-1"))
+	st, tok := agentPostForm(t, tokURL, form(c1, good))
+	if st != 200 || tok["access_token"] == nil {
+		t.Fatalf("a good assertion: HTTP %d %v", st, tok)
+	}
+	if st, _ := agentPostForm(t, tokURL, form(code(), good)); st != 401 {
+		t.Fatalf("a replayed jti: HTTP %d", st)
+	}
+	ref := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {fmt.Sprint(tok["refresh_token"])}, "client_id": {id}}
+	if st, _ := agentPostForm(t, tokURL, ref); st != 401 {
+		t.Fatalf("a refresh without an assertion: HTTP %d", st)
+	}
+	ref.Set("client_assertion_type", jwtBearerAssertion)
+	ref.Set("client_assertion", signAssertion(t, key, "k1", claims(h.http.URL, "j-2")))
+	if st, out := agentPostForm(t, tokURL, ref); st != 200 {
+		t.Fatalf("a refresh with an assertion (aud = issuer): HTTP %d %v", st, out)
+	}
+	if code, who, _ := mcpWith(t, h, fmt.Sprint(tok["access_token"])); code != 200 || who["person"] != pAlice {
+		t.Fatalf("/mcp: HTTP %d %v", code, who)
 	}
 }
