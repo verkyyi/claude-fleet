@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -522,6 +525,8 @@ func (s *Server) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	a, redirectOK, code, desc := s.checkAuthorize(r, r.URL.Query())
 	if code != "" {
+		b, _ := json.Marshal(map[string]string{"error": code, "error_description": desc})
+		s.recordOAuthFailure(r, "authorize", http.StatusBadRequest, b)
 		if redirectOK {
 			http.Redirect(w, r, s.authzRedirect(r, a, url.Values{"error": {code}, "error_description": {desc}}), http.StatusFound)
 			return
@@ -662,8 +667,74 @@ func (s *Server) issueAgentTokens(w http.ResponseWriter, g store.AgentGrant, now
 	})
 }
 
-// handleOAuthToken serves the token endpoint.
+// oauthRecorder keeps what a refused OAuth answer said.
+type oauthRecorder struct {
+	http.ResponseWriter
+	status int
+	body   bytes.Buffer
+}
+
+func (o *oauthRecorder) WriteHeader(c int) { o.status = c; o.ResponseWriter.WriteHeader(c) }
+func (o *oauthRecorder) Write(b []byte) (int, error) {
+	if o.status == 0 {
+		o.status = http.StatusOK
+	}
+	if o.status >= 400 && o.body.Len() < 4096 {
+		o.body.Write(b)
+	}
+	return o.ResponseWriter.Write(b)
+}
+
+// recordOAuthFailure files a refused step under its person (when the code or
+// refresh token names one) and logs it: the hub's word for why an agent did not
+// connect, readable by that person on 我的 → Agent (GET /v1/me/agents failures).
+func (s *Server) recordOAuthFailure(r *http.Request, stage string, status int, body []byte) {
+	var e struct {
+		Error string `json:"error"`
+		Desc  string `json:"error_description"`
+	}
+	_ = json.Unmarshal(body, &e)
+	if e.Error == "" {
+		e.Error, e.Desc = strconv.Itoa(status), strings.TrimSpace(string(body))
+	}
+	f := r.PostForm
+	client := f.Get("client_id")
+	if client == "" {
+		client = assertionIssuer(f.Get("client_assertion"))
+	}
+	if client == "" {
+		client = r.URL.Query().Get("client_id")
+	}
+	person := ""
+	if c := f.Get("code"); c != "" {
+		person, _ = s.Store.PeekOAuthCode(HashToken(c))
+	} else if t := f.Get("refresh_token"); t != "" {
+		if gid, _, _, _, err := s.Store.OAuthToken(HashToken(t)); err == nil {
+			if g, err := s.Store.AgentGrant(gid); err == nil {
+				person = g.Person
+			}
+		}
+	}
+	if person == "" {
+		person = principalOf(r.Context())
+	}
+	log.Printf("oauth %s refused (%s · %s): %s %s", stage, client, f.Get("grant_type"), e.Error, e.Desc)
+	if err := s.Store.RecordOAuthFailure(store.OAuthFailure{At: time.Now().UTC(), Person: person, ClientID: client,
+		Stage: stage, Code: e.Error, Reason: e.Desc}); err != nil {
+		log.Printf("oauth: record a refusal: %v", err)
+	}
+}
+
+// handleOAuthToken serves the token endpoint; a refusal is recorded.
 func (s *Server) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
+	rec := &oauthRecorder{ResponseWriter: w}
+	s.oauthToken(rec, r)
+	if rec.status >= 400 && s.agentDoorOn() && r.Method == http.MethodPost {
+		s.recordOAuthFailure(r, "token", rec.status, rec.body.Bytes())
+	}
+}
+
+func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 	if oauthCORS(w, r) {
 		return
 	}

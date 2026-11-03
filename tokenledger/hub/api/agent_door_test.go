@@ -492,6 +492,10 @@ func TestOAuthPrivateKeyJWT(t *testing.T) {
 			t.Fatalf("%s: HTTP %d %v", name, st, out)
 		}
 	}
+	// each refusal is the person's to read, with the hub's reason
+	if _, list := jsonAsPerson(t, h, http.MethodGet, MeAgentsPath, pAlice, nil); !strings.Contains(fmt.Sprint(list["failures"]), "aud") {
+		t.Fatalf("refusals not listed for their person: %v", list["failures"])
+	}
 	good := signAssertion(t, key, "k1", claims(tokURL, "j-1"))
 	st, tok := agentPostForm(t, tokURL, form(c1, good))
 	if st != 200 || tok["access_token"] == nil {

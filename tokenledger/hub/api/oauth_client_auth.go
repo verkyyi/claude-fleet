@@ -27,11 +27,11 @@ import (
 // sends anyway is still verified, never ignored.
 //
 //	iss = sub = client_id · aud ∋ the token endpoint (or the issuer) ·
-//	exp ≤ 5 min ahead and not past · jti once (fleet_oauth_tokens, every replica)
+//	exp ≤ 1 h ahead and not past · jti, when sent, once (fleet_oauth_tokens, every replica)
 const (
 	privateKeyJWT       = "private_key_jwt"
 	jwtBearerAssertion  = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-	assertionMaxLife    = 5 * time.Minute
+	assertionMaxLife    = time.Hour
 	assertionClockSkew  = 60 * time.Second
 	clientJWKSTTL       = 10 * time.Minute
 	clientJWKSMaxBytes  = 64 << 10
@@ -196,18 +196,22 @@ func (s *Server) verifyAssertion(ctx context.Context, doc cimdDoc, clientID, tok
 	switch {
 	case c.Iss != clientID || c.Sub != clientID:
 		return errors.New("client_assertion: iss and sub must be the client_id")
-	case !c.audIn(tokenURL, issuer):
-		return errors.New("client_assertion: aud must be the token endpoint")
+	case !c.audIn(tokenURL, issuer, issuer+"/mcp"):
+		return fmt.Errorf("client_assertion: aud %s is not this server's (%s)", string(c.Aud), tokenURL)
 	case c.Exp == 0 || n > c.Exp+int64(assertionClockSkew/time.Second):
 		return errors.New("client_assertion: expired")
 	case c.Exp > n+int64((assertionMaxLife+assertionClockSkew)/time.Second):
-		return errors.New("client_assertion: lives longer than 5 minutes")
+		return errors.New("client_assertion: lives longer than an hour")
 	case c.Nbf != 0 && n+int64(assertionClockSkew/time.Second) < c.Nbf:
 		return errors.New("client_assertion: not valid yet")
-	case c.Jti == "" || len(c.Jti) > 256:
-		return errors.New("client_assertion: jti is required")
+	case len(c.Jti) > 256:
+		return errors.New("client_assertion: jti too long")
 	}
-	// once, on every replica: the jti's hash is a row until it expires
+	// once, on every replica: the jti's hash is a row until it expires (RFC
+	// 7523 makes jti optional; without one, the short life is the bound)
+	if c.Jti == "" {
+		return nil
+	}
 	if err := s.Store.PutOAuthToken(HashToken("jti\x00"+clientID+"\x00"+c.Jti), "", "jti",
 		time.Unix(c.Exp, 0).Add(assertionClockSkew)); err != nil {
 		return errors.New("client_assertion: jti already used")

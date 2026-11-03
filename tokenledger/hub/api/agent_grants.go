@@ -134,8 +134,13 @@ func (s *Server) handleMeAgents(w http.ResponseWriter, r *http.Request) {
 				out = append(out, viewAgentGrant(g))
 			}
 		}
+		// why an agent did not connect, the hub's own words (task T4DN)
+		fails, err := s.Store.OAuthFailures(person, 10)
+		if err != nil {
+			fails = []store.OAuthFailure{}
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"agents": out,
-			"permissions": agentPermissionOrder, "mcp_url": s.mcpURL(r)})
+			"permissions": agentPermissionOrder, "mcp_url": s.mcpURL(r), "failures": fails})
 	case http.MethodPost:
 		var in struct {
 			Name        string   `json:"name"`
