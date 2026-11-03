@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { compactRows, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, scheduleCard, scheduleLabel, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
+import { compactRows, descendants, fromLine, fromRow, sessionTree, treeAt, treeContext, treeLines, treeOpenByDefault, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, scheduleCard, scheduleLabel, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
 
 const tr2 = (w) => (w ? w.join('|') : '');
 const F = '5b1e0000-0000-4000-8000-00000000f001';
@@ -212,8 +212,11 @@ for (const c of policyCases) {
   const groups = compactRows(input, { current: c.current, preferences: c.preferences, now: c.now * 1000 });
   assert.deepEqual([...groups.pin, ...groups.open].map(r => r.id), c.visible, c.name);
   assert.deepEqual(groups.gone.map(r => r.id), c.more, c.name);
-  const sourced = [...groups.sources.agent, ...groups.sources.schedule, ...groups.sources.api];
-  for (const k of ['agent', 'schedule', 'api']) assert.deepEqual(groups.sources[k].map(r => r.id), c.sources[k], `${c.name}: ${k}`);
+  const sourced = [...groups.sources.schedule, ...groups.sources.api];
+  // a session's own (agent) has no group of its own any more: the main list, under its opener
+  assert.equal(groups.sources.agent, undefined, `${c.name}: no agent group`);
+  assert.deepEqual(c.sources.agent, [], `${c.name}: the fixture names no agent group`);
+  for (const k of ['schedule', 'api']) assert.deepEqual(groups.sources[k].map(r => r.id), c.sources[k], `${c.name}: ${k}`);
   assert.deepEqual([...groups.pin, ...groups.open, ...sourced].filter(needsAttention).map(r => r.id), c.attention, c.name);
   assert.equal(new Set([...groups.pin, ...groups.open, ...groups.gone, ...sourced].map(r => r.id)).size, input.length);
   assert.equal(searchRows([...groups.pin, ...groups.open, ...groups.gone, ...sourced], '').length, input.length);
@@ -275,3 +278,119 @@ assert.equal(compactRows(changedRows,{now,previous:frozen,interacting:true,curre
   assert.equal(card.asking, 1);
 }
 console.log('session-list: schedule runs OK');
+
+// 子会话挂在发起会话下面: a session another opened hangs under it — ordered by
+// the tree's activity, folded unless something under it works or asks, one
+// asking the person never hidden, at most two steps in; an older hub's rows
+// (no `from`) stay exactly as flat as before, and there is no 会话派出的 group.
+{
+  const T = (id, b = {}, x = {}) => ({ id, code: '', title: `t-${id}`, glyph: 'idle', tone: 'muted', group: 'queue', tag: ['空闲', 'Idle'],
+    line: '', quote: false, kids: [], at: (b.activity_at || 0) * 1000, ...x, board: { id, title: `t-${id}`, group: 'queue', tag: 'idle', words: ['空闲', 'Idle'], at: 0, ...b } });
+  const kid = (id, parent, b = {}, x = {}) => T(id, { parent, from: `fid-${parent}`, source: 'agent', ...b }, x);
+  const ids = (rs) => rs.map((r) => r.id);
+  const nowS = Math.floor(now / 1000);
+
+  // roots by tree_at: an old opener whose child just spoke passes a newer idle root;
+  // siblings by their own tree_at; a subtree never leaves its root
+  const rows = [
+    T('a', { activity_at: nowS - 300, tree_at: nowS - 10 }),
+    T('b', { activity_at: nowS - 100 }),
+    kid('a1', 'a', { activity_at: nowS - 200 }),
+    kid('a2', 'a', { activity_at: nowS - 50, tree_at: nowS - 10 }),
+    kid('a2x', 'a2', { activity_at: nowS - 10 }),
+  ];
+  const g = compactRows(rows, { now });
+  assert.deepEqual(ids(g.open), ['a', 'b'], 'roots only, by tree activity');
+  assert.deepEqual(ids(g.tree.kids.get('a')), ['a2', 'a1'], 'siblings newest tree first');
+  assert.equal(treeAt(g.tree)(rows[0]), (nowS - 10) * 1000);
+  const zt = [T('z', { activity_at: 5 }), kid('z1', 'z', { activity_at: 9 })];
+  assert.equal(treeAt(sessionTree(zt))(zt[0]), 9000, 'no tree_at: the newest of the subtree');
+  assert.deepEqual(ids(descendants(g.tree, rows[0])), ['a2', 'a2x', 'a1'], 'depth first');
+
+  // folding: nothing under it working or asking ⇒ folded, (N) of what is hidden, a grey ▸
+  const folded = treeLines(g.open, g.tree);
+  assert.deepEqual(folded.map((l) => [l.r.id, l.depth, l.kids, l.open, l.hidden, l.hiddenWork]), [['a', 0, 2, false, 3, false], ['b', 0, 0, false, 0, false]]);
+  assert.equal(treeOpenByDefault(g.tree, rows[0]), false);
+  // a person's toggle wins; open shows each level, at most two steps in
+  const opened = treeLines(g.open, g.tree, { a: true, a2: true });
+  assert.deepEqual(opened.map((l) => [l.r.id, l.depth]), [['a', 0], ['a2', 1], ['a2x', 2], ['a1', 1], ['b', 0]]);
+  const deep = [T('d0', { activity_at: 4 }), kid('d1', 'd0', { activity_at: 3 }), kid('d2', 'd1', { activity_at: 2 }), kid('d3', 'd2', { activity_at: 1 })];
+  const dt = sessionTree(deep);
+  assert.deepEqual(treeLines([deep[0]], dt, { d0: true, d1: true, d2: true }).map((l) => l.depth), [0, 1, 2, 2], 'depth ≥ 2 drawn at 2');
+
+  // working under it: open by default; folded by hand, the ▸ goes green
+  const busy = rows.map((r) => r.id === 'a1' ? { ...r, board: { ...r.board, running: true } } : r);
+  const bt = sessionTree(busy);
+  assert.equal(treeOpenByDefault(bt, busy[0]), true);
+  assert.equal(treeLines([busy[0]], bt)[0].open, true);
+  const shut = treeLines([busy[0]], bt, { a: false })[0];
+  assert.deepEqual([shut.open, shut.hidden, shut.hiddenWork], [false, 3, true], 'folded with a working one inside: green');
+  assert.equal(treeLines([busy[0]], bt, { a: true, a2: false }).find((l) => l.r.id === 'a2').hiddenWork, false, 'only what is hidden counts');
+
+  // asking the person: never hidden, even folded by hand, drawn at its depth; not counted as hidden
+  const ask = rows.map((r) => r.id === 'a2x' ? { ...r, board: { ...r.board, state: 'needs' } } : r);
+  const at2 = sessionTree(ask);
+  assert.equal(treeOpenByDefault(at2, ask[0]), true);
+  const forced = treeLines([ask[0]], at2, { a: false });
+  assert.deepEqual(forced.map((l) => [l.r.id, l.depth]), [['a', 0], ['a2x', 2]]);
+  assert.equal(forced[0].hidden, 2);
+  // and never in More: an idle root days old stays shown while one under it asks
+  const stale = ask.map((r) => ({ ...r, board: { ...r.board, activity_at: nowS - 3 * 86400, tree_at: undefined } }));
+  const filler = Array.from({ length: 12 }, (_, i) => T(`f${i}`, { activity_at: nowS - i }));
+  const kept = compactRows([...stale, ...filler], { now });
+  assert.ok(ids(kept.open).includes('a') && !ids(kept.gone).includes('a'), 'a tree holding an ask is never folded into More');
+  assert.ok(!ids(kept.open).includes('a2x') && !ids(kept.gone).includes('a2x'), 'a child is never a top-level row');
+
+  // PIN: a pinned opener takes its subtree; the subtree stays out of the time order
+  const pinned = compactRows(rows.map((r) => r.id === 'a' ? { ...r, group: 'pin' } : r), { now });
+  assert.deepEqual([ids(pinned.pin), ids(pinned.open)], [['a'], ['b']]);
+  assert.deepEqual(treeLines(pinned.pin, pinned.tree, { a: true }).map((l) => l.r.id), ['a', 'a2', 'a1']);
+
+  // holding still while pointed at: a subtree moves with its root, a row nested since leaves the top
+  const before = compactRows([T('p', { activity_at: nowS - 5 }), T('q', { activity_at: nowS - 1 })], { now });
+  const after = compactRows([T('p', { activity_at: nowS - 5 }), kid('q', 'p', { activity_at: nowS })], { now, previous: before, interacting: true });
+  assert.deepEqual(ids(after.open), ['p']);
+  assert.deepEqual(ids(after.tree.kids.get('p')), ['q']);
+
+  // a session's own (agent) is an ordinary row: no group of its own
+  const loose = compactRows([T('mine', { activity_at: nowS - 2 }), T('bot', { source: 'agent', from: 'fid-x', activity_at: nowS - 1 })], { now });
+  assert.deepEqual(ids(loose.open), ['bot', 'mine']);
+  assert.deepEqual(Object.keys(loose.sources).sort(), ['api', 'schedule']);
+
+  // a live child of an ended opener: not nested (the hub sends no parent), 来自 X（已结束）under it
+  const orphan = T('live', { from: 'fid-old', from_title: '老会话', from_ended: true, activity_at: nowS });
+  const ended = T('old', { history: { id: 'fid-old', status: 'ended' } }, { group: 'gone' });
+  const ot = sessionTree([orphan, ended]);
+  assert.equal(ot.up.size, 0);
+  assert.match(fromLine(ot, orphan), /^(来自 老会话（已结束）|From 老会话 \(ended\))$/);
+  assert.equal(fromRow([orphan, ended], orphan), ended, 'its history row is the way to it');
+  assert.equal(fromRow([orphan], orphan), undefined, 'none: plain text');
+  assert.equal(fromLine(ot, { ...orphan, board: { ...orphan.board, from_title: '' } }), '', 'no title: no line');
+  assert.equal(fromLine(ot, { ...orphan, board: { ...orphan.board, from_ended: false } }), '', 'a live opener elsewhere says nothing');
+  assert.equal(fromLine(g.tree, rows[2]), '', 'a nested one says nothing: it hangs under it');
+
+  // search: a hit under another names it — 父标题 › 子标题 — and a folded one is found
+  assert.equal(treeContext(g.tree, rows[4]), 't-a2');
+  assert.equal(treeContext(g.tree, rows[0]), '');
+  assert.deepEqual(ids(searchRows(rows, 't-a2x')), ['a2x']);
+
+  // an older hub: `parent` without `from` (an EPIC's members) — flat, exactly as before
+  const oldGroups = compactRows(boardRows(board, tasks, live), { now });
+  assert.equal(oldGroups.tree.kids.size, 0);
+  const stripped = compactRows(boardRows(board, tasks, live).map((r) => ({ ...r, parent: undefined, board: r.board && { ...r.board, parent: undefined, depth: undefined } })), { now });
+  for (const k of ['pin', 'open', 'gone']) assert.deepEqual(ids(oldGroups[k]), ids(stripped[k]), `old hub ${k}`);
+  assert.deepEqual(treeLines(oldGroups.open, oldGroups.tree).map((l) => [l.depth, l.kids]), oldGroups.open.map(() => [0, 0]));
+  // a schedule run is never an opener here: its runs live in the ⏰ card
+  assert.equal(sessionTree([T('run', { source: 'schedule' }), kid('sub', 'run')]).up.size, 0);
+  // a cycle a cached board might carry is cut, never looped
+  assert.ok(sessionTree([kid('x', 'y'), kid('y', 'x')]).up.size < 2);
+
+  // the row: ▾ / ▸ before the title, (N) after it, asking said by colour, no 会话派出的 group
+  assert.ok(!src.includes('会话派出的') && !src.includes('From sessions'), 'no 会话派出的 group');
+  const rowSrc = src.slice(src.indexOf('const Twisty: FC'), src.indexOf('const WebChatRow'));
+  assert.ok(rowSrc.includes('"▾"') && rowSrc.includes('"▸"') && rowSrc.includes('text-ok'), 'the twisty and its green');
+  assert.ok(rowSrc.indexOf('<Twisty') < rowSrc.indexOf('{it.title}') && rowSrc.indexOf('{it.title}') < rowSrc.indexOf('({line.hidden})'));
+  assert.ok(rowSrc.includes('asking && "text-clay"'), 'the title in the ask colour');
+  for (const w of ['在问你', 'Asking', '⚑', '↳']) assert.ok(!rowSrc.includes(w), `a row draws no ${w}`);
+}
+console.log('session-list: session tree OK');

@@ -477,7 +477,7 @@
     }
   },
   {
-    "name": "sources group apart, newest first, asking counted",
+    "name": "schedule and API group apart, newest first; a session's own (agent) is the main list",
     "rows": [
       {
         "id": "mine",
@@ -530,14 +530,13 @@
     "visible": [
       "pinned-bot",
       "mine",
-      "mine-old"
+      "bot-new",
+      "mine-old",
+      "bot-old"
     ],
     "more": [],
     "sources": {
-      "agent": [
-        "bot-new",
-        "bot-old"
-      ],
+      "agent": [],
       "schedule": [
         "nightly"
       ],
@@ -564,7 +563,7 @@
         "group": "queue",
         "state": "idle",
         "activity_at": 1799999000,
-        "source": "agent"
+        "source": "api"
       }
     ],
     "current": "bot",
@@ -573,11 +572,11 @@
     ],
     "more": [],
     "sources": {
-      "agent": [
-        "bot"
-      ],
+      "agent": [],
       "schedule": [],
-      "api": []
+      "api": [
+        "bot"
+      ]
     },
     "shown_in_group": [
       "bot"

@@ -54,6 +54,11 @@ export type BoardRow = {
   id: string; code?: string; task?: string; task_id?: string; title: string; group: BoardGroup; tag: string;
   words: [string, string]; state?: string; worker_id?: string; machine?: string; login?: string; repo?: string;
   parent?: string; depth?: number; lost?: boolean; at: number; activity_at?: number;
+  // the session tree: who opened it (`from`, its fleet id — set even when not
+  // nested), that session's title and whether it has ended; tree_at = the newest
+  // activity of this row and everything nested under it (epoch s). Absent on an
+  // older hub: the list stays flat.
+  from?: string; from_title?: string; from_ended?: boolean; tree_at?: number;
   loop?: boolean; // explicit recurring plan, never inferred from looping observation
   running?: boolean; // native execution/background activity observation
   pending_start?: boolean; // accepted execution request with no confirmed native start

@@ -38,7 +38,7 @@ import { NewDialog, reposOf } from "../NewDialog";
 import { GLYPH, TONE } from "../SessionList";
 import { useWorkRows } from "../work-rows";
 import { CopyLine, useInstallLine } from "../cli";
-import { openLine } from "../session-list";
+import { openLine, sessionTree, treeAt } from "../session-list";
 import { GROUPS, findRow, messagesOf, nestedKids, rowOf, rowsIn, taskWords, type Row, type Tone } from "../work";
 
 const BADGE: Record<Tone, string> = {
@@ -213,8 +213,14 @@ const CliAccess: FC<{ r: Row }> = ({ r }) => {
 const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => void; onReap: (r: Row) => void; onResume: (r: Row) => void; onTerminal?: () => void; cli?: boolean }> = ({ r, stale, busy, onOpen, onReap, onResume, onTerminal, cli }) => {
   const t = r.task, s = r.live || r.ended;
   // a machine's name only for a person with more than one (会话合一 Y01K)
-  const { machines } = useWorkRows();
+  const { machines, rows: all } = useWorkRows();
   const machine = machines > 1 ? machineOf(r) : "";
+  // the session tree: the session that opened this one, and the ones it opened
+  const tree = useMemo(() => sessionTree(all || []), [all]);
+  const opener = tree.up.get(r.id);
+  const opened = tree.kids.get(r.id) || [];
+  const treeTime = treeAt(tree);
+  const members = r.kids.filter((k) => tree.up.get(k.id)?.id !== r.id); // an EPIC's, not the tree's
   const pr = t ? taskPR(t) : null;
   const landing = t ? taskLanding(t) : "";
   const ticket = t ? taskTicket(t) : null;
@@ -223,6 +229,9 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
   return (
     <div className="min-w-0 max-w-full space-y-5 break-words">
       <div className="space-y-1">
+        {opener ? <p className="text-muted-foreground min-w-0 truncate text-sm" data-testid="tree-crumb">
+          {tr("来自 ", "From ")}<button type="button" onClick={() => onOpen(opener)} className={linkCls}>{opener.title}</button> › {r.title}
+        </p> : null}
         <div className="flex min-w-0 max-w-full items-baseline gap-2 pe-6">
           {r.code ? <span className="text-clay shrink-0 font-mono text-sm">{r.code}</span> : null}
           <h2 className="font-display min-w-0 flex-1 text-xl leading-snug font-semibold [overflow-wrap:anywhere]">{r.title}</h2>
@@ -264,9 +273,20 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
         {/^[\w.-]+\/[\w.-]+$/.test(ticket.repo) ? <a href={`https://github.com/${ticket.repo}/issues/${ticket.n}`} target="_blank" rel="noopener noreferrer" className={cn(linkCls, "break-all")}>
           {ticket.repo}#{ticket.n} <ArrowUpRight className="inline size-3.5" aria-hidden /></a> : <span className="break-all">{ticket.repo}#{ticket.n}</span>}
       </Field> : null}
-      {!cli && r.kids.length ? <Field label={tr(`成员 ${r.kids.length}`, `Members ${r.kids.length}`)}>
+      {opened.length ? <Field label={tr(`派出的会话 · ${opened.length}`, `Sessions it opened · ${opened.length}`)}>
+        <div className="divide-y rounded-lg border" data-testid="tree-kids">
+          {opened.map((k) => {
+            const Icon = GLYPH[k.glyph];
+            return <button key={k.id} type="button" onClick={() => onOpen(k)} className="hover:bg-muted/60 flex w-full items-center gap-2 px-3 py-2 text-left">
+              <Icon className={cn("size-4 shrink-0", TONE[k.tone])} aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{k.title}</span><span className="text-muted-foreground shrink-0 text-xs">{ago(new Date(treeTime(k)).toISOString())}</span>
+            </button>;
+          })}
+        </div>
+      </Field> : null}
+      {!cli && members.length ? <Field label={tr(`成员 ${members.length}`, `Members ${members.length}`)}>
         <div className="divide-y rounded-lg border">
-          {r.kids.map((k) => {
+          {members.map((k) => {
             const Icon = GLYPH[k.glyph];
             return <button key={k.id} type="button" onClick={() => onOpen(k)} className="hover:bg-muted/60 flex w-full items-center gap-2 px-3 py-2 text-left">
               <Icon className={cn("size-4 shrink-0", TONE[k.tone])} aria-hidden /><span className="text-clay font-mono text-xs">{k.code}</span>

@@ -697,12 +697,15 @@ def produce(fleet, kept=False):
 
 
 def windows(fleet):
-    """{window id: (fleet_id, role, activity)} of the fleet session."""
-    rc, out = tm("list-windows", "-t", "=" + fleet, "-F", "#{window_id}|#{@fleet_id}|#{@fleet_role}|#{window_activity}")
+    """{window id: (fleet_id, role, activity, from_fid)} of the fleet session —
+    from_fid the @fleet_id of the session that opened it (its spawn / task tool;
+    the session tree's local half, no hub needed)."""
+    rc, out = tm("list-windows", "-t", "=" + fleet, "-F",
+                 "#{window_id}|#{@fleet_id}|#{@fleet_role}|#{window_activity}|#{@from_fid}")
     res = {}
     for line in out.splitlines() if rc == 0 else []:
-        w, fid, role, act = (line.split("|") + ["", "", ""])[:4]
-        res[w] = (fid, role, int(act) if act.isdigit() else 0)
+        w, fid, role, act, frm = (line.split("|") + ["", "", "", ""])[:5]
+        res[w] = (fid, role, int(act) if act.isdigit() else 0, frm)
     return res
 
 
@@ -2118,6 +2121,11 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         e["scheduled"] = bool(f[25].strip())
         # the window's own ID (EPIC T497 C3): its short code, ledger agent and result
         id_apply(e, wins.get(target, ("", "", 0))[0] if local else far_fid(target), known)
+        # who opened it (the session tree): the opener's @fleet_id, matched in
+        # compact_task_list when the hub has not said its parent
+        frm = (tuple(wins.get(target) or ()) + ("", "", "", ""))[3] if local else ""
+        if frm:
+            e["from"] = frm
         if not e["repo"]:
             norepo.append(e)
         if e["state"] != state:
@@ -2420,6 +2428,16 @@ def board_apply(board, groups, shut, gone, here, me):
             e["agent_words"] = r.get("agent_words")
         e["activity_at"] = r.get("activity_at") or r.get("at") or 0
         e["source"] = r.get("source") if r.get("source") in SOURCES else ""
+        # the session tree (hub board rows; every field optional — an older hub
+        # sends none and the list is flat): the row it nests under, who opened it
+        e["tree_parent"] = r.get("parent") or ""
+        for k in ("from", "from_title"):
+            if r.get(k):
+                e[k] = r[k]
+        if "from_ended" in r:
+            e["from_ended"] = r["from_ended"] is True
+        if isinstance(r.get("tree_at"), (int, float)):
+            e["tree_at"] = int(r["tree_at"])
         e["schedule_id"] = r.get("schedule_id") or ""
         e["list_preferences"] = board.get("session_list")
         e["attention_error"] = r.get("why_tone") == "red" or r.get("tag") in ("failed", "refused")
@@ -2804,6 +2822,9 @@ def list_preferences(value=None):
 
 
 SOURCES = ("agent", "schedule", "api")
+# the sources that are a folded section of their own: a session's spawn / task
+# tool ("agent") is not one — its rows nest under the session that opened them
+SECTION_SOURCES = ("schedule", "api")
 
 
 def source_label(k):
@@ -2821,18 +2842,19 @@ def schedule_label(title):
     return SCHEDULE_DAY_RE.sub("", title or "").strip() or (title or "")
 
 
-def schedule_runs(group, keep=()):
+def schedule_runs(group, keep=(), lift=None):
     """One schedule, one line (X24T) — session-list.ts scheduleRuns: the runs of
     a newest-first group under their schedule (the hub's schedule_id, else the
     title without its day), each [key, label, shown, older]; shown = the newest
-    run, any run working or asking the person, and the rows in `keep`."""
+    run, any run working or asking the person, and the rows in `keep`. `lift`
+    (row ⇒ bool) widens «working or asking» to a row's whole session tree."""
     out = {}
     for e in group:
         label = schedule_label(e.get("text") or e.get("name") or "")
         key = e.get("schedule_id") or "title:" + label
         g = out.setdefault(key, [key, label, [], []])
-        lift = not g[2] or needs_attention(e) or task_status(e) in ("work", "pending") or e["target"] in keep
-        (g[2] if lift else g[3]).append(e)
+        up = lift(e) if lift else (needs_attention(e) or task_status(e) in ("work", "pending") or e["target"] in keep)
+        (g[2] if not g[2] or up else g[3]).append(e)
     return list(out.values())
 
 
@@ -2841,7 +2863,201 @@ def needs_attention(e):
            (e.get("state") == "failed" or e.get("attention_error")))
 
 
-def compact_task_list(items, current="", preferences=None, now=None, selected=""):
+# --- the session tree: a row opened by another session sits under it ------------------
+# The hub's board row says `parent` (the row it nests under — never a live child
+# under an ended parent), `from` / `from_title` / `from_ended` (who opened it) and
+# `tree_at` (the newest activity in its subtree); without them, a window here says
+# @from_fid and the same rule is applied to the rows of this list. Drawn inside
+# the title column: a tree prefix (├ └ │), a two-cell twisty slot (▾ ▸ or blank),
+# the title — at most two levels, a deeper one drawn at the second.
+TREE_GLYPHS = {"open": "▾", "shut": "▸", "mid": "├ ", "end": "└ ", "bar": "│ "}
+TREE_GLYPHS_ASCII = {"open": "v", "shut": ">", "mid": "|-", "end": "`-", "bar": "| "}
+
+
+def tree_glyphs():
+    return TREE_GLYPHS_ASCII if os.environ.get("FLEET_GLYPHS") == "ascii" else TREE_GLYPHS
+
+
+def tree_key(e):
+    """A row's node name in the tree: its board row ID (= its session's fid)."""
+    return e.get("board") or e.get("fid") or e.get("target") or ""
+
+
+def tree_over(e):
+    """A row whose session is over: a live child is never nested under it."""
+    return bool(e.get("gone") or e.get("ended") or e.get("archived"))
+
+
+def tree_link(rows):
+    """{id(row): [child rows]} and the roots, in `rows`' order. A pinned row
+    under an unpinned parent stays a root (in PIN); a cycle is cut."""
+    by, by_fid = {}, {}
+    for e in rows:
+        by.setdefault(tree_key(e), e)
+        if e.get("fid"):
+            by_fid.setdefault(e["fid"], e)
+    up = {}
+    for e in rows:
+        p = by.get(e.get("tree_parent") or "") if e.get("tree_parent") else None
+        if p is None and not e.get("tree_parent") and e.get("from"):
+            # no hub word: the opener among this list's rows (@from_fid)
+            o = by_fid.get(e["from"]) or by.get(e["from"])
+            if o is not None and o is not e:
+                if tree_over(o):
+                    if not e.get("from_title"):
+                        e["from_title"] = o.get("text") or o.get("name") or ""
+                    e.setdefault("from_ended", True)
+                else:
+                    p = o
+        if p is None or p is e or (e.get("group") == "pin" and p.get("group") != "pin"):
+            continue
+        up[id(e)] = p
+    for e in rows:
+        seen, x = {id(e)}, up.get(id(e))
+        while x is not None:
+            if id(x) in seen:
+                up.pop(id(e), None)
+                break
+            seen.add(id(x))
+            x = up.get(id(x))
+    kids = {}
+    for e in rows:
+        if id(e) in up:
+            kids.setdefault(id(up[id(e)]), []).append(e)
+    return kids, [e for e in rows if id(e) not in up]
+
+
+def tree_times(rows, kids):
+    """{id(row): its subtree's newest activity} — the hub's tree_at, else the
+    row's own and its descendants'; and each kid list sorted newest first (only
+    when any activity is known — an older node keeps its source order)."""
+    at = {}
+
+    def walk(e):
+        if id(e) not in at:
+            at[id(e)] = max([int(e.get("tree_at") or 0), int(e.get("activity_at") or 0)] +
+                            [walk(k) for k in kids.get(id(e), [])])
+        return at[id(e)]
+    for e in rows:
+        walk(e)
+    for lst in kids.values():
+        if any(at[id(k)] for k in lst):
+            lst.sort(key=lambda k: (-at[id(k)], k.get("fid") or k["target"]))
+    return at
+
+
+def tree_desc(e, kids):
+    """Every row under `e`, preorder."""
+    out, todo = [], list(reversed(kids.get(id(e), [])))
+    while todo:
+        x = todo.pop()
+        out.append(x)
+        todo.extend(reversed(kids.get(id(x), [])))
+    return out
+
+
+def tree_default_open(desc):
+    """Open while anything under it runs, is about to, or asks the person."""
+    return any(task_status(d) in ("work", "pending", "needs") for d in desc)
+
+
+def tree_emit(root, kids, folds):
+    """`root` and its subtree as drawn: each row with tree_prefix / tree_twisty
+    (open · shut · "") / tree_hidden_n / tree_hidden_work, tree_up (the row a ←
+    folds), tree_opener (+ its title: the row g goes to); a row a shut ancestor
+    hides is kept with tree_hidden (search still finds it) — never one asking
+    the person, nor the rows above it. A from-line follows a row opened by a
+    session that is over."""
+    g = tree_glyphs()
+    folds = folds or {}
+    asking = lambda d: task_status(d) == "needs"
+
+    def opened(e, desc):
+        k = tree_key(e)
+        return bool(folds[k]) if k in folds else tree_default_open(desc)
+    lvl = [(k, tree_desc(k, kids)) for k in kids.get(id(root), [])]
+    every = [d for k, ds in lvl for d in [k] + ds]
+    root_open = opened(root, every)
+    plan = []
+    for k, ds in lvl:
+        k_open = opened(k, ds)
+        vis2 = [d for d in ds if (root_open and k_open) or asking(d)]
+        plan.append((k, ds, k_open, root_open or asking(k) or bool(vis2), vis2))
+    shown = {id(root)} | {id(k) for k, _, _, v, _ in plan if v} | {id(d) for p in plan for d in p[4]}
+    opener = {}
+    for x in [root] + every:
+        for c in kids.get(id(x), []):
+            opener[id(c)] = x
+
+    def mark(e, prefix, twisty, under, up, depth):
+        hid = [d for d in under if id(d) not in shown]
+        e.update(tree_prefix=prefix, tree_twisty=twisty if under else "", tree_depth=depth,
+                 tree_hidden_n=len(hid) if under and twisty == "shut" else 0,
+                 tree_hidden_work=bool(under) and twisty == "shut" and any(task_status(d) == "work" for d in hid),
+                 tree_hidden=id(e) not in shown, tree_key=tree_key(e), tree_up=tree_key(up) if up is not None else "")
+        op = opener.get(id(e))
+        e["tree_opener"] = tree_key(op) if op is not None else ""
+        e["tree_opener_title"] = (op.get("text") or op.get("name") or "") if op is not None else ""
+        return e
+    out = [mark(root, "", "open" if root_open else "shut", every, None, 0)]
+    if root.get("from_ended") and root.get("from_title"):
+        out.append({"kind": "from", "of": root["target"], "text": say("view_from_ended_fmt", root["from_title"])})
+    vis1 = [k for k, _, _, v, _ in plan if v]
+    for k, ds, k_open, _, vis2 in plan:
+        last1 = bool(vis1) and k is vis1[-1]
+        out.append(mark(k, "  " + (g["end"] if last1 else g["mid"]), "open" if root_open and k_open else "shut", ds, root, 1))
+        cont = "  " if last1 else g["bar"]
+        for d in ds:
+            last2 = bool(vis2) and d is vis2[-1]
+            out.append(mark(d, "  " + cont + "  " + (g["end"] if last2 else g["mid"]), "", [], k, 2))
+    return out
+
+
+def tree_arrow(e, right):
+    """→ (`right`) / ← on row `e`: (the row key to fold, open?) or None. → opens
+    a parent; ← shuts an open one, and on a child (or a parent already shut)
+    goes up to the row it hangs under and shuts that."""
+    if right:
+        return (e["tree_key"], True) if e.get("tree_twisty") else None
+    if e.get("tree_twisty") == "open" or (e.get("tree_twisty") and not e.get("tree_up")):
+        return e["tree_key"], False
+    return (e["tree_up"], False) if e.get("tree_up") else None
+
+
+def tree_at_row(shown, key, at):
+    """The index of the row named `key` (tree_key) in `shown`, else `at`."""
+    return next((i for i, x in enumerate(shown) if x["kind"] == "sess" and x.get("tree_key") == key), at)
+
+
+def tree_folds_file(fleet):
+    return views_dir() / ("tree-open-%s.json" % (fleet or "-"))
+
+
+def tree_folds_load(fleet):
+    """This view's own ▸ / ▾ choices, {row key: open} — a row never toggled
+    takes tree_default_open."""
+    try:
+        got = json.loads(tree_folds_file(fleet).read_text())
+    except (OSError, ValueError):
+        return {}
+    return {k: bool(v) for k, v in got.items() if isinstance(k, str)} if isinstance(got, dict) else {}
+
+
+def tree_toggle(folds, fleet, key, on, items=()):
+    """→ / ← on a parent: remembered per 看台 view; the choices for rows no longer
+    in the list are dropped as it is written. Returns the new choices."""
+    live = {tree_key(e) for e in items if e.get("kind") == "sess"}
+    folds = {k: v for k, v in (folds or {}).items() if not live or k in live}
+    folds[key] = bool(on)
+    try:
+        tree_folds_file(fleet).parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(tree_folds_file(fleet), json.dumps(folds, sort_keys=True))
+    except OSError:
+        pass
+    return folds
+
+
+def compact_task_list(items, current="", preferences=None, now=None, selected="", folds=None):
     """Presentation only: no lifecycle flags change when a live row is folded."""
     ordered = task_list(items)
     archived = [dict(e, sec="archived") for e in ordered if e["kind"] == "sess" and e.get("archived")]
@@ -2849,51 +3065,72 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     prefs = list_preferences(preferences if preferences is not None else
                              next((e.get("list_preferences") for e in rows if e.get("list_preferences")), None))
     now = time.time() if now is None else now
-    pin = [e for e in rows if e.get("group") == "pin"]
-    # who opened it (task DDBQ): a session's tool, a schedule or an API caller —
-    # each its own folded group, newest first; a person's is the main list
-    sourced = {k: [e for e in rows if e.get("group") != "pin" and e.get("source") == k] for k in SOURCES}
-    recent = [e for e in rows if e.get("group") != "pin" and e.get("source") not in SOURCES]
-    newest = lambda e: (-int(e.get("activity_at") or 0), e.get("fid") or e["target"])
-    if any(e.get("activity_at") for e in recent):
+    keep = (current, selected)
+    # the session tree: a row opened by another session travels under it — the
+    # folding, ordering and sections below are decided on the roots
+    kids, roots = tree_link(rows)
+    tat = tree_times(rows, kids)
+    whole = lambda e: [e] + tree_desc(e, kids)
+    pin = [e for e in roots if e.get("group") == "pin"]
+    # who opened it (task DDBQ): a schedule or an API caller — each its own
+    # folded group, newest first; a person's and a session's are the main list
+    sourced = {k: [e for e in roots if e.get("group") != "pin" and e.get("source") == k] for k in SECTION_SOURCES}
+    recent = [e for e in roots if e.get("group") != "pin" and e.get("source") not in SECTION_SOURCES]
+    newest = lambda e: (-tat[id(e)], e.get("fid") or e["target"])
+    if any(tat[id(e)] for e in recent):
         recent.sort(key=newest)
     # One order (task DDBQ): no group lifts a row that needs the person —
-    # entering needs is itself activity — but such a row is never folded.
-    protected = {e["target"] for e in recent if e["target"] in (current, selected) or needs_attention(e)}
+    # entering needs is itself activity — but such a row (or a tree holding
+    # one) is never folded.
+    protected = {id(e) for e in recent if any(x["target"] in keep or needs_attention(x) for x in whole(e))}
     room = max(0, prefs["max_visible"] - len(pin) - len(protected))
     ordinary, history = [], []
     for e in recent:
-        at = e.get("activity_at") or 0
-        expired = prefs["idle_hours"] and at and now - at >= prefs["idle_hours"] * 3600 and task_status(e) not in ("work", "pending")
-        if e["target"] in protected or (e.get("sec") != "gone" and not expired and room > 0):
-            e.pop("sec", None)
+        at = tat[id(e)]
+        expired = prefs["idle_hours"] and at and now - at >= prefs["idle_hours"] * 3600 and \
+            not any(task_status(x) in ("work", "pending") for x in whole(e))
+        if id(e) in protected or (e.get("sec") != "gone" and not expired and room > 0):
             ordinary.append(e)
-            if e["target"] not in protected:
+            if id(e) not in protected:
                 room -= 1
         else:
-            e["list_folded"] = e.get("sec") != "gone"
-            e["sec"] = "gone"
             history.append(e)
     out = []
+
+    def put(root, sec=None, folded=False, **extra):
+        """The tree under `root` as drawn, every row of it in `sec` (None: shown;
+        the one open now stays shown in a source group); `folded` = moved to 更多会话
+        (list_folded: the list's choice, not the session's lifecycle)."""
+        for x in tree_emit(root, kids, folds):
+            if x["kind"] == "sess":
+                if folded:
+                    x["list_folded"] = x.get("sec") != "gone"
+                x.pop("sec", None)
+            if sec and (folded or x.get("target", x.get("of")) not in keep):
+                x["sec"] = sec
+                x.update(extra)
+            out.append(x)
     if pin:
-        out += [{"kind": "hdr", "group": "pin", "text": "PIN"}] + pin
-    out += ordinary
-    for k in SOURCES:
+        out.append({"kind": "hdr", "group": "pin", "text": "PIN"})
+        for e in pin:
+            put(e)
+    for e in ordinary:
+        put(e)
+    lift = lambda e: any(needs_attention(x) or task_status(x) in ("work", "pending") or x["target"] in keep
+                         for x in whole(e))
+    for k in SECTION_SOURCES:
         group = sorted(sourced[k], key=newest)
         if not group:
             continue
-        asking = sum(bool(needs_attention(e)) for e in group)
+        asking = sum(bool(needs_attention(x)) for e in group for x in whole(e))
         label = source_label(k) + " · %d" % len(group)
         if asking:
             label += (" · %d asking" if ui_lang() == "en" else " · %d 个在问你") % asking
         out.append({"kind": "sec", "sec": "src-" + k, "text": label, "n": len(group), "alert": bool(asking)})
-        runs = schedule_runs(group, (current, selected)) if k == "schedule" else [["", "", group, []]]
+        runs = schedule_runs(group, keep, lift) if k == "schedule" else [["", "", group, []]]
         for key, name, shown, folded in runs:
             for e in shown:
-                e.pop("sec", None)
-                if e["target"] not in (current, selected):
-                    e["sec"] = "src-" + k   # folded with its heading; the one open now stays shown
-                out.append(e)
+                put(e, "src-" + k)   # folded with its heading; the one open now stays shown
             if folded:
                 # one schedule, one line (X24T): its older runs behind a count,
                 # inside the group — shown only while the group is open too
@@ -2903,34 +3140,36 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
                             "text": "  " + name + (" · %d earlier run%s" % (n, "" if n == 1 else "s") if ui_lang() == "en"
                                                    else " · %d 次更早运行" % n)})
                 for e in folded:
-                    e.update(sec=sub, sec_parent="src-" + k)
-                    out.append(e)
+                    put(e, sub, sec_parent="src-" + k)
     older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:
-        running = sum(task_status(e) == "work" for e in history)
+        running = sum(task_status(x) == "work" for e in history for x in whole(e))
         label = ("More sessions" if ui_lang() == "en" else "更多会话") + " · %d" % len(history)
         if running:
             label += (" · %d running" if ui_lang() == "en" else " · %d 个运行中") % running
         out.append({"kind": "sec", "sec": "gone", "text": label, "n": len(history), "older": sum(e.get("n", 0) for e in older)})
-        out += history + older
+        for e in history:
+            put(e, "gone", folded=True)
+        out += older
     if archived:
         out.append({"kind": "sec", "sec": "archived", "text": "Archived" if ui_lang() == "en" else "已归档", "n": len(archived)})
         out += archived
     return out
 
 
-def visible(items, query, opened, current="", selected=""):
-    """Flat, single-line tasks; search includes folded history without opening it."""
-    items = compact_task_list(items, current, selected=selected)
+def visible(items, query, opened, current="", selected="", folds=None):
+    """Single-line tasks, a session's own under it; search includes folded
+    history and the rows a shut ▸ hides without opening either — drawn flat."""
+    items = compact_task_list(items, current, selected=selected, folds=folds)
     if query.split():
         hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess" and (not e.get("archived") or "archived" in opened)]
         toks = query.split()
         if len(toks) == 1 and any(e.get("open_id") and id_code_hit(toks[0].lower(), e) for _, _, e in hits):
             hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
-        return [e for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1]))]
+        return [dict(e, tree_flat=True) for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1]))]
     return [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
             for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)
-            and not (e.get("sec_parent") and e["sec_parent"] not in opened)]
+            and not (e.get("sec_parent") and e["sec_parent"] not in opened) and not e.get("tree_hidden")]
 
 
 def sec_fold(opened, sec, expand):
@@ -3004,8 +3243,27 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     used = sum(cells(t) for t, _ in segs)
     tail = (REPO_W + 2) if show_repo else 1
     room = max(1, width - used - tail)
-    name = clip_name(e.get("text") or "", room, cells, clip)
-    segs.append((name + " " * max(0, room - cells(name)), base))
+    # the title column (the session tree): its prefix, a two-cell twisty slot,
+    # the title — red/bold while it asks the person — and a shut one's (N)
+    tg = tree_glyphs()
+    flat = e.get("tree_flat")
+    twisty = "" if flat else (e.get("tree_twisty") or "")
+    prefix = clip("" if flat else (e.get("tree_prefix") or ""), room - 1)
+    slot = clip((tg[twisty] + " ") if twisty else "  ", max(0, room - 1 - cells(prefix)))
+    avail = room - cells(prefix) - cells(slot)
+    more = " (%d)" % e["tree_hidden_n"] if twisty == "shut" and e.get("tree_hidden_n") else ""
+    if cells(more) > avail - 2:
+        more = ""
+    name = clip_name(e.get("text") or "", avail - cells(more), cells, clip)
+    if prefix:
+        segs.append((prefix, base + ("dim",)))
+    if slot:
+        hot = col and twisty == "shut" and e.get("tree_hidden_work")
+        segs.append((slot, base + (("c2",) if hot else ("dim",))))
+    segs.append((name, base + (("c1", "bold") if col and sym == "needs" else ())))
+    if more:
+        segs.append((more, base + ("dim",)))
+    segs.append((" " * max(0, avail - cells(name) - cells(more)), base))
     if show_repo:
         r = ellipsis(e.get("repo") or "", REPO_W, cells, clip)
         segs.append((" " + r + " " * (REPO_W - cells(r)) + " ", base))
@@ -3095,6 +3353,10 @@ def paint(shown, at, width, cells, clip):
             continue
         if e["kind"] == "note":
             lines.append([(clip(" " * TEXT_X + e["text"], width), ("dim",))])
+            continue
+        if e["kind"] == "from":
+            # who opened the row above, a session that is over: under its title
+            lines.append([(fill(" " * (name_col(width) + 2) + e["text"], width, cells, clip), ("dim",))])
             continue
         lines.append(row_segs(e, width, cells, clip, lit))
     return lines
@@ -5831,7 +6093,7 @@ def bolt_cells(st, query):
     return cells, note
 
 
-def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur="", selected=""):
+def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur="", selected="", folds=None):
     """The full-width list projection. Composer controls belong to the overlay,
     never inserted rows; search words may seed an empty draft on explicit open.
     `busy` is retained for the command-line projection; the popup keeps its list
@@ -5840,7 +6102,7 @@ def panel_rows(items, query, opened, cmds=None, bolt=None, busy=None, cur="", se
     if "landed" in words:
         items = landed_first(items)
     q = query.strip()
-    rows = visible(items, query, opened, cur, selected)
+    rows = visible(items, query, opened, cur, selected, folds)
     # ONE order (T762): what is drawn top to bottom is what ↓ walks and ↑ walks
     # back — ✦ 消息 · ⚡ 新会话 · $ 命令行 on top, the sessions, then 置顶 · ◐ · ⏻
     top, bottom = [], []
@@ -6269,8 +6531,11 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
     loader = threading.Thread(target=grid_load, daemon=True)
 
     selected_target = land_at
+    # the session tree's ▸ / ▾ this view chose (tree_toggle writes them)
+    folds = tree_folds_load(fleet)
+
     def listing():
-        return panel_rows(items, query, opened, cmds, bolt, busy, cur, selected_target)
+        return panel_rows(items, query, opened, cmds, bolt, busy, cur, selected_target, folds)
 
     key_of = panel.key_of
 
@@ -6549,6 +6814,12 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         keys = say("view_keys_sending") if busy else say("view_keys_short")
         if not busy and not page and epic_folds(lit_e) and not query.split():
             keys = say("view_keys_epic") + "  " + keys
+        elif not busy and not page and lit_e.get("kind") == "sess" and not query.split():
+            # the session tree: a parent's → / ←, a child's opener and its g
+            if lit_e.get("tree_twisty"):
+                keys = say("view_keys_epic") + "  " + keys
+            if lit_e.get("tree_opener"):
+                keys = say("view_keys_tree_child_fmt", lit_e.get("tree_opener_title") or "") + "  " + keys
         hits, controls = {}, {}
         if page:
             # the page (plan B): its object on top — the session line as the list
@@ -6734,6 +7005,17 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                     top = panel.clamp_top(top + wheel, len(shown), body)
                     continue
                 i = top + my - off
+                tw = shown[i] if i < len(shown) and shown[i]["kind"] == "sess" else {}
+                if tw.get("tree_twisty") and not query.split() and \
+                        buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED) and \
+                        0 <= mx - name_col(width) - qo.cells(tw.get("tree_prefix") or "") < 2:
+                    # a click on a parent's ▸ / ▾ (the session tree) folds it — its
+                    # twisty sits after its tree prefix
+                    at, follow_list = i, False
+                    folds = tree_toggle(folds, fleet, tw["tree_key"], tw["tree_twisty"] == "shut", items)
+                    shown = listing()
+                    at = tree_at_row(shown, tw["tree_key"], at)
+                    continue
                 if i < len(shown) and epic_folds(shown[i]) and not query.split() and \
                         buttons & (curses.BUTTON1_CLICKED | curses.BUTTON1_RELEASED) and \
                         0 <= mx - name_col(width) < 2:
@@ -6835,6 +7117,20 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         if ch in (curses.KEY_UP, "\x10", curses.KEY_DOWN, "\x0e"):
             # as drawn, both ways round (T762) — no row is skipped or jumped to
             at = nav_step(shown, at, 1 if ch in (curses.KEY_DOWN, "\x0e") else -1)
+            follow_list = True
+            continue
+        tw = shown[at] if 0 <= at < len(shown) and shown[at]["kind"] == "sess" and not query.split() else {}
+        arrow = tree_arrow(tw, ch == curses.KEY_RIGHT) if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) else None
+        if arrow:
+            # the session tree: → opens a parent, ← shuts it; ← on a child goes up
+            # to the row it hangs under and shuts that — ↵ only ever opens
+            folds = tree_toggle(folds, fleet, arrow[0], arrow[1], items)
+            shown = listing()
+            at = tree_at_row(shown, arrow[0], at)
+            continue
+        if ch == "g" and tw.get("tree_opener") and not query:
+            # g on a child (the session tree): the cursor on the session that opened it
+            at = tree_at_row(shown, tw["tree_opener"], at)
             follow_list = True
             continue
         if ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and 0 <= at < len(shown) and shown[at]["kind"] == "sess" \

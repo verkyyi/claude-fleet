@@ -590,6 +590,12 @@ fleet_ui_t() {
     en:view_keys_match_fmt) printf '↵ go to %s  ↑ to + draft "%s"  esc close' "${1:-}" "${2:-}" ;;
     zh:view_keys_epic) printf '→ 展开 / ← 收起' ;;
     en:view_keys_epic) printf '→ expand / ← collapse' ;;
+    # the session tree: a child's opener on the keys line, g goes up to it; the
+    # dim line under a row whose opener is over
+    zh:view_keys_tree_child_fmt) printf '来自 %s  g 跳到它' "${1:-}" ;;
+    en:view_keys_tree_child_fmt) printf 'from %s  g go to it' "${1:-}" ;;
+    zh:view_from_ended_fmt) printf '来自 %s（已结束）' "${1:-}" ;;
+    en:view_from_ended_fmt) printf 'From %s (ended)' "${1:-}" ;;
     zh:view_keys_short) printf '↵ 进入/编辑  Tab 操作  ↑↓ 选  esc 关' ;;
     en:view_keys_short) printf '↵ go/edit  Tab act  ↑↓ pick  esc' ;;
     zh:view_keys_sending) printf '开窗中，esc 可以先关，文字只预填不发送' ;;
