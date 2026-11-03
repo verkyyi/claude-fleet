@@ -78,6 +78,13 @@
 #                         door route EntryReachFresh later — the hub re-dials a
 #                         pulling door's last addresses against its host key
 #                         (TestDoorPullKeepsItsReachFresh, a real sshd)
+#   door-wrong-cluster    pods in two clusters (task P0D4): every u-* pod went to the
+#                         first reachable door and every door got every pod, so an
+#                         AWS pod met the Shenzhen door — 「your pod does not answer」;
+#                         each door now carries its own cluster's pods
+#                         (fleet.door_cluster.<door>, the pod's fleet_cluster_pods row;
+#                         go test TestDoorPerClusterTwoDoors / …UnlabeledAsBefore /
+#                         …FallbackLogged)
 #   pod-relay-loopback    the relay into a person's pod (issue #4149): the pod's
 #                         agent splices it onto 127.0.0.1:2222, whose sshd once took
 #                         the door's key alone — a real sshd on pod_sshd_text: a hub-CA
@@ -1028,6 +1035,19 @@ drill_door_reach_stale() {
   gotest TestDoorPullKeepsItsReachFresh fleet_door_reach_test.go || return 1
   SECS=$(since "$t0")
   WHAT="门只在启动时报一次可达：20 分钟后入口里门的地址过期 ⇒ pod 没有门的路由；门来拉表 ⇒ 入口照门的钥匙重拨、路由回来，换了钥匙的不算；$GOHALF"
+}
+
+drill_door_wrong_cluster() {
+  CAP=60   # three Go tests
+  local t0 t g=""; t0=$(now)
+  grep -q 'DoorClusterPrefix' "$ROOT/tokenledger/hub/api/fleet_door.go" \
+    || { WHY="the hub has no per-cluster door (fleet.door_cluster.<door>): every pod goes to the first door"; return 1; }
+  for t in TestDoorPerClusterTwoDoors TestDoorPerClusterUnlabeledAsBefore TestDoorPerClusterFallbackLogged; do
+    gotest "$t" fleet_door_cluster_test.go || return 1
+    g="${g} ${GOHALF};"
+  done
+  SECS=$(since "$t0")
+  WHAT="两个集群各一扇门：ack-sz 的 pod 走深圳门、aws-usw2 的走 AWS 门，各门的名单只有本集群的 pod、DNS 各指各的门；没写集群 ⇒ 逐字节如前；本集群的门敲不到仍留在本集群并记一行，没门的集群按原逻辑并记一行;${g}"
 }
 
 drill_pod_relay_loopback() {

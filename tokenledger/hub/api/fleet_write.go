@@ -2294,6 +2294,18 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			body.Value = v
+		case strings.HasPrefix(body.Key, DoorClusterPrefix):
+			// The cluster a door stands in (task P0D4).
+			if d := body.Key[len(DoorClusterPrefix):]; !nodeNameRE.MatchString(d) || isUserPodName(d) {
+				httpError(w, http.StatusBadRequest, DoorClusterPrefix+"<door> names a door machine, not "+strconv.Quote(d))
+				return
+			}
+			v := strings.ToLower(strings.TrimSpace(body.Value))
+			if v != "" && (!clusterNameRE.MatchString(v) || isUserPodName(v)) {
+				httpError(w, http.StatusBadRequest, DoorClusterPrefix+"<door> is a cluster name (a-z 0-9 . -, the name its fleet-ops reports), or \"\" for none")
+				return
+			}
+			body.Value = v
 		case strings.HasPrefix(body.Key, CredPodProvidersPrefix) && clusterNameRE.MatchString(body.Key[len(CredPodProvidersPrefix):]):
 			// One cluster's pod providers (task J7BN), over fleet.cred_pod_providers.
 			if strings.TrimSpace(body.Value) != "" {
@@ -2324,7 +2336,7 @@ func (s *Server) handleFleetSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		default:
-			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+ClusterRegionPrefix+"<cluster>, "+CredPodProvidersPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+OrgBudgetPrefix+"<org>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>[.<tenant>], fleet.svc.<svc>.tenants, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
+			httpError(w, http.StatusBadRequest, "only fleet.node_cap.<machine>, "+SvcLoginsKey+", "+SvcPerLoginKey+", "+NodeUserCapPrefix+"<machine>, "+SpareMaxPrefix+"<cluster>, "+ClusterRegionPrefix+"<cluster>, "+DoorClusterPrefix+"<door>, "+CredPodProvidersPrefix+"<cluster>, "+NodeLoginPrefix+"<machine>, "+NodeMaintenancePrefix+"<machine>, "+NodeTrustPrefix+"<machine>, "+NodeRelayPrefix+"<machine> (\"\" only), "+ClientDefaultsPrefix+"<KEY>, "+PersonBudgetPrefix+"<principal>, "+OrgBudgetPrefix+"<org>, "+MemberLimitsPrefix+"<principal>, "+SvcBudgetPrefix+"<svc>, "+SvcTenantBudgetPrefix+"<svc>[.<tenant>], fleet.svc.<svc>.tenants, fleet.svc.<svc>.yield_pct, "+ComputeAutoKey+", "+userSettingPrefix+"<id>"+machineLoginSuffix+" and "+strings.Join(hubSettingKeys(), ", ")+" are settable")
 			return
 		}
 		now := time.Now()
