@@ -135,6 +135,8 @@ class ParentRetirement(unittest.TestCase):
         pane = tmux("display-message", "-p", "#{pane_id}")
         oldwin = tmux("display-message", "-p", "#{window_id}")
         tmux("set-option", "-p", "-t", pane, "@wrap_win", oldwin)
+        # a wrapper runs in it (PV5W: a stamp no live wrapper stands behind is dropped)
+        tmux("set-option", "-p", "-t", pane, "@session_wrap", str(os.getpid()))
         identity = {"@fleet_id": OLD, "@cc_session_id": "native-old", "@task": "T77", "@fleet_role": "worker"}
         ancestry = {"@origin": "issue-7", "@origin_fid": PARENT, "@origin_wid": "fleet/" + PARENT,
                     "@origin_gen": "3", "@origin_retired": "scratch-7#2"}
