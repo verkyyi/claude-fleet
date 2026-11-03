@@ -645,7 +645,7 @@ PY2
     || { WHY="a 426 everywhere was dialled ${n:-0} times under a stream of requests — want once or twice, then minutes"; pl_stop; return 1; }
   [ "$(pl_link mac-q@bob 'l["cause"]')" = http4xx ] \
     || { WHY="state.json names the cause [$(pl_link mac-q@bob 'l["cause"]')], want http4xx"; pl_stop; return 1; }
-  grep -q '^notify error 到 mac-q（bob）的连接断了 .*入口拒绝（4xx）' "$B/notices" 2>/dev/null \
+  until_ok 8 grep -q '^notify error 到 mac-q（bob）的连接断了 .*入口拒绝（4xx）' "$B/notices" \
     || { WHY="no notice naming the refusal: $(cat "$B/notices" 2>/dev/null)"; pl_stop; return 1; }
   grep -q '"event": "down", "cause": "http4xx"' "$B/conf/logs/peerlink.ndjson" \
     || { WHY="the ledger has no down/http4xx line"; pl_stop; return 1; }
