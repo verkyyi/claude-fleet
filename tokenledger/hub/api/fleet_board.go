@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -131,6 +132,8 @@ type BoardRow struct {
 	Source     string `json:"source,omitempty"`
 	parentTask string
 	fromID     string // the opener's ID before it is checked against this person's sessions
+	fromKey    string // an older record's opener by key (its dispatch request_id), when it has no ID
+	fromAt     int64  // that record's creation: the key's holder must be older
 	taskVia    string
 	taskAgent  bool
 }
@@ -418,6 +421,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if t != nil {
 			r.Task, r.TaskID, r.parentTask = t.Ref, t.FID, t.ParentTask
 			r.fromID = taskFromID(t)
+			if r.fromID == "" {
+				r.fromKey, r.fromAt = taskFromKey(t), t.CreatedAt.Unix()
+			}
 			r.taskVia, r.taskAgent = t.Via, t.ParentTask != "" || t.ParentSession != ""
 			r.ExecutionEndpoint = t.ExecutionEndpoint
 			r.CancelRequest, r.Generation = t.CancelRequest, t.Generation
@@ -722,7 +728,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		r.Source = boardSource(*r)
 	}
-	s.boardFrom(owner, kept)
+	s.boardFrom(owner, kept, live)
 	b := finishBoard(kept)
 	b.SessionList = SessionListPreferences{MaxVisible: 10, IdleHours: 24}
 	if owner != "" {
@@ -1038,12 +1044,78 @@ func taskFromID(t *store.FleetTask) string {
 	return p.FromFID
 }
 
+// fleetOrchRE reads a task tool's dispatch request_id: `orch:<caller key>:<16
+// hex>`, a blank session's with `-<n>` after it (fleet-task-record.sh dispatch).
+var fleetOrchRE = regexp.MustCompile(`^orch:(.+):[0-9a-f]{16}(?:-[0-9]+)?$`)
+
+// taskFromKey is the caller's key a record dispatched before from_fid existed
+// carries in its dispatch request_id (task PV5W): `<repo slug>:scratch-<N>`, a bare
+// key, or the caller's own ID; "" for anything else (⌘P, the web, `hub`).
+func taskFromKey(t *store.FleetTask) string {
+	if t == nil || !strings.Contains(t.RequestPayload, `"orch:`) {
+		return ""
+	}
+	var p struct {
+		Dispatch struct {
+			RequestID string `json:"request_id"`
+		} `json:"dispatch"`
+	}
+	if json.Unmarshal([]byte(t.RequestPayload), &p) != nil {
+		return ""
+	}
+	m := fleetOrchRE.FindStringSubmatch(p.Dispatch.RequestID)
+	if m == nil || m[1] == "hub" {
+		return ""
+	}
+	return m[1]
+}
+
+// fromByKey finds the live session that held a record's caller key when the
+// record was made (task PV5W): exactly one of this person's live sessions
+// answers to the key (a bare key: also `<slug>:<key>`) and was born before the
+// record. A recycled scratch number born after it, or two candidates, is
+// nothing — the row stays flat rather than hang under a guess.
+func fromByKey(key string, at int64, self string, live []FleetSession) string {
+	found := ""
+	for _, fs := range live {
+		w := fs.Worker
+		if w == nil {
+			continue
+		}
+		k, id := wstr(w, "key"), identityOf(w)
+		if id == "" || id == self || (k != key && (strings.Contains(key, ":") || !strings.HasSuffix(k, ":"+key))) {
+			continue
+		}
+		if born, ok := w["born"].(float64); !ok || born <= 0 || int64(born) > at {
+			continue
+		}
+		if found != "" && found != id {
+			return ""
+		}
+		found = id
+	}
+	return found
+}
+
 // boardFrom checks each row's opener against this person's own sessions (task
 // PV5W): a row on this list, else the person's ID ledger. Another person's ID, an
-// unknown one and the operator's door ("" — everyone's rows) draw no relation.
-func (s *Server) boardFrom(owner string, rows []BoardRow) {
+// unknown one and the operator's door ("" — everyone's rows) draw no relation. A
+// record from before from_fid names its caller by key: resolved through the
+// person's live sessions (fromByKey) first.
+func (s *Server) boardFrom(owner string, rows []BoardRow, live []FleetSession) {
 	if owner == "" {
 		return
+	}
+	for i := range rows {
+		r := &rows[i]
+		if r.fromID != "" || r.fromKey == "" {
+			continue
+		}
+		if store.IsFleetID(r.fromKey) {
+			r.fromID = r.fromKey
+		} else {
+			r.fromID = fromByKey(r.fromKey, r.fromAt, r.ID, live)
+		}
 	}
 	byID := map[string]*BoardRow{}
 	for i := range rows {
