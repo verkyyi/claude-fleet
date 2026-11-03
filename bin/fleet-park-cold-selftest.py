@@ -183,6 +183,21 @@ class Kept(unittest.TestCase):
         self.assertIn(self.fid, ids, 'the hub was told a cold park is gone')
         self.assertIn(fixture_fid(1), ids)
 
+    def test_reopen_of_a_cold_park_is_not_refused_as_open(self):
+        # the hub's live list counts a cold park; reopen must not: a cold park's
+        # wake IS its reopen (every cold park once answered «still open in a window»)
+        ids = self.root / 'conf/ids'
+        ids.mkdir(parents=True)
+        (ids / (self.fid + '.ndjson')).write_text('\n'.join(json.dumps(e) for e in [
+            dict(ev='opened', seq=1, id=self.fid, ts=1, agent='claude', title='cold one'),
+            dict(ev='native', seq=2, id=self.fid, ts=2, agent='claude', native=fixture_fid(9))]) + '\n')
+        env = dict(os.environ, **self.env, FLEET_ID_LIVE_CMD='true')
+        p = subprocess.run(['bash', str(BIN / 'fleet-id.sh'), 'reopen', self.fid], env=env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertNotIn('still open in a window', p.stdout + p.stderr)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(json.loads(p.stdout)['native'], fixture_fid(9))
+
     def test_ledger_watch_skips_a_cooled_window(self):
         self.assertIn('cold.json" ] && continue', (BIN / 'fleet-ledger-watch.sh').read_text())
 
