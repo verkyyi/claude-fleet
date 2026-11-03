@@ -100,9 +100,13 @@ func TestBoardFromNests(t *testing.T) {
 	if got[parent].TreeAt != got[rec.FID].TreeAt || got[child].TreeAt != n-5 || got[grand].TreeAt != n-5 || got[parent].ActivityAt != n-400 {
 		t.Errorf("tree_at parent %d child %d grand %d record %d", got[parent].TreeAt, got[child].TreeAt, got[grand].TreeAt, got[rec.FID].TreeAt)
 	}
-	// an ended opener (listed in 已收起): named, never nested under
-	if r := got[orphan]; r.From != ended || !r.FromEnded || r.FromTitle != "支付调研" || r.Parent != "" || r.Depth != 0 {
+	// an ended opener: lifted out of 已收起 into its session's group, uncounted,
+	// the live session nested under it
+	if r := got[orphan]; r.From != ended || !r.FromEnded || r.FromTitle != "支付调研" || r.Parent != ended || r.Depth != 1 {
 		t.Errorf("orphan = %+v", r)
+	}
+	if r := got[ended]; !r.EndedOpener || r.Group != "work" || r.Tag != "ended" || r.Active {
+		t.Errorf("ended opener = %+v", r)
 	}
 	// another person's session, or a word that is no ID: nothing
 	for _, id := range []string{foreign, other} {
@@ -337,7 +341,7 @@ func TestBoardColdParkAndLedgerKey(t *testing.T) {
 	if r := got[underCold.FID]; r.From != cold || r.Parent != cold {
 		t.Errorf("under a cold park: %+v", r)
 	}
-	if r := got[underLedger.FID]; r.From != ledger || !r.FromEnded || r.Parent != "" {
+	if r := got[underLedger.FID]; r.From != ledger || !r.FromEnded || r.Parent != ledger {
 		t.Errorf("by the ledger's key: %+v", r)
 	}
 	if r := got[unseenRec.FID]; r.Tag != "not_seen" || r.Lost {
@@ -349,5 +353,43 @@ func TestBoardColdParkAndLedgerKey(t *testing.T) {
 		if r.ID == unseenRec.FID && !r.Lost {
 			t.Errorf("unseen, machine silent: %+v", r)
 		}
+	}
+}
+
+// An opener that ended past the list's window is still found by its key (any
+// age) and listed as an uncounted ended opener with its session under it.
+func TestBoardOldEndedOpener(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	now := time.Now()
+	const old = "0b7e8c1a-aaaa-4222-8333-000000000001"
+	evs := []map[string]any{
+		{"ev": "opened", "id": old, "seq": float64(1), "ts": float64(now.Add(-30 * 24 * time.Hour).Unix()), "title": "LIVEPAGE 应用发布测试", "key": "o-r:scratch-21"},
+		{"ev": "closed", "id": old, "seq": float64(2), "ts": float64(now.Add(-20 * 24 * time.Hour).Unix()), "reason": "reaped"}}
+	if _, err := st.ApplyFleetIDEvents(store.FleetIDPush{Owner: "gh:1", EndpointID: "ep1", Machine: "mac-b", Login: "alice", ID: old, Events: evs}); err != nil {
+		t.Fatal(err)
+	}
+	p := `{"dispatch":{"request_id":"orch:o-r:scratch-21:6d6375550bb5d74e"}}`
+	rec, err := st.CreateFleetTask(store.FleetTask{Owner: "gh:1", Title: "kid", AuthorityVersion: 1,
+		RequestedAgent: "default", ResolvedAgent: "claude", RequestPayload: p}, "kid", now.Add(-25*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := s.buildBoard("gh:1", nil, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]BoardRow{}
+	for _, r := range b.Rows {
+		got[r.ID] = r
+	}
+	if r := got[rec.FID]; r.Parent != old || r.From != old {
+		t.Errorf("kid = %+v", r)
+	}
+	if r := got[old]; !r.EndedOpener || r.Group == "gone" || r.Title != "LIVEPAGE 应用发布测试" {
+		t.Errorf("opener = %+v", r)
+	}
+	if b.Count != 1 {
+		t.Errorf("count = %d; the ended opener is never counted", b.Count)
 	}
 }

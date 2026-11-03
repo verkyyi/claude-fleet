@@ -1610,11 +1610,33 @@ def push_one(fid, call, where=None):
         _hub_set(fid, seq)
 
 
+SCRATCH_WT_RE = re.compile(r"(?:.*-)?(scratch-[1-9][0-9]{0,9})/?$")
+
+
+def key_backfill(fid):
+    """The key an ID opened under, filled from its own `opened` (task PV5W): an ID
+    opened before the spawner wrote it carries its worktree and repo, and a task it
+    dispatched names it by `<slug>:scratch-N` — so the hub's list can still hang
+    that task under it. Fill-only (open_id: a field already there is never
+    rewritten); nothing for an issue window, a no-repo session or a key it has."""
+    try:
+        o = fold(read(fid))["opened"]
+    except (OSError, ValueError):
+        return False
+    m = SCRATCH_WT_RE.match((o.get("worktree") or "").rsplit("/", 1)[-1] or "")
+    repo = o.get("repo") or ""
+    if o.get("key") or not m or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        return False
+    open_id(fid, {"key": re.sub(r"[^A-Za-z0-9._-]", "", repo.replace("/", "-")) + ":" + m.group(1)})
+    return True
+
+
 def push(ids, call=None):
     call = call or _poster()
     wins = _windows()
     rc = 0
     for fid in ids or sorted(ledger_ids()):
+        key_backfill(fid)
         r = push_one(fid, call, wins.get(fid))
         if r == 76:
             rc = 75  # an older hub holds only this ID, not unrelated lifecycles

@@ -109,10 +109,13 @@ type BoardRow struct {
 	FromEnded bool   `json:"from_ended,omitempty"`
 	// TreeAt is the latest activity of the row and every row nested under it —
 	// the lists order a tree by it (task PV5W).
-	TreeAt     int64 `json:"tree_at,omitempty"`
-	Lost       bool  `json:"lost,omitempty"`
-	At         int64 `json:"at"`
-	ActivityAt int64 `json:"activity_at,omitempty"` // native turn/state activity, independent of inventory freshness
+	TreeAt int64 `json:"tree_at,omitempty"`
+	// EndedOpener: an ended session listed outside 已收起 only because sessions
+	// it opened are still at work — drawn ended, never counted (task PV5W).
+	EndedOpener bool  `json:"ended_opener,omitempty"`
+	Lost        bool  `json:"lost,omitempty"`
+	At          int64 `json:"at"`
+	ActivityAt  int64 `json:"activity_at,omitempty"` // native turn/state activity, independent of inventory freshness
 	// Why it is still open (E101), 中文 / English, and its tone — grey · orange ·
 	// red: the node's reap_why turned into the card's third line, ONE source for
 	// the console and the ⌘P panel. Only on 等你 / 排队中 rows; none when nothing
@@ -766,6 +769,15 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r.Source = boardSource(*r)
 	}
 	s.boardFrom(owner, kept, live, ids)
+	if owner != "" {
+		kept = append(kept, boardOpeners(kept, func(id string) *store.FleetIDRecord {
+			rec, err := s.Store.FleetIDOf(owner, id)
+			if err != nil {
+				return nil
+			}
+			return &rec
+		})...)
+	}
 	b := finishBoard(kept)
 	b.SessionList = SessionListPreferences{MaxVisible: 10, IdleHours: 24}
 	if owner != "" {
@@ -873,6 +885,34 @@ func finishBoard(rows []BoardRow) *Board {
 				code = r.ID
 			}
 			r.Title = "会话 " + code
+		}
+	}
+
+	// An ended session that opened sessions still at work is lifted out of
+	// 已收起 into the most urgent group of those it opened (task PV5W): they hang
+	// under it, and it is not counted (nothing of its own runs).
+	at := map[string]int{}
+	for i := range rows {
+		at[rows[i].ID] = i
+	}
+	for i := range rows {
+		r := rows[i]
+		if r.From == "" || r.Group == "gone" || r.Group == "pin" {
+			continue
+		}
+		seen := map[int]bool{}
+		for p, ok := at[r.From]; ok && !seen[p]; p, ok = at[rows[p].From] {
+			seen[p] = true
+			q := &rows[p]
+			if q.Archived != r.Archived {
+				break
+			}
+			if (q.Group == "gone" || q.EndedOpener) && (!q.EndedOpener || boardGroupOrder[r.Group] < boardGroupOrder[q.Group]) {
+				q.Group, q.EndedOpener = r.Group, true
+			}
+			if q.From == "" {
+				break
+			}
 		}
 	}
 
@@ -1054,7 +1094,7 @@ func finishBoard(rows []BoardRow) *Board {
 		} else {
 			b.Groups[r.Group]++
 		}
-		if r.Group != "gone" && !r.Lost {
+		if r.Group != "gone" && !r.Lost && !r.EndedOpener {
 			if !r.Archived {
 				b.Count++
 			}
@@ -1304,6 +1344,13 @@ func (s *Server) boardFrom(owner string, rows []BoardRow, live []FleetSession, i
 			if r.fromID == "" {
 				r.fromID = fromByLedgerKey(r.fromKey, r.fromAt, r.ID, ids)
 			}
+			if r.fromID == "" && strings.Contains(r.fromKey, ":") {
+				// ended past the list's window: the ledger whatever its age (a bare
+				// key over any age would be a guess)
+				if old, err := s.Store.BoardIDsByKey(owner, r.fromKey); err == nil {
+					r.fromID = fromByLedgerKey(r.fromKey, r.fromAt, r.ID, old)
+				}
+			}
 		}
 	}
 	byID := map[string]*BoardRow{}
@@ -1332,6 +1379,32 @@ func (s *Server) boardFrom(owner string, rows []BoardRow, live []FleetSession, i
 			r.From, r.FromTitle, r.FromEnded = rec.ID, store.FleetTitle(rec.Title), rec.ClosedAt > 0
 		}
 	}
+}
+
+// boardOpeners lists the ended sessions that opened a session still on the list
+// but are themselves off it (closed past boardGoneDays, or past the cap): one
+// 已结束 row each, so the list can hang what they opened under them (task PV5W).
+func boardOpeners(rows []BoardRow, looked func(id string) *store.FleetIDRecord) []BoardRow {
+	on := map[string]bool{}
+	for _, r := range rows {
+		on[r.ID] = true
+	}
+	var out []BoardRow
+	for _, r := range rows {
+		if r.From == "" || on[r.From] || r.Group == "gone" || r.Archived {
+			continue
+		}
+		rec := looked(r.From)
+		if rec == nil || rec.ClosedAt == 0 {
+			continue
+		}
+		on[r.From] = true
+		row := BoardRow{ID: rec.ID, Code: rec.Short, Title: rec.Title, Machine: rec.Machine, Login: rec.Login, Repo: rec.Repo,
+			Group: "gone", Tag: "ended", At: rec.ClosedAt, ActivityAt: rec.ActivityAt}
+		row.History = &BoardHistory{ID: rec.ID, Status: "offline_unknown"}
+		out = append(out, row)
+	}
+	return out
 }
 
 // The list's groups (task DDBQ): who opened a session. Empty is a person's.
