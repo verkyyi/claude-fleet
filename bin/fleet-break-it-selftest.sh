@@ -3753,11 +3753,12 @@ drill_opening_never_ends() {
 drill_agent_grant_escapes() {
   CAP=120; local t0 f="$ROOT/tokenledger/hub/api/agent_door.go"
   t0=$(now)
-  grep -q 'r.URL.Path != "/mcp"' "$f" || { WHY="the agent door no longer keeps to /mcp"; return 1; }
+  grep -q '!s.agentPathOK(r)' "$f" && grep -q 'strings.HasPrefix(r.URL.Path, ChatPathPrefix) && s.relayHopped(r)' "$f" \
+    || { WHY="the agent door no longer keeps to /mcp (and a replica hop of the chat road)"; return 1; }
   grep -q 'withRole(withDoor(ctx, doorAgent), roleUser)' "$f" || { WHY="an agent no longer comes in as a plain user"; return 1; }
   grep -q 'p.Grant != nil && !hasString(p.Grant, scope)' "$ROOT/tokenledger/hub/api/fleet_write.go" \
     || { WHY="authorize no longer checks a connected agent's own scopes"; return 1; }
-  _drill_go_tests 'TestAgentKeyOpensMCPOnly' "$ROOT/tokenledger/hub/api/agent_door_test.go" \
+  _drill_go_tests 'TestAgentKeyOpensMCPOnly TestAgentKeyRidesAReplicaHopOnly' "$ROOT/tokenledger/hub/api/agent_door_test.go" \
     'Agent 的钥匙只开 /mcp、只代表它的人、只做勾过的事；别人看不到也撤不了；撤了下一次调用就 401 invalid_token（go test）' || return 1
   SECS=$(since "$t0")
 }
