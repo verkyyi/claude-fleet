@@ -75,8 +75,9 @@ try {
     if(width===390){
       await page.goto(base+'?lang=en');
       await page.getByRole('button',{name:'New session',exact:true}).waitFor();
-      await page.getByRole('link',{name:'⏰ Schedule',exact:true}).waitFor();
-      await page.getByRole('link',{name:/Schedules 3/}).waitFor();
+      await page.getByRole('button',{name:'More ways to start',exact:true}).waitFor();
+      await page.getByRole('button',{name:/^Schedules · 3$/}).waitFor();
+      await page.locator('[data-schedule-line="schedule-failed"]').waitFor();
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
       if(process.env.SCHEDULE_SCREENSHOTS)await page.screenshot({path:`${process.env.SCHEDULE_SCREENSHOTS}/visual-list-${width}.png`,fullPage:true});
     }

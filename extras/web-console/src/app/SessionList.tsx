@@ -1,24 +1,29 @@
 import { ArchiveButton } from "./ArchiveButton";
-import { ScheduleGroup, NewScheduleButton } from "./schedules";
-// Task list: PIN, ordinary tasks, then folded earlier sessions. One status slot.
+import { schedulePath, useCanSchedule, useSchedules } from "./schedules";
+// Task list: pinned first, ordinary tasks, then folded earlier sessions, 定时任务 and API. One status slot.
 import { createContext, useContext, useEffect, useRef, useState, type FC, type PointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
 import {
   ChevronDown, ChevronRight, CircleAlert, CircleCheck, CircleDot, CircleX, Clock, GitPullRequest, Loader,
-  MessageCircle, Plus, Repeat2, Search, X, type LucideIcon,
+  MessageCircle, Pin, PinOff, Plus, Repeat2, Search, X, type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
+import { useMe } from "@/shared/api";
 import { tr } from "@/shared/i18n";
 import { viewAs } from "@/shared/viewAs";
+import { pinSession, pinWorker } from "@/shared/sessions";
 import { Failed, Loading } from "./parts";
 import {
-  compactRows, foldedDup, isTerminal, listItem, listRows, listStatus, listStatusLabel, members, needsAttention, ROW_SOURCES, rowMeta, rowRef, searchRows,
-  signalOf, sourceLabel, treeContext, treeLines, urgentOf, withKids, type CompactGroups, type GroupSource, type Signal, type TreeLine,
+  compactRows, foldedDup, isTerminal, listItem, listRows, listStatus, listStatusLabel, members, ROW_SOURCES, rowMeta, rowRef, searchRows,
+  rowSource, rowsSignal, scheduleLines, signalOf, sourceLabel, treeContext, treeLines, urgentOf, withKids,
+  type CompactGroups, type GroupSource, type ScheduleLine, type Signal, type TreeLine,
 } from "./session-list";
 import { useUnified } from "./chat/home";
 import { useWorkRows } from "./work-rows";
@@ -67,21 +72,40 @@ export const SearchButton: FC<{ className?: string; label?: boolean }> = ({ clas
   );
 };
 
-// 新建 opens the new-session screen (GR5E C3)
+// 新建 opens the new-session screen (GR5E C3). A split button (task PV5W): its
+// main part that, its ⌄ a menu — 新会话 · 新建定时任务 (the schedule form, the
+// road the separate ⏰ button was).
 export const NEW_PATH = "/new";
 export const NewButton: FC<{ className?: string; label?: boolean }> = ({ className, label }) => {
   const go = useNavigate();
   const { pathname } = useLocation();
-  return (
-    <Button variant={label ? "default" : "ghost"} size={label ? "sm" : "icon"} className={cn(!label && "size-8", pathname === NEW_PATH && "text-clay", className)} disabled={!!viewAs}
+  const canSchedule = useCanSchedule();
+  const main = (
+    <Button variant={label ? "default" : "ghost"} size={label ? "sm" : "icon"} className={cn(!label && "size-8", label && "flex-1 rounded-e-none", pathname === NEW_PATH && "text-clay")} disabled={!!viewAs}
       aria-label={tr("新会话", "New session")} title={tr("新会话", "New session")} onClick={() => go(NEW_PATH)}>
       <Plus />{label && tr("新建会话", "New session")}
     </Button>
   );
+  if (!label) return main;
+  return (
+    <div className={cn("flex", className)} data-new-split>
+      {main}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm" className="border-primary-foreground/20 rounded-s-none border-s px-2" disabled={!!viewAs}
+            aria-label={tr("更多新建方式", "More ways to start")} title={tr("更多新建方式", "More ways to start")}><ChevronDown /></Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-44">
+          <DropdownMenuItem onSelect={() => go(NEW_PATH)}><Plus />{tr("新会话", "New session")}</DropdownMenuItem>
+          <DropdownMenuItem disabled={!canSchedule} onSelect={() => go(schedulePath("new"))}><Clock />{tr("新建定时任务", "New schedule")}</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
 };
 
-// Both creation paths stay within reach above the phone's home bar.
-export const NewFab: FC = () => <div className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-center gap-2 border-t bg-background p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"><NewButton label className="flex-1" /><NewScheduleButton /></div>;
+// The new-session button stays within reach above the phone's home bar.
+export const NewFab: FC = () => <div className="fixed inset-x-0 bottom-0 z-20 flex items-center justify-center gap-2 border-t bg-background p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]"><NewButton label className="flex-1" /></div>;
 
 const SearchBox: FC = () => {
   const { searching, setSearching, q, setQ } = useListUi();
@@ -157,7 +181,7 @@ const rowCls = "text-foreground hover:text-foreground flex items-center gap-3 no
 // kept only then), a search hit's parent title, and — a line standing for
 // same-title duplicates — the row whose status it draws and how many it holds.
 type TreeProps = { line?: TreeLine; onToggle?: (id: string, open: boolean) => void; treeOn?: boolean;
-  context?: string; urgent?: Row; dupes?: number };
+  context?: string; urgent?: Row; dupes?: number; pinnable?: boolean };
 const INDENT = ["", "w-4", "w-8"];
 // what a folded line's hidden rows say: asking (clay) over working (green) over nothing
 export const SIGNAL: Record<Signal, string> = { ask: "text-clay", work: "text-ok", "": "text-muted-foreground" };
@@ -174,7 +198,38 @@ const Twisty: FC<{ line?: TreeLine; onToggle?: (id: string, open: boolean) => vo
       line.open ? "text-muted-foreground hover:text-foreground" : SIGNAL[line.signal])}>{line.open ? "▾" : "▸"}</span>;
 };
 
-const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void } & TreeProps> = ({ r, variant, active, onPress, line, onToggle, treeOn, context, urgent = r, dupes = 1 }) => {
+// 置顶 (task PV5W): no PIN heading — a pinned row wears a clay pin at its end
+// (a click unpins); an unpinned one shows a faint pin on hover that pins it
+// (the computer's list). On a phone the pin is only a mark: pinning lives in the
+// long-press sheet. A child never wears one.
+const usePin = (r: Row) => {
+  const { reload } = useWorkRows();
+  const { me } = useMe();
+  const [busy, setBusy] = useState(false);
+  const worker = pinWorker(r);
+  const pinned = r.group === "pin";
+  const can = !!worker && !busy && !!me && !me.read_only && !me.view_as && !viewAs;
+  const set = async (on: boolean) => {
+    if (!can) return;
+    setBusy(true);
+    const why = await pinSession(worker, on);
+    setBusy(false);
+    if (why) toast.error(on ? tr(`没能置顶：${why}`, `Couldn't pin: ${why}`) : tr(`没能取消置顶：${why}`, `Couldn't unpin: ${why}`));
+    else reload();
+  };
+  return { pinned, can, worker, set };
+};
+const PinButton: FC<{ r: Row; variant: Variant }> = ({ r, variant }) => {
+  const { pinned, can, worker, set } = usePin(r);
+  if (variant === "page" || !worker) return pinned ? <Pin data-pinned className="text-clay me-3 size-4 shrink-0" aria-label={tr("已置顶", "Pinned")} /> : null;
+  const label = pinned ? tr("已置顶 · 点击取消", "Pinned · click to unpin") : tr("置顶", "Pin");
+  return <Button variant="ghost" size="icon" data-pin={pinned ? "on" : "off"} aria-label={label} title={label} disabled={!can} onClick={() => void set(!pinned)}
+    className={cn("size-7 shrink-0 group-data-[collapsible=icon]:hidden", pinned ? "text-clay" : "text-muted-foreground/60 opacity-0 group-hover/menu-item:opacity-100 focus-visible:opacity-100")}>
+    <Pin className="size-4" />
+  </Button>;
+};
+
+const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void } & TreeProps> = ({ r, variant, active, onPress, line, onToggle, treeOn, context, urgent = r, dupes = 1, pinnable }) => {
   const { seen, markSeen, replied } = useWorkRows();
   const it = listItem(r, seen);
   const press = useLongPress(() => onPress(r));
@@ -199,7 +254,8 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
   // title only for a parked one: that asks the person
   const why = r.board?.tag === "parked" && r.why ? <RowWhy r={r} className={cn("truncate pb-1 text-xs group-data-[collapsible=icon]:hidden",
     variant === "page" ? treeOn ? "ps-17 pe-4" : "ps-11 pe-4" : treeOn ? "ps-15 pe-2" : "ps-9 pe-2")} /> : null;
-  if (variant === "page") return <li><div className="flex items-center"><div className="min-w-0 flex-1">{body}</div><ArchiveButton row={r} /></div>{why}</li>;
+  const pin = pinnable ? <PinButton r={r} variant={variant} /> : null;
+  if (variant === "page") return <li><div className="flex items-center"><div className="min-w-0 flex-1">{body}</div>{pin}<ArchiveButton row={r} /></div>{why}</li>;
   return (
     <SidebarMenuItem>
       <div className="flex items-center"><div className="min-w-0 flex-1"><Tooltip delayDuration={200}>
@@ -207,7 +263,7 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
           <SidebarMenuButton asChild isActive={active} className="data-[active=true]:font-[inherit]">{body}</SidebarMenuButton>
         </TooltipTrigger>
         <TooltipContent side="right" align="start" className="max-w-80 text-xs leading-relaxed"><RowDetail r={r} /></TooltipContent>
-      </Tooltip></div><ArchiveButton row={r} /></div>
+      </Tooltip></div>{pin}<ArchiveButton row={r} /></div>
       {why}
     </SidebarMenuItem>
   );
@@ -231,7 +287,14 @@ const WebChatRow: FC<{ variant: Variant; active: boolean }> = ({ variant, active
 };
 
 // The long-press sheet: the same detail and conversation entry.
-const PressSheet: FC<{ r: Row | null; onClose: () => void }> = ({ r, onClose }) => {
+const PressPin: FC<{ r: Row; onClose: () => void }> = ({ r, onClose }) => {
+  const { pinned, can, worker, set } = usePin(r);
+  if (!worker) return null;
+  return <Button variant="outline" className={cn("w-full", pinned && "text-clay")} disabled={!can} onClick={() => { void set(!pinned); onClose(); }}>
+    {pinned ? <><PinOff />{tr("取消置顶", "Unpin")}</> : <><Pin />{tr("置顶", "Pin")}</>}
+  </Button>;
+};
+const PressSheet: FC<{ r: Row | null; onClose: () => void; pinnable?: (r: Row) => boolean }> = ({ r, onClose, pinnable }) => {
   const { markSeen, machines } = useWorkRows();
   return (
     <Sheet open={!!r} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -243,13 +306,44 @@ const PressSheet: FC<{ r: Row | null; onClose: () => void }> = ({ r, onClose }) 
             <RowWhy r={r} className="text-sm" />
             {r.line ? <p className="text-foreground text-sm break-words">{r.quote ? tr(`「${r.line}」`, `“${r.line}”`) : r.line}</p> : null}
           </SheetHeader>
-          <div className="px-5">
+          <div className="space-y-2 px-5">
             <Button asChild variant="outline" className="text-foreground w-full no-underline"><Link to={sessionPath(r)} onClick={() => { markSeen(r); onClose(); }}><MessageCircle />{tr("打开", "Open")}</Link></Button>
+            {pinnable?.(r) ? <PressPin r={r} onClose={onClose} /> : null}
           </div>
         </> : null}
       </SheetContent>
     </Sheet>
   );
+};
+
+// One schedule in 定时任务 · N (task PV5W), drawn like a session row: the dot of
+// its most urgent run, its twisty (its runs folded under it, (N) when folded),
+// its name — red when its last run failed — and, muted at the end, its last
+// result (✓ 13:17 · ✗ 13:17) or 下次 07:10. The row opens the schedule.
+const ScheduleLineRow: FC<{ s: ScheduleLine; variant: Variant; active: boolean; open: boolean; onToggle: (open: boolean) => void }> = ({ s, variant, active, open, onToggle }) => {
+  const line: TreeLine = { r: s.urgent || ({ id: s.id } as Row), depth: 0, kids: s.runs.length, open, hidden: open ? 0 : s.runs.length, signal: rowsSignal(s.runs) };
+  const asking = !!s.urgent && listStatus(s.urgent).kind === "ask";
+  const toggle = (e: { preventDefault: () => void; stopPropagation: () => void }) => { e.preventDefault(); e.stopPropagation(); onToggle(!open); };
+  const body = (
+    <Link to={schedulePath(s.id)} data-schedule-line={s.id} aria-current={active ? "page" : undefined} aria-label={[s.name, s.result].filter(Boolean).join(" · ")}
+      className={cn(rowCls, variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4")}>
+      {s.urgent ? <RowGlyph r={s.urgent} /> : s.failed
+        ? <span data-status-slot className="flex size-4 shrink-0 items-center justify-center" aria-hidden><CircleX className="text-destructive size-4" /></span>
+        : <span data-status-slot className="size-4 shrink-0" aria-hidden />}
+      {s.runs.length ? <span role="button" tabIndex={0} data-twisty aria-expanded={open} aria-label={open ? tr("收起运行", "Collapse runs") : tr("展开运行", "Expand runs")}
+        onClick={toggle} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggle(e); }} onPointerDown={(e) => e.stopPropagation()}
+        className={cn("w-3 shrink-0 cursor-pointer text-center text-xs leading-none group-data-[collapsible=icon]:hidden",
+          open ? "text-muted-foreground hover:text-foreground" : SIGNAL[line.signal])}>{open ? "▾" : "▸"}</span>
+        : <span data-twisty-slot className="w-3 shrink-0 group-data-[collapsible=icon]:hidden" aria-hidden />}
+      <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5 font-normal", s.failed ? "text-destructive" : asking && "text-clay")}>
+        <span className="min-w-0 truncate">{s.name}</span>
+        {!open && s.runs.length ? <span data-tree-hidden className={cn("shrink-0", line.signal === "ask" ? "text-clay font-medium" : "text-muted-foreground font-normal")}>({s.runs.length})</span> : null}
+      </span>
+      {s.result ? <span data-schedule-result className={cn("shrink-0 text-xs group-data-[collapsible=icon]:hidden", s.failed ? "text-destructive" : "text-muted-foreground")}>{s.result}</span> : null}
+    </Link>
+  );
+  if (variant === "page") return <li>{body}</li>;
+  return <SidebarMenuItem><SidebarMenuButton asChild isActive={active} className="data-[active=true]:font-[inherit]">{body}</SidebarMenuButton></SidebarMenuItem>;
 };
 
 // the open session's ref, from /s/<ref>
@@ -269,7 +363,8 @@ function readOpened(): Record<string, boolean> {
 // The list itself. `variant` side = inside the computer's left column (shadcn
 // SidebarMenu, folds to its glyphs); page = the phone's whole screen.
 export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ variant, chatHome }) => {
-  const { rows: allRows, board, failed, reload, markSeen } = useWorkRows();
+  const { rows: allRows, board, failed, reload } = useWorkRows();
+  const { rows: schedules } = useSchedules();
   const [showArchived, setShowArchived] = useState(false);
   const archivedCount = allRows?.filter(r => r.board?.archived).length || 0;
   const rows = allRows?.filter(r => !!r.board?.archived === showArchived) ?? null;
@@ -278,12 +373,14 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   // no row of its own — kept only on the old road
   const oldRoad = useUnified() === false;
   const { ref, pathname } = useOpenRef();
+  const scheduleRef = new URLSearchParams(useLocation().search).get("schedule") || "";
   const [goneOpen, setGoneOpen] = useState(false);
   const [sourceOpen, setSourceOpen] = useState<Partial<Record<GroupSource, boolean>>>({});
   const [opened, setOpened] = useState(readOpened);
-  // kept only for rows the list still has, so the book does not grow forever
+  // kept only for rows (and schedules: schedule:<id>) the list still has, so the
+  // book does not grow forever
   const toggle = (id: string, open: boolean) => setOpened((o) => {
-    const known = new Set((allRows || []).map((r) => r.id));
+    const known = new Set([...(allRows || []).map((r) => r.id), ...(schedules || []).map((x) => `schedule:${x.spec.id}`)]);
     const n = Object.fromEntries(Object.entries({ ...o, [id]: open }).filter(([k]) => known.has(k)));
     try { localStorage.setItem(TREE_KEY, JSON.stringify(n)); } catch { /* private mode */ }
     return n;
@@ -311,7 +408,9 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const lines = (roots: Row[]) => treeLines(roots, tree, opened, ref);
   const flat = (items: Row[]): TreeLine[] => items.map((r) => ({ r, depth: 0, kids: 0, open: false, hidden: 0, signal: "" }));
   // a line standing for same-title duplicates draws the most urgent one's status and ×N
-  const treeRow = (l: TreeLine) => row(l.r, { line: l, urgent: urgentOf(tree, l.r), dupes: members(tree, l.r).length });
+  // a top-level line wears the pin (置顶 · task PV5W); a child never does
+  const treeRow = (l: TreeLine) => row(l.r, { line: l, urgent: urgentOf(tree, l.r), dupes: members(tree, l.r).length, pinnable: !l.depth });
+  const topLevel = (r: Row) => !tree.up.has(r.id) && rowSource(r) !== "schedule";
   const List = variant === "side" ? SidebarMenu : "ul";
   // one list in activity order, no day headings (task PV5W)
   const timeline = (items: TreeLine[]) => items.map(treeRow);
@@ -337,23 +436,27 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
     const { pin, open, gone, sources } = grouped;
     const everyRow = (roots: Row[]) => withKids(tree, roots).flatMap((r) => members(tree, r));
     const runningHidden = everyRow(gone).filter((r) => listStatus(r).kind === "work").length;
-    // A count, not a group (task DDBQ): the rows stay in time order; the count
-    // opens the next one that needs the person, after the one open now —
-    // a folded source group's, one folded under another and a folded
-    // duplicate included (opened, it is the session open now: drawn).
-    const waiting = everyRow([...pin, ...open, ...ROW_SOURCES.flatMap((s) => sources[s])]).filter(needsAttention);
-    const nextWaiting = waiting[(waiting.findIndex((r) => rowRef(r) === ref) + 1) % (waiting.length || 1)];
-    // PIN → the list → More → ⏰ schedules → API → archived. The old chat entry
-    // remains above the task list for older hubs.
+    // 定时任务 · N: one line per schedule, its runs folded under it (task PV5W)
+    const sched = scheduleLines(schedules || [], rows);
+    const schedRuns = [...sched.lines.flatMap((l) => l.runs), ...sched.other];
+    const schedShown = schedRuns.some((r) => rowRef(r) === ref) || (sourceOpen.schedule ?? true); // open unless folded by hand
+    const schedOpen = (id: string) => opened[`schedule:${id}`] ?? schedRuns.some((r) => r.board?.schedule_id === id && rowRef(r) === ref);
+    const runLine = (r: Row): TreeLine => ({ r, depth: 1, kids: 0, open: false, hidden: 0, signal: "" });
+    const otherLine: ScheduleLine = { id: "", name: tr("其他运行", "Other runs"), runs: sched.other, urgent: undefined, failed: false, result: "" };
+    const header = (key: string, label: string, n: number, shown: boolean, signal: Signal, flip: () => void) =>
+      <button type="button" onClick={flip} aria-expanded={shown} data-section={key}
+        className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
+          variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
+        {shown ? <ChevronDown className={cn("size-4 shrink-0", SIGNAL[signal])} /> : <ChevronRight className={cn("size-4 shrink-0", SIGNAL[signal])} />}
+        <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{label}<span className="font-mono"> · {n}</span></span>
+      </button>;
+    // pinned first, in pin order, no heading (task PV5W) → the list → More →
+    // 定时任务 → API → archived. The old chat entry remains above the task list
+    // for older hubs.
     body = (
       <>
         {oldRoad ? <List>{web}</List> : null}
-        {nextWaiting ? <Link to={sessionPath(nextWaiting)} onClick={() => markSeen(nextWaiting)} data-testid="attention-next"
-          className="text-clay flex min-h-8 w-full items-center gap-2 px-4 text-sm no-underline group-data-[collapsible=icon]:hidden">
-          <ChevronRight className="size-4" />{tr("待处理", "Needs attention")} · {waiting.length}
-        </Link> : null}
-        {pin.length ? <><div className="text-muted-foreground px-4 pt-3 pb-1 text-xs group-data-[collapsible=icon]:hidden">PIN</div><div className="max-h-60 overflow-y-auto"><List>{lines(pin).map(treeRow)}</List></div></> : null}
-        <List>{timeline(lines(open))}</List>
+        <List>{[...lines(pin), ...lines(open)].map(treeRow)}</List>
         {gone.length ? <>
           <button type="button" onClick={() => setGoneOpen(!goneOpen)} aria-expanded={goneOpen}
             className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
@@ -363,22 +466,24 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
           </button>
           {goneOpen ? <List>{timeline(lines(gone))}</List> : null}
         </> : null}
-        {/* a schedule's runs live in the ⏰ 定时任务 card (Y8XY), never in this list */}
-        <div data-schedule-slot className={variant === "side" ? "pt-2" : undefined}><ScheduleGroup phone={variant === "page"} /></div>
+        {/* a schedule's runs live under their schedule (Y8XY), never in the list above */}
+        {sched.lines.length || sched.other.length ? <div data-source-group="schedule">
+          {header("schedule", tr("定时任务", "Schedules"), sched.lines.length, schedShown, rowsSignal(schedRuns), () => setSourceOpen({ ...sourceOpen, schedule: !schedShown }))}
+          {schedShown ? <List>{[...sched.lines, ...(sched.other.length ? [otherLine] : [])].flatMap((l) => {
+            const key = l.id || "other";
+            const open = schedOpen(key);
+            return [<ScheduleLineRow key={`schedule-${key}`} s={l} variant={variant} active={!!l.id && scheduleRef === l.id} open={open}
+              onToggle={(o) => toggle(`schedule:${key}`, o)} />, ...(open ? l.runs.map((r) => row(r, { line: runLine(r) })) : [])];
+          })}</List> : null}
+        </div> : null}
         {ROW_SOURCES.filter((src) => src !== "schedule").map((src) => {
           const items = sources[src];
           if (!items.length) return null;
           // folded unless opened, or it holds the session open now; its chevron
           // says what is inside by colour alone, as a folded tree's ▸ does
           const shown = sourceOpen[src] ?? withKids(tree, items).some((r) => rowRef(r) === ref);
-          const signal: Signal = signalOf(tree, withKids(tree, items));
           return <div key={src} data-source-group={src}>
-            <button type="button" onClick={() => setSourceOpen({ ...sourceOpen, [src]: !shown })} aria-expanded={shown}
-              className={cn("text-muted-foreground hover:text-foreground flex w-full items-center gap-3 text-sm",
-                variant === "page" ? "h-11 px-4" : "h-8 px-2 group-data-[collapsible=icon]:justify-center")}>
-              {shown ? <ChevronDown className={cn("size-4 shrink-0", SIGNAL[signal])} /> : <ChevronRight className={cn("size-4 shrink-0", SIGNAL[signal])} />}
-              <span className={cn(variant === "side" && "group-data-[collapsible=icon]:hidden")}>{sourceLabel(src)}<span className="font-mono"> · {items.length}</span></span>
-            </button>
+            {header(src, sourceLabel(src), items.length, shown, signalOf(tree, withKids(tree, items)), () => setSourceOpen({ ...sourceOpen, [src]: !shown }))}
             {shown ? <List>{lines(items).map(treeRow)}</List> : null}
           </div>;
         })}
@@ -392,12 +497,12 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
       onKeyDownCapture={() => { setFocused(true); clearTimeout(keyTimer.current); keyTimer.current = window.setTimeout(() => setFocused(false), 1200); }} onBlurCapture={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false); }}>
       <SearchBox />
       {body}
-      {variant === "page" ? <PressSheet r={pressed} onClose={() => setPressed(null)} /> : null}
+      {variant === "page" ? <PressSheet r={pressed} onClose={() => setPressed(null)} pinnable={topLevel} /> : null}
     </div>
   );
 };
 
-// The phone's first screen: the list (its ⏰ schedules card under 更多会话), and 新建 at the bottom.
+// The phone's first screen: the list (定时任务 under 更多会话), and 新建 at the bottom.
 export const SessionListPage: FC = () => (
   <div className="pb-[calc(env(safe-area-inset-bottom)+5rem)]">
     <SessionRows variant="page" />

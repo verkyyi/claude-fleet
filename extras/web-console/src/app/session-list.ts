@@ -204,31 +204,58 @@ export function scheduleRuns(rows: Row[]): ScheduleRuns[] {
   }
   return [...out.values()];
 }
-// The ⏰ 定时任务 card is the ONE place a schedule's runs show (task Y8XY): the
-// main list never draws them, running or not. Per schedule (the card's own
-// ids): its runs that are working, waiting to start or asking the person —
-// the card's line already says the last result, the detail page every run.
-// A run whose schedule the card does not list (deleted, an older run with no
-// schedule_id) goes to `other`, newest first, so it stays reachable.
-export type ScheduleCard = { live: Record<string, Row[]>; other: Row[]; running: number; asking: number };
-export function scheduleCard(rows: Row[], ids: string[]): ScheduleCard {
-  const known = new Set(ids);
+// 定时任务 · N, a section of the list (task PV5W): one line per schedule, drawn
+// like a session row — its runs (the sessions carrying its schedule_id, newest
+// first) nest under it like a tree's children, folded until the person opens
+// it. The main list never draws a run (Y8XY). The line's dot is its most urgent
+// run's (asking > working > waiting to start); a schedule whose last run failed
+// reads red. The right side: the last result and its time (✓ 13:17 / ✗ 13:17 —
+// HH:MM today, else MM-DD), or 下次 07:10 when it never ran. Runs of a schedule
+// the list does not have (deleted, an older run with no schedule_id) gather on
+// one more line, `other`, so they stay reachable.
+export type ScheduleSpecLike = { spec: { id: string; name: string; timezone: string; enabled?: boolean };
+  observed: { status?: string; last_run?: number; next_run?: number; last_result?: string } };
+export type ScheduleLine = { id: string; name: string; runs: Row[]; urgent?: Row; failed: boolean; result: string };
+export type ScheduleLines = { lines: ScheduleLine[]; other: Row[] };
+export const scheduleFailed = (s: ScheduleSpecLike) => s.observed.status === "failed" || s.observed.last_result === "failed";
+// epoch s → HH:MM on `now`'s day (in the schedule's zone), else MM-DD
+export function clockOrDay(t: number | undefined, zone: string, now = Date.now()): string {
+  if (!t) return "";
+  const parts = (ms: number) => {
+    let p: Intl.DateTimeFormatPart[];
+    try { p = new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(ms); }
+    catch { p = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(ms); }
+    return Object.fromEntries(p.map((x) => [x.type, x.value])) as Record<string, string>;
+  };
+  const a = parts(t * 1000), b = parts(now);
+  return a.year === b.year && a.month === b.month && a.day === b.day ? `${a.hour}:${a.minute}` : `${a.month}-${a.day}`;
+}
+export function scheduleResult(s: ScheduleSpecLike, now = Date.now()): string {
+  const zone = s.spec.timezone;
+  if (s.observed.last_run) return `${scheduleFailed(s) ? "✗" : "✓"} ${clockOrDay(s.observed.last_run, zone, now)}`;
+  const next = s.spec.enabled === false ? 0 : s.observed.next_run;
+  return next ? tr(`下次 ${clockOrDay(next, zone, now)}`, `Next ${clockOrDay(next, zone, now)}`) : "";
+}
+const urgentRun = (runs: Row[]) => runs.find(needsAttention)
+  || runs.find((r) => listStatus(r).kind === "work") || runs.find((r) => listStatus(r).kind === "pending");
+export function scheduleLines(schedules: ScheduleSpecLike[], rows: Row[], now = Date.now()): ScheduleLines {
   const at = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
   const runs = rows.filter((r) => !r.board?.archived && r.group !== "pin" && rowSource(r) === "schedule")
     .sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
-  const out: ScheduleCard = { live: {}, other: [], running: 0, asking: 0 };
+  const by = new Map<string, Row[]>();
+  const known = new Set(schedules.map((s) => s.spec.id));
+  const other: Row[] = [];
   for (const r of runs) {
-    const st = listStatus(r).kind;
-    const ask = needsAttention(r);
-    const busy = st === "work" || st === "pending";
-    if (ask) out.asking++;
-    else if (busy) out.running++;
     const id = r.board?.schedule_id || "";
-    if (!known.has(id)) out.other.push(r);
-    else if (ask || busy) (out.live[id] ??= []).push(r);
+    if (known.has(id)) (by.get(id) ?? by.set(id, []).get(id)!).push(r); else other.push(r);
   }
-  return out;
+  return { other, lines: schedules.map((s) => {
+    const mine = by.get(s.spec.id) || [];
+    return { id: s.spec.id, name: s.spec.name, runs: mine, urgent: urgentRun(mine), failed: scheduleFailed(s), result: scheduleResult(s, now) };
+  }) };
 }
+// What a set of rows says on the line that folds them: asking > working > nothing.
+export const rowsSignal = (rows: Row[]): Signal => signalOf(NO_TREE, rows);
 export type SourceGroups = Record<GroupSource, Row[]>;
 // Each group holds the ROOTS of the session tree; what is nested under a root
 // goes with it (`tree`), into PIN too.

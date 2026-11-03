@@ -2,16 +2,20 @@
 // optional repo, the agent — one task through the write door. 会话's 新建 opens
 // it (a task in a repo); the list's 新建 is the new-session screen (C3, /new).
 import { useState, type FC } from "react";
+import { useNavigate } from "react-router";
 import { Loader } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { sendJSON } from "@/shared/api";
 import { tr } from "@/shared/i18n";
 import type { Row } from "./work";
+import { schedulePath, useCanSchedule } from "./schedules";
+import { scheduleSeed } from "./new-session";
 
 // the repos a task may land in: those the person's rows already name
 export const reposOf = (rows: Row[] | null) =>
@@ -25,9 +29,14 @@ export const NewDialog: FC<{ open: boolean; onOpenChange: (o: boolean) => void; 
   const [repo, setRepo] = useState("none");
   const [agent, setAgent] = useState("claude");
   const [busy, setBusy] = useState(false);
+  // 定时运行 (task PV5W): the words, the repo and the agent go to the schedule form instead
+  const go = useNavigate();
+  const canSchedule = useCanSchedule();
+  const [scheduled, setScheduled] = useState(false);
   const start = async () => {
     const words = w.trim();
     if (!words) return;
+    if (scheduled) { onOpenChange(false); go(schedulePath("new"), { state: scheduleSeed(words, agent, repo === "none" ? "" : repo) }); return; }
     setBusy(true);
     const title = words.split("\n").map((l) => l.trim()).find(Boolean)!.slice(0, 120);
     const idem = "web-" + (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`).replace(/[^A-Za-z0-9-]/g, "");
@@ -71,8 +80,12 @@ export const NewDialog: FC<{ open: boolean; onOpenChange: (o: boolean) => void; 
               </ToggleGroup>
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            <Switch id="new-dialog-scheduled" checked={scheduled} onCheckedChange={setScheduled} disabled={!canSchedule} />
+            <Label htmlFor="new-dialog-scheduled" className="font-normal">{tr("定时运行", "Run on a schedule")}</Label>
+          </div>
           <p className="text-muted-foreground text-xs">
-            {repo === "none" ? tr("不用仓库：开一个会话，做完回报给你。", "No repo: a session opens, and reports back when done.")
+            {scheduled ? tr("下一步选时间：它会按时自动运行。", "Next, pick the time: it runs by itself on schedule.") : repo === "none" ? tr("不用仓库：开一个会话，做完回报给你。", "No repo: a session opens, and reports back when done.")
               : tr("选了仓库：在仓库里改，做完自己开 PR、门禁绿了就合并。", "With a repo: it changes the repo, opens a PR and merges it once checks pass.")}
           </p>
         </div>

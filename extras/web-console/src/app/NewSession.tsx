@@ -20,6 +20,8 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { ArrowLeft, ArrowUp, Loader } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { cn } from "@/lib/utils";
@@ -39,6 +41,8 @@ import {
 } from "./new-session";
 import { useWorkRows } from "./work-rows";
 import { clockOpened } from "./start-clock";
+import { schedulePath, useCanSchedule } from "./schedules";
+import { scheduleSeed } from "./new-session";
 
 // a cold first start of the conversation service (task GXR5): ask again this
 // many times, this far apart, while the entry answers 502 relay
@@ -118,6 +122,10 @@ export default function NewSession() {
   // a chat opened, until its row shows; t0 / openAt: its clock (task PNWW)
   const [waiting, setWaiting] = useState<{ fid: string; worker: string; t0: number; openAt: number } | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  // 定时运行 (task PV5W): on, the words become a schedule — the schedule form,
+  // prefilled (the road 新建定时任务 takes), instead of a session now
+  const canSchedule = useCanSchedule();
+  const [scheduled, setScheduled] = useState(false);
 
   const chosenAgent = choice.agent === "codex" ? "codex" : "claude";
   // a model besides the agent's own (J7BN: DeepSeek, the mainland region's) —
@@ -131,7 +139,7 @@ export default function NewSession() {
   const unavailable = ["claude", "codex"].filter((a) => !agentsOf(homeRead.data).includes(a as "claude" | "codex"));
   const loading = homeRead.loading || defaults.loading || unified === null;
   const why = loading ? "" : viewAs ? tr("只读预览里不能新建会话。", "A read-only preview cannot start a session.") : chatBlocker(homeRead.data, model) || (!pick ? agentWhy : "");
-  const canStart = !loading && !why && !busy && !waiting;
+  const canStart = scheduled ? canSchedule : !loading && !why && !busy && !waiting;
 
   // the session page's code fetched while the person types (task PNWW): after
   // the press it is one more download, over a slow link up to tens of seconds
@@ -168,6 +176,7 @@ export default function NewSession() {
   const start = async () => {
     if (!canStart) return;
     const say = words.trim();
+    if (scheduled) { go(schedulePath("new"), { state: scheduleSeed(say, agent) }); return; }
     if (!unified) {
       // the old road: the one conversation on that side starts over (newChat), the line its first turn
       setBusy(true);
@@ -258,9 +267,14 @@ export default function NewSession() {
                   </Button>
                 </div>
               </div>
+              <div className="mt-2 flex items-center gap-2">
+                <Switch id="new-scheduled" checked={scheduled} onCheckedChange={setScheduled} disabled={!canSchedule || !!waiting} data-testid="new-scheduled" />
+                <Label htmlFor="new-scheduled" className="text-muted-foreground text-[13px] font-normal">{tr("定时运行", "Run on a schedule")}</Label>
+              </div>
               {agentWhy && !loading ? <p data-testid="new-agent-why" className="text-muted-foreground mt-2 text-[13px]">{agentWhy}</p> : null}
               {why ? <p role="status" data-testid="new-why" className="text-muted-foreground mt-2 text-[13px]">{why}</p>
                 : waiting ? <p role="status" className="text-muted-foreground mt-2 text-[13px]">{tr("正在开 —— 开好就进入它。", "Opening — it opens once it is up.")}</p>
+                : scheduled ? <p className="text-muted-foreground mt-2 text-[13px]">{tr("下一步选时间：这段话会按时自动运行。", "Next, pick the time: these words run by themselves on schedule.")}</p>
                 : <p className="text-muted-foreground mt-2 text-[13px]">{tr("关掉网页也不停，随时回来接着说。", "Keeps going when you close the page; come back any time.")}</p>}
             </div>
           )}
