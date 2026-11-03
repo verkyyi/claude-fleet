@@ -3,17 +3,19 @@ import { ScheduleReader } from "./schedule-feed";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useMe } from "@/shared/api";
 import { lang, tr } from "@/shared/i18n";
+import { scheduleMs } from "./session-list";
 
 export type Spec = { id: string; revision: number; name: string; prompt: string; agent?: "" | "claude" | "codex"; at?: string; cron?: string; timezone: string; enabled: boolean; deleted: boolean; delivery: { wechat: boolean; livepage: boolean }; repo?: string };
-export type ScheduleRow = { spec: Spec; sync_state: string; sync_note: string; observed: { status?: string; last_run?: number; next_run?: number; last_result?: string; last_line?: string; last_error?: string; stale?: boolean } };
+export type ScheduleRow = { spec: Spec; sync_state: string; sync_note: string; observed: { status?: string; last_run?: number | string; next_run?: number | string; last_result?: string; last_line?: string; last_error?: string; stale?: boolean } };
 export type Run = { attempt: number; id: string; schedule_id: string; state: string; started: number; ended: number; summary: string; error: string; delivery: { wechat?: string; wechat_channel?: string; livepage?: string; url?: string }; session_id: string };
 type Feed = { expired: boolean; read: <T>(url: string, init?: RequestInit) => Promise<T | null>; rows: ScheduleRow[] | null; unread: Run[]; error: string; refresh: () => Promise<void> };
 const Context = createContext<Feed>({ expired: false, read: async () => null, rows: null, unread: [], error: "", refresh: async () => {} });
 export const useSchedules = () => useContext(Context);
 export const schedulePath = (id: string) => `/?schedule=${encodeURIComponent(id)}`;
-export function scheduleDate(t: number | undefined, zone: string) {
-  if (!t) return "—";
-  try { return new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", { timeZone: zone, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(t * 1000); } catch { return "—"; }
+export function scheduleDate(t: number | string | undefined, zone: string) {
+  const ms = scheduleMs(t);
+  if (!ms) return "—";
+  try { return new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", { timeZone: zone, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(ms); } catch { return "—"; }
 }
 export const scheduleAgent = (s: Spec) => s.agent === "claude" ? "Claude" : s.agent === "codex" ? "Codex" : tr("跟随默认", "Default agent");
 export const recurrence = (s: Spec) => s.cron || `${tr("每天", "Daily")} ${s.at}`;
