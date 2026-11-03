@@ -5767,6 +5767,22 @@ drill_codex_resume_history() {
   SECS=$(since "$t0"); WHAT='原生历史恢复保留同一对话；不同 UUID 的历史拒绝复用'
 }
 
+drill_schedule_credential_expired() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-node-http-selftest.py" 2>&1) \
+    || { WHY="broker credential renewal: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='long runs renew broker credentials; 401 retries once; node.env unchanged'
+}
+
+drill_native_worktree_push() {
+  CAP=120; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/fleet-heavy-selftest.sh" 2>&1) \
+    || { WHY="native worktree push: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='native isolation preserves push commands; ordinary worktrees still queue'
+}
+
 drill_schedule_background_auth() {
   CAP=30; local t0 out
   t0=$(now)

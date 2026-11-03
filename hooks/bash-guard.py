@@ -652,7 +652,7 @@ def _expand(path, cwd):
 
 def _cd_target(masked_seg, orig_seg, cwd):
     """If the segment is `cd <dir>` / `pushd <dir>`, the new cwd; else None."""
-    m = re.match(r"\s*\(*\s*(?:cd|pushd)(?:\s+(\S+))?\s*\)*\s*$", masked_seg)
+    m = re.match(r"\s*\(*\s*(?:cd|pushd)(?:\s+(\"[^\"]*\"|'[^']*'|\S+))?\s*\)*\s*$", masked_seg)
     if not m:
         return None
     if not m.group(1):
@@ -758,7 +758,7 @@ def _rewrite(span, new_text, note):
 # `xargs -P 5` — drag the shared machine down together (EPIC #1291). So a heavy
 # statement is PREFIXED with bin/fleet-heavy.sh, a machine-wide semaphore (3
 # slots across every login), the same rewrite-not-refuse move as #483/#528:
-#     cd x && git push origin b | tail   →   cd x && <fleet-heavy.sh> --label git-push --wait 60 -- git push origin b | tail
+#     cd x && git push origin b | tail   →   cd x && <fleet-heavy.sh> --label push --wait 60 -- git push origin b | tail
 # Prefix only: the statement's own text, quoting, heredoc and redirections are
 # untouched (they attach to the wrapper, whose child inherits them). Scoped to
 # FLEET panes; FLEET_HEAVY=0 (env, global settings, or inline) turns it off.
@@ -838,14 +838,20 @@ def _heavy_label(text):
     if not toks:
         return "heavy"
     head = os.path.basename(toks[0])
+    if head == "git" and toks[-1] == "push":
+        return "push"
     if head in ("git", "npm", "python", "python3", "bash", "sh", "zsh") and len(toks) > 1:
         tail = os.path.basename(toks[-1])
         head = tail if head.endswith("sh") else head + "-" + tail
     return re.sub(r"[^A-Za-z0-9._-]", "-", head)[:40] or "heavy"
 
 
-def check_heavy(masked_seg, span, masked_cmd, tool_input):
+def check_heavy(masked_seg, span, masked_cmd, tool_input, cwd=""):
     """Prefix fleet-heavy.sh onto a heavy statement. `masked_seg` keeps CASE."""
+    # Claude's native worktree harness verifies the original command. Wrapping
+    # it can make an otherwise valid push fail its isolated-worktree check.
+    if re.search(r"/\.claude/worktrees/agent-[^/]+(?:/|$)", os.path.realpath(cwd)):
+        return
     conf = _heavy_conf()
     if conf.get("FLEET_HEAVY", "1").strip() == "0":
         return
@@ -1368,7 +1374,7 @@ def main():
         except Exception:
             pass                         # fail open
         try:
-            check_heavy(masked[a:b], (a, b), masked, ti)
+            check_heavy(masked[a:b], (a, b), masked, ti, cwd)
         except Exception:
             pass                         # a queue bug must never cost the command
 
