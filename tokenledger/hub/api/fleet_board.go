@@ -96,9 +96,21 @@ type BoardRow struct {
 	Repo         string `json:"repo,omitempty"`
 	Parent       string `json:"parent,omitempty"`
 	Depth        int    `json:"depth,omitempty"`
-	Lost         bool   `json:"lost,omitempty"`
-	At           int64  `json:"at"`
-	ActivityAt   int64  `json:"activity_at,omitempty"` // native turn/state activity, independent of inventory freshness
+	// Who opened it (task PV5W): the ID of the session whose spawn / task tool
+	// opened this one (the node's @from_fid, else the record's request_payload
+	// from_fid), only when it is one of this person's own sessions; its title,
+	// and whether it has ended. Parent / Depth nest the row under it when that
+	// session is on this list — never a live row under an ended one. Display
+	// only: nothing routes, reports or reaps by it.
+	From      string `json:"from,omitempty"`
+	FromTitle string `json:"from_title,omitempty"`
+	FromEnded bool   `json:"from_ended,omitempty"`
+	// TreeAt is the latest activity of the row and every row nested under it —
+	// the lists order a tree by it (task PV5W).
+	TreeAt     int64 `json:"tree_at,omitempty"`
+	Lost       bool  `json:"lost,omitempty"`
+	At         int64 `json:"at"`
+	ActivityAt int64 `json:"activity_at,omitempty"` // native turn/state activity, independent of inventory freshness
 	// Why it is still open (E101), 中文 / English, and its tone — grey · orange ·
 	// red: the node's reap_why turned into the card's third line, ONE source for
 	// the console and the ⌘P panel. Only on 等你 / 排队中 rows; none when nothing
@@ -118,6 +130,7 @@ type BoardRow struct {
 	// worker_start). Empty = a person's (⌘P, the web, the CLI) — the main list.
 	Source     string `json:"source,omitempty"`
 	parentTask string
+	fromID     string // the opener's ID before it is checked against this person's sessions
 	taskVia    string
 	taskAgent  bool
 }
@@ -404,6 +417,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		if t != nil {
 			r.Task, r.TaskID, r.parentTask = t.Ref, t.FID, t.ParentTask
+			r.fromID = taskFromID(t)
 			r.taskVia, r.taskAgent = t.Via, t.ParentTask != "" || t.ParentSession != ""
 			r.ExecutionEndpoint = t.ExecutionEndpoint
 			r.CancelRequest, r.Generation = t.CancelRequest, t.Generation
@@ -500,6 +514,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Repo = wstr(w, "repo")
 		}
 		r.WorkerID, r.Machine, r.Login = wid, fs.MachineName, fs.OSUser
+		if v := wstr(w, "from"); store.IsFleetID(v) {
+			r.fromID = v
+		}
 		r.State = wstr(w, "state")
 		r.NativeWait = wstr(w, "native_wait")
 		if loop, ok := w["loop"].(bool); ok {
@@ -705,6 +722,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		r.Source = boardSource(*r)
 	}
+	s.boardFrom(owner, kept)
 	b := finishBoard(kept)
 	b.SessionList = SessionListPreferences{MaxVisible: 10, IdleHours: 24}
 	if owner != "" {
@@ -843,7 +861,7 @@ func finishBoard(rows []BoardRow) *Board {
 		}
 		return rows[a].ID < rows[b].ID
 	})
-	byTask := map[string]int{}
+	byTask, byID := map[string]int{}, map[string]int{}
 	for i, r := range rows {
 		if r.Task != "" {
 			byTask[r.Task] = i
@@ -851,25 +869,96 @@ func finishBoard(rows []BoardRow) *Board {
 		if r.TaskID != "" {
 			byTask[r.TaskID] = i
 		}
+		byID[r.ID] = i
+	}
+	// Who it nests under (task PV5W): the session that opened it, when that is on
+	// this list — whatever either one's group, never a live row under an ended
+	// one, never across archived / not. Else an old record's parent task, in its
+	// own group (an EPIC's members).
+	par := make([]int, len(rows))
+	for i, r := range rows {
+		par[i] = -1
+		if r.From != "" {
+			if p, ok := byID[r.From]; ok && p != i {
+				rows[i].FromTitle = rows[p].Title
+				if rows[p].Archived == r.Archived && (rows[p].Group != "gone" || r.Group == "gone") {
+					par[i] = p
+				}
+			}
+			continue
+		}
+		if p, ok := byTask[r.parentTask]; ok && r.parentTask != "" && p != i && rows[p].Group == r.Group {
+			par[i] = p
+		}
+	}
+	for i := range rows {
+		// a loop of openers (a moved or forged ID) is cut where it closes, so no
+		// row drops off the list
+		seen := map[int]bool{i: true}
+		for j := par[i]; j >= 0; j = par[j] {
+			if seen[j] {
+				if j == i {
+					par[i] = -1
+				}
+				break
+			}
+			seen[j] = true
+		}
 	}
 	kids := map[int][]int{}
 	nested := map[int]bool{}
-	for i, r := range rows {
-		if p, ok := byTask[r.parentTask]; ok && r.parentTask != "" && p != i && rows[p].Group == r.Group {
-			kids[p] = append(kids[p], i)
+	for i := range rows {
+		if par[i] >= 0 {
+			kids[par[i]] = append(kids[par[i]], i)
 			nested[i] = true
 		}
 	}
 	for i := range rows {
-		if p, ok := byTask[rows[i].parentTask]; ok && rows[i].parentTask != "" && p != i {
+		if par[i] >= 0 {
+			rows[i].Parent = rows[par[i]].ID
+		} else if p, ok := byTask[rows[i].parentTask]; ok && rows[i].From == "" && rows[i].parentTask != "" && p != i {
 			rows[i].Parent = rows[p].ID
 		}
+	}
+	// a tree's activity: its own and every row nested under it (task PV5W);
+	// siblings newest tree first
+	treeAt := make([]int64, len(rows))
+	var tree func(i int) int64
+	tree = func(i int) int64 {
+		if treeAt[i] != 0 {
+			return treeAt[i]
+		}
+		at := rows[i].ActivityAt
+		if at <= 0 {
+			at = rows[i].At
+		}
+		treeAt[i] = at
+		for _, k := range kids[i] {
+			if t := tree(k); t > at {
+				at = t
+			}
+		}
+		treeAt[i] = at
+		return at
+	}
+	for i := range rows {
+		tree(i)
+	}
+	for p := range kids {
+		ks := kids[p]
+		sort.SliceStable(ks, func(a, b int) bool {
+			if treeAt[ks[a]] != treeAt[ks[b]] {
+				return treeAt[ks[a]] > treeAt[ks[b]]
+			}
+			return rows[ks[a]].ID < rows[ks[b]].ID
+		})
 	}
 	out := make([]BoardRow, 0, len(rows))
 	var put func(i, depth int)
 	put = func(i, depth int) {
 		r := rows[i]
 		r.Depth = depth
+		r.TreeAt = treeAt[i]
 		r.Words = boardWords[r.Tag]
 		r.AgentWords = [2]string{"未知", "Unknown"}
 		if r.Agent != "" {
@@ -932,6 +1021,56 @@ func finishBoard(rows []BoardRow) *Board {
 	h.Write(enc)
 	b.Digest = hex.EncodeToString(h.Sum(nil))[:12]
 	return b
+}
+
+// taskFromID is the session a record was dispatched from (task PV5W): the node's
+// fleet-task-record.sh puts the calling session's ID in request_payload.from_fid.
+func taskFromID(t *store.FleetTask) string {
+	if t == nil || !strings.Contains(t.RequestPayload, "from_fid") {
+		return ""
+	}
+	var p struct {
+		FromFID string `json:"from_fid"`
+	}
+	if json.Unmarshal([]byte(t.RequestPayload), &p) != nil || !store.IsFleetID(p.FromFID) {
+		return ""
+	}
+	return p.FromFID
+}
+
+// boardFrom checks each row's opener against this person's own sessions (task
+// PV5W): a row on this list, else the person's ID ledger. Another person's ID, an
+// unknown one and the operator's door ("" — everyone's rows) draw no relation.
+func (s *Server) boardFrom(owner string, rows []BoardRow) {
+	if owner == "" {
+		return
+	}
+	byID := map[string]*BoardRow{}
+	for i := range rows {
+		byID[rows[i].ID] = &rows[i]
+	}
+	looked := map[string]*store.FleetIDRecord{}
+	for i := range rows {
+		r := &rows[i]
+		id := r.fromID
+		if id == "" || id == r.ID {
+			continue
+		}
+		if p := byID[id]; p != nil {
+			r.From, r.FromTitle, r.FromEnded = p.ID, p.Title, p.Group == "gone"
+			continue
+		}
+		rec, seen := looked[id]
+		if !seen {
+			if got, err := s.Store.FleetIDOf(owner, id); err == nil {
+				rec = &got
+			}
+			looked[id] = rec
+		}
+		if rec != nil {
+			r.From, r.FromTitle, r.FromEnded = rec.ID, store.FleetTitle(rec.Title), rec.ClosedAt > 0
+		}
+	}
 }
 
 // The list's groups (task DDBQ): who opened a session. Empty is a person's.
