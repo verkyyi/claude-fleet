@@ -58,6 +58,7 @@ check("B: a session's --origin is an agent's",
 check("B: a person's session is stamped nothing",
       "case \"$SOURCE\" in agent|schedule|api) stamp_option @session_source \"$SOURCE\"" in raw)
 check("B: the --bg re-exec carries it", "owarg=\"$owarg --source=$SOURCE\"" in raw)
+check("B: the ID's ledger keeps it past the close (PV5W)", '${SOURCE:+--session_source "$SOURCE"}' in raw)
 check("B: a scheduled run's first sentence is its name (X24T)",
       '[ "$SOURCE" = schedule ] && [ -n "$custom" ] && stamp_option @task_line "$custom"' in raw)
 check("B: dash-issue-session.sh stamps a session's spawn",

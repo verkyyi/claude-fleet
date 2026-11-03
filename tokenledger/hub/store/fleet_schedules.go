@@ -406,6 +406,27 @@ func (s *Store) PruneScheduleRuns(now time.Time) error {
 	return e
 }
 
+// RecentScheduleRuns is owner's runs within the result retention period, newest
+// first, conclusions left out — what the session list needs to recognise a run
+// whose session it never learned (task PV5W).
+func (s *Store) RecentScheduleRuns(owner string) ([]ScheduleRun, error) {
+	rows, e := s.read.Query(`SELECT `+scheduleRunCols+` FROM fleet_schedule_runs WHERE owner=? AND started>=? ORDER BY started DESC,id DESC`, owner, time.Now().Add(-30*24*time.Hour).Unix())
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := []ScheduleRun{}
+	for rows.Next() {
+		r, e := scanScheduleRun(rows)
+		if e != nil {
+			return nil, e
+		}
+		r.Summary = ""
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ScheduleSession carries only list metadata, never every run's full conclusion.
 type ScheduleSession struct {
 	ID         string `json:"id"`

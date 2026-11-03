@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -133,7 +134,8 @@ type BoardRow struct {
 	parentTask string
 	fromID     string // the opener's ID before it is checked against this person's sessions
 	fromKey    string // an older record's opener by key (its dispatch request_id), when it has no ID
-	fromAt     int64  // that record's creation: the key's holder must be older
+	fromAt     int64  // the record's creation: the key's holder must be older, a run started just before
+	runName    string // the window name a schedule runner asked a placement for (its record's params.name)
 	taskVia    string
 	taskAgent  bool
 }
@@ -382,6 +384,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		r := BoardRow{}
 		if b != nil {
 			r.Code, r.Title, r.Machine, r.Login, r.Repo = b.Short, b.Title, b.Machine, b.Login, b.Repo
+			r.Source = b.SessionSource // a live session's own word replaces it below
 			r.ActivityAt = b.ActivityAt
 			r.Agent = b.Agent
 			if r.Agent != "" {
@@ -420,9 +423,10 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		}
 		if t != nil {
 			r.Task, r.TaskID, r.parentTask = t.Ref, t.FID, t.ParentTask
-			r.fromID = taskFromID(t)
+			r.fromID, r.fromAt = taskFromID(t), t.CreatedAt.Unix()
+			r.runName = taskRunName(t)
 			if r.fromID == "" {
-				r.fromKey, r.fromAt = taskFromKey(t), t.CreatedAt.Unix()
+				r.fromKey = taskFromKey(t)
 			}
 			r.taskVia, r.taskAgent = t.Via, t.ParentTask != "" || t.ParentSession != ""
 			r.ExecutionEndpoint = t.ExecutionEndpoint
@@ -723,6 +727,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 	if err != nil {
 		return nil, err
 	}
+	var runs *runIndex // read only when a row needs it
 	for i := range kept {
 		r := &kept[i]
 		r.Archived = archived[r.ID]
@@ -731,7 +736,14 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 		if r.History != nil {
 			fid = r.History.ID
 		}
-		if run, ok := sources[fid]; ok {
+		run, ok := sources[fid]
+		if !ok && r.runName != "" {
+			if runs == nil {
+				runs = newRunIndex(s.Store, owner)
+			}
+			run, ok = runs.match(r.runName, r.fromAt)
+		}
+		if ok {
 			r.ScheduleID, r.RunID = run.ScheduleID, run.ID
 			if b := idBy[fid]; run.Title != "" && (b == nil || b.TitleSource != "manual") {
 				r.Title = run.Title
@@ -1063,6 +1075,115 @@ func taskFromID(t *store.FleetTask) string {
 		return ""
 	}
 	return p.FromFID
+}
+
+// taskRunName is the window name an older schedule runner asked the hub to place
+// (task PV5W): its record is a worker_start whose params.name is
+// `schedule-<sha256(schedule:slot:attempt)[:24]>` or the run's title. "" else.
+func taskRunName(t *store.FleetTask) string {
+	if t == nil || !strings.Contains(t.RequestPayload, `"worker_start"`) {
+		return ""
+	}
+	var p struct {
+		Action string `json:"action"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	if json.Unmarshal([]byte(t.RequestPayload), &p) != nil || p.Action != "worker_start" {
+		return ""
+	}
+	return strings.TrimSpace(p.Params.Name)
+}
+
+// runIndex recognises a schedule run whose session the hub never learned (task
+// PV5W): runners before the run → session link placed their sessions through the
+// hub, so the record names its run only by the runner's window name.
+type runIndex struct {
+	byKey map[string]store.ScheduleRun
+	runs  []store.ScheduleRun
+	names map[string]string // schedule ID → its name
+}
+
+var runKeyRE = regexp.MustCompile(`^schedule-([0-9a-f]{24})$`)
+
+func newRunIndex(st *store.Store, owner string) *runIndex {
+	x := &runIndex{byKey: map[string]store.ScheduleRun{}, names: map[string]string{}}
+	if owner == "" {
+		return x
+	}
+	x.runs, _ = st.RecentScheduleRuns(owner)
+	for _, r := range x.runs {
+		sum := sha256.Sum256([]byte(r.ScheduleID + ":" + r.Slot + ":" + strconv.Itoa(r.Attempt)))
+		x.byKey[hex.EncodeToString(sum[:])[:24]] = r
+	}
+	if all, err := st.Schedules(owner); err == nil {
+		for _, s := range all {
+			x.names[s.Spec.ID] = s.Spec.Name
+		}
+	}
+	return x
+}
+
+// runStem is a run title's leading words — before its clip mark, a bracket or
+// its day: 「活页模板现做（每… 11-01」 → 活页模板现做.
+func runStem(title string) string {
+	if i := strings.IndexAny(title, "…（("); i >= 0 {
+		title = title[:i]
+	}
+	return strings.TrimSpace(scheduleDayRE.ReplaceAllString(title, ""))
+}
+
+var scheduleDayRE = regexp.MustCompile(`\s+\d{2}-\d{2}(\s+#\d+)?$`)
+
+// match finds the one run a record was for: the window-name key exactly, else a
+// run of a schedule whose name starts with the record title's stem, admitted at
+// most 5 minutes before the record was made. Two candidates are none.
+func (x *runIndex) match(name string, made int64) (store.ScheduleSession, bool) {
+	toSession := func(r store.ScheduleRun) store.ScheduleSession {
+		var snap struct {
+			Title string `json:"session_title"`
+		}
+		_ = json.Unmarshal(r.Delivery, &snap)
+		title := snap.Title
+		if title == "" && x.names[r.ScheduleID] != "" && len(r.Day) == 10 {
+			title = x.names[r.ScheduleID] + " " + r.Day[5:]
+		}
+		return store.ScheduleSession{ID: r.ID, ScheduleID: r.ScheduleID, Title: title}
+	}
+	if m := runKeyRE.FindStringSubmatch(name); m != nil {
+		r, ok := x.byKey[m[1]]
+		if !ok {
+			return store.ScheduleSession{}, false
+		}
+		return toSession(r), true
+	}
+	stem := runStem(name)
+	if len([]rune(stem)) < 2 || made <= 0 {
+		return store.ScheduleSession{}, false
+	}
+	var hit *store.ScheduleRun
+	for i := range x.runs {
+		r := &x.runs[i]
+		if r.Started > made || r.Started < made-300 {
+			continue
+		}
+		var snap struct {
+			Title string `json:"session_title"`
+		}
+		_ = json.Unmarshal(r.Delivery, &snap)
+		if !strings.HasPrefix(x.names[r.ScheduleID], stem) && !strings.HasPrefix(snap.Title, stem) {
+			continue
+		}
+		if hit != nil {
+			return store.ScheduleSession{}, false
+		}
+		hit = r
+	}
+	if hit == nil {
+		return store.ScheduleSession{}, false
+	}
+	return toSession(*hit), true
 }
 
 // fleetOrchRE reads a task tool's dispatch request_id: `orch:<caller key>:<16
