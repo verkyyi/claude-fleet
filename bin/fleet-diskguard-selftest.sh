@@ -315,6 +315,8 @@ FLEET_MACHINE_TASKS=off PATH="$PST:$PATH" fseventsd_watch
 st_eq "fseventsd_watch: a managed login scans nothing" "0" "$( [ -f "$PSCALLS" ] && grep -c . "$PSCALLS" || echo 0)"
 rm -f "$PSCALLS"
 FLEET_MACHINE_TASKS='' PATH="$PST:$PATH" fseventsd_watch
-st_eq "fseventsd_watch: any other login scans as before" "1" "$( [ -f "$PSCALLS" ] && grep -c . "$PSCALLS" || echo 0)"
+# (fseventsd is macOS's: elsewhere the probe never runs ps at all)
+want=0; [ "$(uname -s 2>/dev/null)" = Darwin ] && want=1
+st_eq "fseventsd_watch: any other login scans as before" "$want" "$( [ -f "$PSCALLS" ] && grep -c . "$PSCALLS" || echo 0)"
 
 printf 'selftest OK: fleet-diskguard (%s assertions — worktree proc-reap + CPU watchdog + orphan watchdog + one ps table)\n' "$CHECKS"
