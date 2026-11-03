@@ -2832,7 +2832,7 @@ def task_list(items):
     if any(e.get("activity_at") for e in regular + history):
         regular.sort(key=recent)
         history.sort(key=recent)
-    result = ([{"kind": "hdr", "group": "pin", "text": "PIN"}] if pin else []) + pin + regular
+    result = pin + regular     # no PIN heading: a pinned row says ⇡ itself (row_segs)
     older = [e for e in items if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:
         result.append({"kind": "sec", "sec": "gone", "text": "More sessions" if ui_lang() == "en" else "更多会话",
@@ -3272,13 +3272,12 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
                 x["sec"] = sec
                 x.update(extra)
             out.append(x)
-    if pin:
-        out.append({"kind": "hdr", "group": "pin", "text": "PIN"})
-        for e in pin:
-            put(e)
+    # pinned first, in pin order, with their trees — no heading: ⇡ after the title
+    for e in pin:
+        put(e)
     for e in ordinary:
         put(e)
-    # PIN · the list · 更多会话 · 定时任务 · API 派发 · 已归档
+    # pinned · the list · 更多会话 · 定时任务 · API 派发 · 已归档
     older = [e for e in ordered if e.get("kind") == "cmd" and e.get("cmd") == "history"]
     if history or older:
         running = sum(task_status(x) == "work" for e in history for x in whole(e))
@@ -3417,13 +3416,17 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     times = " ×%d" % e["dup_n"] if not flat and (e.get("dup_n") or 0) > 1 else ""
     # a schedule's row: its last ended run, ✓ / ✗ and when (HH:MM today, MM-DD before)
     tail = ("  " + e["sched_tail"]) if e.get("sched_tail") else ""
+    # a pinned row (never a child under it): ⇡ after its title, (N) and ×N
+    pinned = " " + cmd_icons()["pin"] if e.get("group") == "pin" and not e.get("tree_up") else ""
     if cells(more) > avail - 2:
         more = ""
     if cells(times) + cells(more) > avail - 2:
         times = ""
     if cells(times) + cells(more) + cells(tail) > avail - 2:
         tail = ""
-    name = clip_name(e.get("text") or "", avail - cells(more) - cells(times) - cells(tail), cells, clip)
+    if cells(times) + cells(more) + cells(tail) + cells(pinned) > avail - 2:
+        pinned = ""
+    name = clip_name(e.get("text") or "", avail - cells(more) - cells(times) - cells(tail) - cells(pinned), cells, clip)
     tone = e.get("tree_tone") if twisty == "shut" else ""
     if prefix:
         segs.append((prefix, base + ("dim",)))
@@ -3435,9 +3438,11 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
         segs.append((times, base + ("dim",)))
     if more:
         segs.append((more, base + (tone_style("ask", col) if tone == "ask" else ("dim",))))
+    if pinned:
+        segs.append((pinned, base + tone_style("ask", col)))
     if tail:
         segs.append((tail, base + ("dim",)))
-    segs.append((" " * max(0, avail - cells(name) - cells(times) - cells(more) - cells(tail)), base))
+    segs.append((" " * max(0, avail - cells(name) - cells(times) - cells(more) - cells(pinned) - cells(tail)), base))
     if show_agent:
         # Agent after the title, a fixed aligned column; the plan marker stays visible
         if e.get("agent_basis") == "planned":

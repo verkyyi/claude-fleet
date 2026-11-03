@@ -91,7 +91,7 @@ class TaskList(unittest.TestCase):
         self.assertIn("Loop 已开启", v.note_of(e)[0])
         self.assertIn("发布到哪里？", v.note_of(e)[0])
 
-    def test_only_pin_heading_and_no_tree_or_second_question_line(self):
+    def test_no_headings_and_no_tree_or_second_question_line(self):
         items = [dict(kind="hdr", group="work", text="工作"),
                  row("member", group="work", depth=2, fold="driver"),
                  row("driver", group="pin", epic=dict(done=1, total=2), expanded=False),
@@ -99,7 +99,7 @@ class TaskList(unittest.TestCase):
                  dict(kind="ask", of="ask", text="where?"),
                  dict(kind="cmd", cmd="reapall", text="legacy cleanup")]
         shown = v.visible(items, "", set())
-        self.assertEqual([e["text"] for e in shown if e["kind"] == "hdr"], ["PIN"])
+        self.assertFalse([e for e in shown if e["kind"] == "hdr"], "no PIN heading: a pinned row says ⇡ itself")
         # one order (task DDBQ): asking is not a group; with no activity the source order holds
         self.assertEqual([e["target"] for e in shown if e["kind"] == "sess"], ["driver", "member", "ask"])
         self.assertFalse(any(e["kind"] in ("ask", "cmd") for e in shown))
@@ -689,6 +689,29 @@ class SessionTree(unittest.TestCase):
         shown = v.visible([e for es in groups.values() for e in es], "", set())
         self.assertEqual([(e["kind"], e.get("tree_prefix"), e.get("tree_twisty")) for e in shown],
                          [("sess", "", ""), ("sess", "", "")])
+
+    def test_pinned_row_marker(self):
+        items = [self.node("pinned", group="pin", text="置顶的 中文"),
+                 self.node("pkid", "pinned", group="pin", text="孩子"),
+                 self.node("plain", text="plain")]
+        out = v.compact_task_list(items, now=self.now, folds={"pinned": True})
+        self.assertFalse([e for e in out if e["kind"] == "hdr"])
+        self.assertEqual([e["target"] for e in out if e["kind"] == "sess"], ["pinned", "pkid", "plain"])
+        by = {e["target"]: e for e in out if e["kind"] == "sess"}
+        line = self.drawn(by["pinned"])
+        self.assertIn("置顶的 中文 ⇡", line)
+        st = self.seg(by["pinned"], " ⇡")
+        self.assertIn("c1", st)
+        self.assertNotIn("⇡", self.drawn(by["pkid"]), "a pinned parent's child shows no marker")
+        self.assertNotIn("⇡", self.drawn(by["plain"]))
+        for w in (100, 60, 45, 30):
+            self.assertEqual(qo.cells(self.drawn(by["pinned"], w)), w)
+        shut = v.compact_task_list(items, now=self.now)
+        self.assertIn("▸ 置顶的 中文 (1) ⇡", self.drawn(next(e for e in shut if e.get("target") == "pinned")))
+        long = dict(by["pinned"], text="很长" * 60)
+        self.assertIn("… ⇡ Codex", self.drawn(long), "clip_name keeps room for the marker")
+        with patch.dict(os.environ, {"FLEET_GLYPHS": "ascii"}):
+            self.assertIn("置顶的 中文 ^", self.drawn(by["pinned"]))
 
     def test_pin_carries_children_and_roots_order_by_tree_activity(self):
         items = [self.node("old", activity_at=self.now - 500),
