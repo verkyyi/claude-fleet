@@ -154,10 +154,80 @@ class Cold(fixture.Park):
         self.assertFalse((gate.fid_dir(self.fid) / cold.NAME).exists())
 
 
+class Kept(unittest.TestCase):
+    """Step 2: a cold park stays an open session everywhere a window used to say so."""
+
+    def setUp(self):
+        import tempfile
+        self.root = Path(tempfile.mkdtemp(prefix='fleet-cold-'))
+        self.env = {'FLEET_CONF_DIR': str(self.root / 'conf')}
+        self.fid = fixture_fid(7)
+        d = self.root / 'conf/session-gate' / self.fid
+        d.mkdir(parents=True)
+        (d / cold.NAME).write_text(json.dumps(dict(v=1, fid=self.fid, session='test', due=1)))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_id_live_keeps_a_cold_park_open(self):
+        post = self.root / 'post'
+        post.write_text('#!/bin/sh\ncat > %s\nprintf "200\\n{}\\n"\n' % shlex.quote(str(self.root / 'body')))
+        post.chmod(0o755)
+        env = dict(os.environ, **self.env, FLEET_ID_LIVE_CMD='printf "%s\\n" ' + fixture_fid(1),
+                   FLEET_ID_HUB_POST=str(post))
+        p = subprocess.run(['bash', str(BIN / 'fleet-id.sh'), 'live'], env=env, capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        ids = json.loads((self.root / 'body').read_text())['ids']
+        self.assertIn(self.fid, ids, 'the hub was told a cold park is gone')
+        self.assertIn(fixture_fid(1), ids)
+
+    def test_ledger_watch_skips_a_cooled_window(self):
+        self.assertIn('cold.json" ] && continue', (BIN / 'fleet-ledger-watch.sh').read_text())
+
+    def test_view_row_reopens_here(self):
+        spec = spec_from_file_location('fleet_view', BIN / 'fleet_view.py')
+        view = module_from_spec(spec)
+        spec.loader.exec_module(view)
+        groups = {g: [] for g in view.GROUPS}
+        board = {'rows': [dict(id=self.fid, group='queue', tag='parked', title='cold one', machine='m', login='u')]}
+        with patch.dict(os.environ, self.env):
+            out, _ = view.board_apply(board, groups, [], [], 'm', 'u')
+            rows = [e for g in view.GROUPS for e in out[g]]
+            self.assertEqual(rows[0]['target'], 'cold:' + self.fid)
+            self.assertFalse(rows[0]['far'])
+            # another machine's row of the same ID is never treated as cold here
+            out, _ = view.board_apply(board, {g: [] for g in view.GROUPS}, [], [], 'other', 'u')
+            self.assertTrue([e for g in view.GROUPS for e in out[g]][0]['far'])
+            warmed = []
+            with patch.object(cold, 'warm', side_effect=lambda f: warmed.append(f) or True):
+                w, far = view.resolve('vid', 'cold:' + self.fid, {}, 'test',
+                                      inventory={'@9': (self.fid, 'worker', 0, '')})
+        self.assertEqual((w, far), ('@9', False))
+        self.assertEqual(warmed, [self.fid])
+
+    def test_retention_ends_the_id_and_keep_never_expires(self):
+        keep = fixture_fid(8)
+        d = self.root / 'conf/session-gate' / keep
+        d.mkdir(parents=True)
+        (d / cold.NAME).write_text(json.dumps(dict(v=1, fid=keep, session='test', due=None)))
+        args = SimpleNamespace(socket_name='none', session='test', dry_run=False, repo='', main='', only='')
+        ended = []
+        with patch.dict(os.environ, self.env, FLEET_GATE_WIN_CMD='false'):
+            c = cleanup.Cleaner(args)
+            with patch.object(c, 'end_id', side_effect=lambda f, why: ended.append((f, why))):
+                c.cold_expire()
+            self.assertEqual(ended, [(self.fid, 'parked')])
+            self.assertIsNone(cold.read(self.fid))
+            self.assertTrue(cold.read(keep), 'a keep cold park expired')
+
+
 def load_tests(loader, tests, pattern):
     """Only this file's cases: Cold borrows Park's fixture, not its tests."""
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(Due))
+    suite.addTests(loader.loadTestsFromTestCase(Kept))
     for name in sorted(n for n in vars(Cold) if n.startswith('test_')):
         suite.addTest(Cold(name))
     return suite
