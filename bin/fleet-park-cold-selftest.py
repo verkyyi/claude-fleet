@@ -153,6 +153,21 @@ class Cold(fixture.Park):
         self.assertIn(self.win, self.tm('list-windows', '-t', 'test', '-F', '#{window_id}').split())
         self.assertFalse((gate.fid_dir(self.fid) / cold.NAME).exists())
 
+    def test_missing_worktree_keeps_it_warm(self):
+        # a park whose worktree is gone cannot be reopened once cold (fleet-id:
+        # «Recorded worktree is gone»), so it stays a window — BREAK-IT park-cold-no-worktree
+        self.parked()
+        self.wait(lambda: self.opt('@park_held'))
+        self.set('@park_since', str(int(time.time()) - 7200))
+        self.set('@worktree', str(self.root / 'gone'))
+        self.env.update(FLEET_PARK_COLD='1', FLEET_PARK_WARM='0', FLEET_PARK_COLD_AFTER='60')
+        with patch.dict(os.environ, self.env):
+            c = self.cleaner()
+            self.assertFalse(c.cool(self.win, c.snapshot(self.win)))
+            self.assertEqual(c.why, 'no-worktree')
+        self.assertIn(self.win, self.tm('list-windows', '-t', 'test', '-F', '#{window_id}').split())
+        self.assertFalse((gate.fid_dir(self.fid) / cold.NAME).exists())
+
 
 class Kept(unittest.TestCase):
     """Step 2: a cold park stays an open session everywhere a window used to say so."""
