@@ -93,7 +93,26 @@ check("C: find_workers never targets a cold row",
 check("C: a start's proof never a cold row", ctl.count("windowed(snapshot)") >= 4)
 check("C: id_presence lists windows only", 'for w in snap["workers"]\n                                      if not w.get("cold")]' in ctl)
 check("C: the inventory adds cold rows only for the whole fleet, never twice",
-      'if not window:\n            seen = {w.get("identity") for w in workers}' in ctl)
+      'if whole:\n            seen = {w.get("identity") for w in workers}' in ctl
+      and 'whole = not window' in ctl)
+
+# ---- D: the inventory itself (the row loop reuses `window`) --------------------
+class Fake(fc.Control):
+    def __init__(self):
+        pass
+
+    def adapter(self, mode, *args, **kw):
+        row = "\t".join(["@7", "", "1", "/p/claude-fleet-scratch-3", "idle", "claude", "", "", "verkyyi/claude-fleet",
+                         "w", "", "", "0b7e8c1a-8888-4222-8333-0000000000aa"])
+        return 0, (row + "\n").encode(), b""
+
+
+snap = Fake().workers(fleet)
+ids = [w.get("identity") for w in snap["workers"]]
+check("D: a whole-fleet read lists its windows and its cold parks",
+      "0b7e8c1a-8888-4222-8333-0000000000aa" in ids and A in ids and B in ids)
+check("D: one window's read lists that window only",
+      [w.get("identity") for w in Fake().workers(fleet, "@7")["workers"]] == ["0b7e8c1a-8888-4222-8333-0000000000aa"])
 
 print("park-cold-inventory-selftest: %s" % ("PASS" if not fails else "%d FAIL" % fails))
 sys.exit(1 if fails else 0)

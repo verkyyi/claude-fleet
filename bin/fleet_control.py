@@ -409,6 +409,7 @@ class Control(NativeExitSubmission):
                                lambda: self.workers(fleet))
         # window (issue #2237): that one window's rows by the same reads — a start's
         # post-condition check, which over the whole fleet cost seconds.
+        whole = not window   # the loop below reuses `window` for each row's
         code, output, err = self.adapter("workers", fleet["name"], *([window] if window else []))
         if code == 3:
             return {"state": "down", "workers": [], "park_metrics": park_summary([]), "observed_at": now()}
@@ -454,7 +455,7 @@ class Control(NativeExitSubmission):
                                 # kept on the wire, always awake now.
                                 lifecycle="awake",
                                 agent=agent or fleet["agent"], handle=handle, **extra))
-        if not window:
+        if whole:
             seen = {w.get("identity") for w in workers}
             workers += [w for w in cold_workers(fleet) if w["identity"] not in seen]
         return {"state": "running", "workers": workers, "park_metrics": park_summary(workers), "observed_at": now()}
