@@ -296,6 +296,12 @@ assert.equal(compactRows(changedRows,{now,previous:frozen,interacting:true,curre
   assert.match(scheduleResult(spec('s5', 'x', { next_run: at('2026-11-03T21:05:00+08:00') }), nowMs), /^(下次|Next) 21:05$/, 'today: its clock');
   assert.deepEqual(sl.other.map((r) => r.id), ['x', 'y'], 'a run of an unlisted schedule stays reachable');
   assert.equal(clockOrDay(at('2026-11-03T00:05:00+08:00'), 'Asia/Shanghai', nowMs), '00:05');
+  // the hub sends ISO strings too (a live board crashed on them): read, never thrown
+  assert.equal(clockOrDay('2026-11-02T16:05:00Z', 'Asia/Shanghai', nowMs), '00:05', 'an ISO time is read');
+  assert.equal(clockOrDay('not a time', 'Asia/Shanghai', nowMs), '', 'an unreadable time is nothing');
+  assert.equal(clockOrDay('2026-11-02T16:05:00Z', 'Not/AZone', nowMs) !== undefined, true, 'a bad zone falls back');
+  assert.match(scheduleResult(spec('s6', 'x', { last_run: '2026-11-02T16:05:00Z' }), nowMs), /^✓ 00:05$/);
+  assert.match(scheduleResult(spec('s7', 'x', { next_run: 'garbage' }), nowMs), /^$/);
   assert.equal(clockOrDay(at('2026-11-03T00:05:00+08:00'), 'America/Los_Angeles', nowMs), '11-02', 'the day in the schedule\'s own zone');
   assert.equal(rowsSignal(sl.lines[1].runs), 'work');
   assert.equal(rowsSignal([...sl.lines[0].runs, ...sl.lines[1].runs]), 'ask', 'asking over working');

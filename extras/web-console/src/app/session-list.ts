@@ -214,27 +214,34 @@ export function scheduleRuns(rows: Row[]): ScheduleRuns[] {
 // the list does not have (deleted, an older run with no schedule_id) gather on
 // one more line, `other`, so they stay reachable.
 export type ScheduleSpecLike = { spec: { id: string; name: string; timezone: string; enabled?: boolean };
-  observed: { status?: string; last_run?: number; next_run?: number; last_result?: string } };
+  observed: { status?: string; last_run?: number | string; next_run?: number | string; last_result?: string } };
 export type ScheduleLine = { id: string; name: string; runs: Row[]; urgent?: Row; failed: boolean; result: string };
 export type ScheduleLines = { lines: ScheduleLine[]; other: Row[] };
 export const scheduleFailed = (s: ScheduleSpecLike) => s.observed.status === "failed" || s.observed.last_result === "failed";
-// epoch s → HH:MM on `now`'s day (in the schedule's zone), else MM-DD
-export function clockOrDay(t: number | undefined, zone: string, now = Date.now()): string {
-  if (!t) return "";
+// a schedule time as the hub sends it — epoch seconds or an ISO string — in ms; 0 unreadable
+export const scheduleMs = (t: number | string | undefined): number => {
+  const ms = typeof t === "number" ? t * 1000 : typeof t === "string" && t ? Date.parse(t) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+};
+// HH:MM on `now`'s day (in the schedule's zone), else MM-DD; "" when unreadable — never throws
+export function clockOrDay(t: number | string | undefined, zone: string, now = Date.now()): string {
+  const ms = scheduleMs(t);
+  if (!ms) return "";
   const parts = (ms: number) => {
     let p: Intl.DateTimeFormatPart[];
     try { p = new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(ms); }
     catch { p = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(ms); }
     return Object.fromEntries(p.map((x) => [x.type, x.value])) as Record<string, string>;
   };
-  const a = parts(t * 1000), b = parts(now);
+  const a = parts(ms), b = parts(now);
   return a.year === b.year && a.month === b.month && a.day === b.day ? `${a.hour}:${a.minute}` : `${a.month}-${a.day}`;
 }
 export function scheduleResult(s: ScheduleSpecLike, now = Date.now()): string {
   const zone = s.spec.timezone;
-  if (s.observed.last_run) return `${scheduleFailed(s) ? "✗" : "✓"} ${clockOrDay(s.observed.last_run, zone, now)}`;
-  const next = s.spec.enabled === false ? 0 : s.observed.next_run;
-  return next ? tr(`下次 ${clockOrDay(next, zone, now)}`, `Next ${clockOrDay(next, zone, now)}`) : "";
+  const last = clockOrDay(s.observed.last_run, zone, now);
+  if (last) return `${scheduleFailed(s) ? "✗" : "✓"} ${last}`;
+  const next = s.spec.enabled === false ? "" : clockOrDay(s.observed.next_run, zone, now);
+  return next ? tr(`下次 ${next}`, `Next ${next}`) : "";
 }
 const urgentRun = (runs: Row[]) => runs.find(needsAttention)
   || runs.find((r) => listStatus(r).kind === "work") || runs.find((r) => listStatus(r).kind === "pending");
