@@ -209,7 +209,7 @@ def say(msg):
 _CAUSE_RX = [
     ("hostkey", re.compile(r"host key verification failed|remote host identification has changed|"
                            r"host key for .* has changed|no matching host key|主机钥匙", re.I)),
-    ("auth", re.compile(r"permission denied|authentication fail|too many authentication|登录不符|"
+    ("auth", re.compile(r"permission denied|authentication fail|too many authentication|"
                         r"节点令牌|\b401\b|certificate expired|not authori[sz]ed", re.I)),
     ("http4xx", re.compile(r"(?:HTTP|refused the connection:|（)\s*4\d\d\b|\b4\d\d (?:upgrade|forbidden|not found|"
                            r"too many|gone|conflict)|upgrade required|\bforbidden\b|TOO_MANY|NOT_OWNER", re.I)),
@@ -221,7 +221,9 @@ _CAUSE_RX = [
     ("network", re.compile(r"connection refused|no route to host|network is unreachable|connection reset|"
                            r"closed by remote host|connection closed|broken pipe|kex_exchange|curl exit|"
                            r"入口不在|could not be reached|host is down|新通道开不了", re.I)),
-    ("check", re.compile(r"-O check|控制文件|主进程|换了主人", re.I)),
+    # 登录不符 (a stray master answering as another login): the keeper's own check —
+    # closed and rebuilt at once, never a refusal's backoff (peerlink-wrong-login)
+    ("check", re.compile(r"-O check|控制文件|主进程|换了主人|登录不符", re.I)),
 ]
 
 
@@ -765,6 +767,7 @@ class Link:
         self.check_ms = None
         self.ledger_probe = 0.0
         self.relay_err = ""
+        self.new_routes = False
 
     def name(self):
         return "%s@%s" % (self.machine, self.login)
@@ -901,6 +904,11 @@ class Keeper:
             l.repinned = l.fresh_cert = True
             l.next_try = now
             self.event(l, "主机钥匙对不上：向入口重新要这台的钥匙再试")
+            return
+        if l.new_routes:
+            # the hub listed new ways in while this attempt ran: try them now
+            l.new_routes, l.round_soft = False, False
+            l.route_i, l.backoff, l.next_try = 0, 0.0, now
             return
         if cause not in REFUSED:
             l.round_soft = True
@@ -1278,6 +1286,8 @@ class Keeper:
                 # backoff the old ones built up (issue #3968)
                 if l.phase == "down" and l.next_try > now:
                     l.route_i, l.backoff, l.next_try = 0, 0.0, now
+                elif l.phase != "up":
+                    l.new_routes = True     # mid-attempt: its failure tries them at once
             l.routes = routes
         for k in list(self.links):
             l = self.links[k]

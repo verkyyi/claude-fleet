@@ -282,8 +282,9 @@ leg_H() {
 box h 0
 # BACKOFF_MAX=4: the dead route's tries stay at 0 · 1 · 3 · 7 s (1 → 2 → 4), only the
 # 8 s gap after them is cut, so mac-l comes back sooner once its route does
+# FLEET_PEERLINK_RELAY_FALLBACK=0: the dead route's own cadence (leg O drills the relay)
 export FLEET_PEERLINK_LINGER=1 FLEET_PEERLINK_PEERS_SECS=1 FLEET_PEERLINK_BAD_WARN=1 FLEET_CONNECT_LOCAL_ADDRS=192.168.1.5/24 \
-  FLEET_PEERLINK_BACKOFF_MAX=4
+  FLEET_PEERLINK_BACKOFF_MAX=4 FLEET_PEERLINK_RELAY_FALLBACK=0
 mkdir -p "$B/fs/down"; : > "$B/fs/down/203.0.113.7"
 peers mac-a:bob:entry=203.0.113.4/22022 mac-l:bob:entry=203.0.113.7/22022 "home:$ME"
 start
@@ -323,7 +324,7 @@ p2=$(python3 -c 'import json,sys; print([l["pid"] for l in json.load(open(sys.ar
 peers mac-a:bob:entry=203.0.113.4/22022
 until_ok 8 links_is "mac-a@bob:up" && st_count || st_miss "H: a login the hub dropped is still held: $(links)"
 grep -q 'mac-l@bob 关闭：已不是你的登录' "$B/run.err" && st_count || st_miss "H: no close record for the dropped login"
-stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_BACKOFF_MAX
+stop; unset FLEET_PEERLINK_LINGER FLEET_PEERLINK_PEERS_SECS FLEET_PEERLINK_BAD_WARN FLEET_CONNECT_LOCAL_ADDRS FLEET_PEERLINK_BACKOFF_MAX FLEET_PEERLINK_RELAY_FALLBACK
 }
 
 # --- I. switch: FLEET_PEERLINK_MODE=demand in fleet.conf -------------------------

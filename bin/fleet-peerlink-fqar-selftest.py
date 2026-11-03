@@ -89,6 +89,7 @@ class A_Classify(Base):
         self.assertEqual(c("ssh: connect to host 203.0.113.4 port 22: Operation timed out"), "timeout")
         self.assertEqual(c("入口不在或拒绝：the hub could not be reached（curl exit 7；不退回长期互信）"), "network")
         self.assertEqual(c("ssh -O check 不通（连续 3 次）"), "check")
+        self.assertEqual(c("登录不符：连上的是 alice，要的是 bob"), "check")   # rebuilt at once
         self.assertEqual(c(""), "unknown")
         self.assertEqual(c("something odd"), "unknown")
 
