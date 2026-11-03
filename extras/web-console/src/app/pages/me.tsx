@@ -1,4 +1,4 @@
-// me.tsx — 我的 (GR5E C1): 用量 · 设备 · 设置 · 账号, four tabs at /me/<tab>,
+// me.tsx — 我的 (GR5E C1): 用量 · 设备 · Agent · 设置 · 账号, five tabs at /me/<tab>,
 // each the very page it was on its own before, drawn under the tabs (the strip
 // as wide as the page under it). The avatar is the way in (the computer's
 // menu, the phone's top bar); a tab this page does not know goes to 账号. A
@@ -20,8 +20,8 @@ export default function MePage() {
   return (
     <Tabs value={cur.id} onValueChange={(v) => nav(`/me/${v}`, { replace: true })} className="gap-0">
       <div className={cn("mx-auto w-full px-4 pt-4 md:px-6 md:pt-6", cur.wide ? "max-w-3xl" : "max-w-2xl")}>
-        <TabsList className="grid w-full grid-cols-4 max-sm:group-data-[orientation=horizontal]/tabs:h-[50px] sm:inline-flex sm:w-auto" aria-label={tr("我的", "Me")}>
-          {ME_TABS.map((t) => <TabsTrigger key={t.id} value={t.id} className="px-2 max-sm:h-11"><t.icon />{t.label}</TabsTrigger>)}
+        <TabsList className="grid w-full grid-cols-5 max-sm:group-data-[orientation=horizontal]/tabs:h-[50px] sm:inline-flex sm:w-auto" aria-label={tr("我的", "Me")}>
+          {ME_TABS.map((t) => <TabsTrigger key={t.id} value={t.id} className="px-2 max-sm:h-11 max-sm:min-w-0 max-sm:flex-col max-sm:gap-0.5 max-sm:px-0.5 max-sm:text-[11px]"><t.icon />{t.label}</TabsTrigger>)}
         </TabsList>
       </div>
       <TabsContent value={cur.id}>

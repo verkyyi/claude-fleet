@@ -28,11 +28,18 @@ function App() {
 }
 
 const PublicHealth = lazy(() => import("./pages/health"));
+// 授权 Agent (T4DN): the OAuth consent card, drawn like a sign-in page — no shell
+const OAuthConsent = lazy(() => import("./pages/oauth-consent"));
+const OAUTH_CONSENT_PATH = "/app/oauth/authorize";
 
 async function start() {
   const root = createRoot(document.getElementById("root")!);
   if (!__PROTO__ && location.pathname.replace(/\/$/, "") === "/status") {
     root.render(<StrictMode><Suspense fallback={null}><PublicHealth publicPage /></Suspense></StrictMode>);
+    return;
+  }
+  if (!__PROTO__ && location.pathname.replace(/\/$/, "") === OAUTH_CONSENT_PATH) {
+    root.render(<StrictMode><Suspense fallback={null}><OAuthConsent /></Suspense></StrictMode>);
     return;
   }
   if (__PROTO__) {

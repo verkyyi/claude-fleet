@@ -49,3 +49,30 @@ After that, on the phone:
 - At your home machine's command line, `claude` and `codex` run on tokenman's shared subscriptions (the first line says so); `touch ~/.fleet-pool-off` to use your own account instead.
 - Moved your home to another machine: with the address everyone shares (the page's first one), nothing changes — not even the host key. With the "Advanced: straight to this machine" way, that address follows your home: after a move it reaches the new machine, so the phone asks once to trust its host key — accept it only if it matches the fingerprint on the **Connect from your phone** page. If the two machines sit behind the same router, point the router's port forward at the new one; the page names its address on your home network.
 - The phone says the host key changed and you don't know how to accept it: in Termius, Settings → Known Hosts → delete that address's entry → connect again, and tap Continue only if the fingerprint matches the **Connect from your phone** page; on a computer, `ssh-keygen -R '[address]:port'` then reconnect (`fleet` fetches the current key from the hub by itself). If it doesn't match, don't accept it — tell your admin.
+
+## From your own AI agent (Claude Code, Codex, Gemini CLI, claude.ai)
+
+Your everyday agent can see and run your tokenman sessions for you: ask it "what needs me in tokenman?", have it reply to a session, answer a session's question, stop one, or start new ones on Claude or Codex. It connects over MCP to `https://<hub>/mcp` as **you** — only your own sessions, only what you allowed — and you can cut it off at any time.
+
+**Sign in with the browser (claude.ai, Claude Code, Gemini CLI):** add the address and approve once.
+
+```sh
+claude mcp add --transport http tokenman https://hub.example.com/mcp   # Claude Code; then /mcp → sign in
+```
+
+- claude.ai, Claude desktop or mobile: Settings → Connectors → Add custom connector → `https://hub.example.com/mcp` → sign in.
+- Gemini CLI, in `~/.gemini/settings.json`: `"mcpServers": {"tokenman": {"httpUrl": "https://hub.example.com/mcp", "oauth": {"enabled": true}}}`.
+
+The sign-in page shows what the agent asks for; untick anything you don't want and choose how long it may stay connected (30 days by default).
+
+**Or a personal key (Codex, scripts, any agent):** in the console open **Me → Agents → Connect**, pick the agent and what it may do, and copy the snippet it gives you. The key is shown once; keep it in your environment, not in a file you share. For Codex, `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.tokenman]
+url = "https://hub.example.com/mcp"
+bearer_token_env_var = "TOKENMAN_TOKEN"
+```
+
+**What it may do** — you choose per connection: see your sessions and tasks (always), message your sessions, start new sessions, stop and resume them, and answer permission prompts for you (off unless you tick it — an agent that answers prompts approves actions in your name).
+
+**Cut it off:** **Me → Agents → Revoke**. Its next call is refused. Every connection shows when it was last used.

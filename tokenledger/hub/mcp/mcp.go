@@ -145,12 +145,13 @@ func (s *mcpServer) dispatch(hr *http.Request, req *request) *response {
 		tools := toolSpecs()
 		if s.api.Fleet {
 			tools = append(tools, fleetToolSpecs()...)
+			tools = append(tools, sessionToolSpecs()...)
 		}
 		// A user is shown only what they may call (claude-fleet#1985).
 		if who, err := s.api.UserScope(hr); err != nil || who != nil {
 			mine := []toolSpec{}
 			for _, t := range tools {
-				if err == nil && api.IsUserTool(t.Name) {
+				if err == nil && (api.IsUserTool(t.Name) || api.IsSessionTool(t.Name)) {
 					mine = append(mine, t)
 				}
 			}
@@ -534,7 +535,11 @@ func (s *mcpServer) callTool(hr *http.Request, raw json.RawMessage) (any, *rpcEr
 
 	var payload any
 	var err error
-	if s.api.Fleet && isFleetTool(p.Name) {
+	if s.api.Fleet && api.IsSessionTool(p.Name) {
+		// The console's session tools (task T4DN): the caller's own, through
+		// the console's roads — scoped by the request, like the fleet tools.
+		payload, err = s.api.CallSessionTool(hr, p.Name, p.Arguments)
+	} else if s.api.Fleet && isFleetTool(p.Name) {
 		// Scoped to the caller, so it needs the request's identity — which
 		// is why it is not one more case in run.
 		payload, err = s.api.CallFleetTool(hr, p.Name, p.Arguments)
@@ -1207,7 +1212,7 @@ func fleetToolSpecs() []toolSpec {
 				"account quota is shared and never scored) — the reasoning is in the operation's " +
 				"placement. node=<machine> restricts it to that machine. kind=scratch opens a raw " +
 				"scratch session instead (no issue, no lease; an optional name) — issue is required " +
-				"otherwise. Needs worker:start." + fleetWriteCaveat,
+				"otherwise. Needs worker:start. Prefer session_new (it reaches every session you own)." + fleetWriteCaveat,
 			InputSchema: obj(map[string]any{"issue": numberProp, "idempotency_key": idemProp,
 				"fleet_id": fleetIDProp, "repo": fleetRepoProp,
 				"kind":  map[string]any{"type": "string", "enum": []string{"issue", "scratch"}, "description": "issue (default; issue required) or scratch (a raw session with no issue)."},
@@ -1225,7 +1230,7 @@ func fleetToolSpecs() []toolSpec {
 			Title: "Message a worker",
 			Description: "Post text as the worker's next turn through its fleet's issue bridge (a " +
 				"--to-worker comment; never keystrokes), or straight to the live session on a fleet " +
-				"without the bridge. Issue workers only; ≤4000 characters, no HTML comments or control characters. Needs worker:message." + fleetWriteCaveat,
+				"without the bridge. Issue workers only; ≤4000 characters, no HTML comments or control characters. Needs worker:message. Prefer session_say (it reaches every session you own)." + fleetWriteCaveat,
 			InputSchema: obj(map[string]any{"worker_id": workerIDProp, "text": map[string]any{"type": "string"},
 				"idempotency_key": idemProp}, "worker_id", "text", "idempotency_key"),
 		},

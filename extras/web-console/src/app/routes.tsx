@@ -4,7 +4,7 @@
 // adds its file under pages/ and fills in this one line (and flips its row in
 // the hub's consolePages, app_mount.go).
 //
-// 我的 holds 用量 · 设备 · 设置 · 账号 as four tabs at /me/<tab> (GR5E C1): the
+// 我的 holds 用量 · 设备 · Agent · 设置 · 账号 as five tabs at /me/<tab> (GR5E C1): the
 // sidebar and the bottom bar carry none of them — the avatar is the way in —
 // and their old addresses move on there, query and hash kept.
 //
@@ -17,7 +17,7 @@
 // the list, and a phone's /?about= (a link into the conversation) opens it too.
 import { lazy, useEffect, useRef, useState, type ComponentType } from "react";
 import { Navigate, useLocation } from "react-router";
-import { Gauge, Layers, MessageCircle, MonitorSmartphone, Plus, Settings, CircleUserRound, type LucideIcon } from "lucide-react";
+import { Bot, Gauge, Layers, MessageCircle, MonitorSmartphone, Plus, Settings, CircleUserRound, type LucideIcon } from "lucide-react";
 import { tr } from "@/shared/i18n";
 // the front page is in the first bundle: the conversation is the first screen
 import ChatPage, { ChatThread } from "./pages/chat";
@@ -117,6 +117,8 @@ export type MeTab = { id: string; path: string; label: string; icon: LucideIcon;
 export const ME_TABS: MeTab[] = [
   { id: "usage", path: "/me/usage", label: tr("用量", "Usage"), icon: Gauge, page: lazy(() => import("./pages/usage")), wide: true },
   { id: "devices", path: "/me/devices", label: tr("设备", "Devices"), icon: MonitorSmartphone, page: lazy(() => import("./pages/devices")) },
+  // Agent 连接 (T4DN): outside agents let in over the MCP door — keys and browser sign-ins
+  { id: "agents", path: "/me/agents", label: tr("Agent", "Agents"), icon: Bot, page: lazy(() => import("./pages/agents")) },
   { id: "settings", path: "/me/settings", label: tr("设置", "Settings"), icon: Settings, page: lazy(() => import("./pages/settings")) },
   { id: "account", path: "/me/account", label: tr("账号", "Account"), icon: CircleUserRound, page: lazy(() => import("./pages/account")) },
 ];

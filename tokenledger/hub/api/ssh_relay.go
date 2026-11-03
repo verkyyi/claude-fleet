@@ -179,6 +179,14 @@ func (t *sshRelayTable) open() int {
 // means it carried nothing this hub accepts — the caller may still prove a
 // certificate in-band.
 func (s *Server) sshRelayHTTPIdentity(r *http.Request) (sshRelayIdentity, bool) {
+	if doorOf(r.Context()) == doorAgent {
+		// A connected agent's call, handed on inside the hub (task T4DN): the
+		// person it acts for, never an admin's every machine.
+		if p := principalOf(r.Context()); p != "" {
+			return sshRelayIdentity{Principal: p, Actor: p}, true
+		}
+		return sshRelayIdentity{}, false
+	}
 	if s.ViewerToken == "" {
 		return sshRelayIdentity{Operator: true, Actor: "operator"}, true
 	}

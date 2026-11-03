@@ -518,7 +518,8 @@ func TestFleetToolsOnlyWithFleetModule(t *testing.T) {
 			t.Errorf("%s missing with the fleet module on", n)
 		}
 	}
-	if len(on) != len(off)+len(api.FleetTools) {
-		t.Errorf("fleet module on lists %d tools, off %d; want exactly the fleet tools added", len(on), len(off))
+	// the fleet tools and the console's session tools (task T4DN), nothing else
+	if len(on) != len(off)+len(api.FleetTools)+len(api.SessionTools) {
+		t.Errorf("fleet module on lists %d tools, off %d; want exactly the fleet and session tools added", len(on), len(off))
 	}
 }

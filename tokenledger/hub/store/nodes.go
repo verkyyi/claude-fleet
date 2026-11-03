@@ -94,6 +94,10 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetPeerCerts(); err != nil {
 		return err
 	}
+	// Connected agents and their OAuth (task T4DN).
+	if err := s.ensureFleetAgentGrants(); err != nil {
+		return err
+	}
 	// A client's connection events (claude-fleet T689).
 	if err := s.ensureFleetClientEvents(); err != nil {
 		return err

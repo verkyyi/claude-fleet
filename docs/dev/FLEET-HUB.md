@@ -1308,6 +1308,36 @@ OAuth tokens expire according to the issuer; revoking the Fleet grant is
 checked immediately on subsequent requests. This implementation accepts JWT
 access tokens; opaque-token introspection is not implemented.
 
+## Connected agents: a person's own agent on the cloud hub's /mcp (task T4DN)
+
+The cloud hub's `/mcp` (`tokenledger/hub/mcp`) also admits a person's OWN agent —
+Claude Code, Codex, Gemini CLI, claude.ai — as that person. Each connection is one
+grant row (`fleet_agent_grants`, `store/fleet_agent_grants.go`): the person, the
+scopes they ticked (read always · talk `worker:message` · start `worker:start` ·
+stop `worker:stop`+`worker:resume` · answer `worker:answer`, off by default), an
+expiry (30 days default, a year at most), a revocation, a call count.
+
+- **Two ways in, one row.** A personal key `tm_…` minted on the console (我的 → Agent,
+  `POST /v1/me/agents`, shown once, stored as SHA-256), or OAuth: the hub is its own
+  authorization server (`api/oauth.go`) — RFC 9728 protected-resource metadata named by
+  `/mcp`'s 401, RFC 8414 metadata, DCR (`/oauth/register`) and Client ID Metadata
+  Documents (an https `client_id`, fetched public-only, ≤64 KB, no redirect, kept a
+  day), PKCE S256 only, exact redirects (loopback port-insensitive), `iss` in the
+  response, the console's consent page (`/app/oauth/authorize`, after the hub's own
+  sign-in), access tokens `tma_…` for an hour, refresh `tmr_…` rotated — a replayed one
+  revokes the grant.
+- **The door** (`api/agent_door.go`, `agentAdmit`): `/mcp` only — the same bearer
+  on any other route is 401; the person with role user (an admin's agent sees only
+  their own); `FleetPrincipal.Grant` carries the scopes into `authorize`, so a write
+  needs both the person's scope and the grant's. Every call re-reads the row: a revoke
+  refuses the next one (401 `invalid_token`).
+- **The tools** an agent uses are the console's own roads (`api/agent_sessions.go`,
+  `mcp/sessions.go`): sessions by their lifelong id, «needs you» first, talking through
+  the session gate (`/v1/chat/say|answer|stop?worker=`), starting through the console's
+  open, waiting on a cursor. The `worker_*` tools stay for one version.
+- BREAK-IT rows `agent-grant-escapes`, `oauth-redirect-hijack`. People's setup:
+  `docs/public/*/member/connect.md` «From your own AI agent».
+
 ## Writes, concurrency and disconnected machines
 
 The Hub stores a write before sending it. Each node independently stores the

@@ -97,6 +97,10 @@
 #   login-browser-silent                            bin/fleet-login.py (scan: open_browser, KeyWatch, nudge, timeout)
 #   login-sandbox-real-conf                         bin/fleet-login.py (conf_dir_env)
 #   opening-never-ends                              tokenledger/hub/api fleet_opening.go
+#   agent-grant-escapes                             tokenledger/hub/api agent_door.go (the agent door: /mcp
+#                                                   only, its person, its scopes), agent_grants.go (go test)
+#   oauth-redirect-hijack                           tokenledger/hub/api oauth.go (PKCE S256, exact redirect,
+#                                                   one-use code, refresh replay revokes, CIMD fetch public-only; go test)
 #                                                   (openingStuck, openingETAFor; go test, when a toolchain is here)
 #   opening-eta-climbs                              tokenledger/hub/api fleet_opening.go (openingETALeft)
 #   opened-login-fleet-silent                       tokenledger/hub/api fleet_opening.go (settling, settleWhy,
@@ -3738,6 +3742,37 @@ drill_opening_never_ends() {
     || { WHY="accountStateOf's ETA is no longer the machine's measured one"; return 1; }
   _drill_go_tests 'TestOpeningHasAnHonestETAAndAnEnd' "$ROOT/tokenledger/hub/api/fleet_opening_test.go" \
     '开号预计时长取这台机器的中位数、超时改说离放弃多久；20 分钟没回音或没有管理节点 → failed + why + 找谁（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- agent-grant-escapes (task T4DN): a connected agent's key (or OAuth token)
+# opened more than /mcp, acted as an admin's every machine, wrote past the
+# permissions its person ticked, or kept working after its person revoked it.
+# Now: the agent door admits on /mcp only, as its person with role user, the
+# grant's scopes ride FleetPrincipal into authorize, a revoke refuses the next call.
+drill_agent_grant_escapes() {
+  CAP=120; local t0 f="$ROOT/tokenledger/hub/api/agent_door.go"
+  t0=$(now)
+  grep -q '!s.agentPathOK(r)' "$f" && grep -q 'strings.HasPrefix(r.URL.Path, ChatPathPrefix) && s.relayHopped(r)' "$f" \
+    || { WHY="the agent door no longer keeps to /mcp (and a replica hop of the chat road)"; return 1; }
+  grep -q 'withRole(withDoor(ctx, doorAgent), roleUser)' "$f" || { WHY="an agent no longer comes in as a plain user"; return 1; }
+  grep -q 'p.Grant != nil && !hasString(p.Grant, scope)' "$ROOT/tokenledger/hub/api/fleet_write.go" \
+    || { WHY="authorize no longer checks a connected agent's own scopes"; return 1; }
+  _drill_go_tests 'TestAgentKeyOpensMCPOnly TestAgentKeyRidesAReplicaHopOnly' "$ROOT/tokenledger/hub/api/agent_door_test.go" \
+    'Agent 的钥匙只开 /mcp、只代表它的人、只做勾过的事；别人看不到也撤不了；撤了下一次调用就 401 invalid_token（go test）' || return 1
+  SECS=$(since "$t0")
+}
+
+# ---- oauth-redirect-hijack (task T4DN): the hub's OAuth for /mcp handed a code
+# or a token to someone other than the client the person approved — a foreign
+# redirect, a code used twice or without its PKCE verifier, a refresh token
+# copied and replayed, a client_id URL that makes the hub fetch its own network.
+drill_oauth_redirect_hijack() {
+  CAP=120; local t0
+  t0=$(now)
+  _drill_go_tests 'TestOAuthRoundTrip TestOAuthCIMDClient TestRedirectMatches TestPublicDialerRefusesPrivate' \
+    "$ROOT/tokenledger/hub/api/agent_door_test.go" \
+    'OAuth：只回跳到登记过的地址（本机回环只忽略端口）、PKCE S256 必须、code 只能用一次、刷新令牌被重放就整条连接撤销、CIMD 只取公网地址（go test）' || return 1
   SECS=$(since "$t0")
 }
 

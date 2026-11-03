@@ -884,6 +884,17 @@ func (s *Server) routes() *routeMux {
 		mux.Handle(AdminDevicesPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleFleetDevices))))
 		mux.Handle(AdminSessionsPath, s.viewerOnly(s.adminOnly(http.HandlerFunc(s.handleAdminSessions))))
 		mux.Handle("/v1/fleet/devices/revoke", s.viewerOnly(http.HandlerFunc(s.handleFleetDeviceRevoke)))
+		// Connected agents and their OAuth (task T4DN, agent_grants.go · oauth.go).
+		mux.Handle(MeAgentsPath, s.viewerOnly(http.HandlerFunc(s.handleMeAgents)))
+		mux.Handle(MeAgentsRevokePath, s.viewerOnly(http.HandlerFunc(s.handleMeAgentsRevoke)))
+		mux.Handle(MeOAuthRequestPath, s.viewerOnly(http.HandlerFunc(s.handleMeOAuthRequest)))
+		mux.Handle(MeOAuthApprovePath, s.viewerOnly(http.HandlerFunc(s.handleMeOAuthApprove)))
+		mux.HandleFunc(protectedResourcePath, s.handleProtectedResource)
+		mux.HandleFunc(protectedResourcePath+"/mcp", s.handleProtectedResource)
+		mux.HandleFunc(authServerMetaPath, s.handleAuthServerMeta)
+		mux.HandleFunc(OAuthRegisterPath, s.handleOAuthRegister)
+		mux.HandleFunc(OAuthAuthorizePath, s.handleOAuthAuthorize)
+		mux.HandleFunc(OAuthTokenPath, s.handleOAuthToken)
 		// Which machine to enter (claude-fleet#1470): admits a certificate by a
 		// signed timestamp like the route list, so it authenticates itself.
 		mux.HandleFunc(control.HomePath, s.handleFleetHome)
@@ -1198,6 +1209,14 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
+		// A connected agent (task T4DN), on /mcp only.
+		agentRefused := false
+		if ctx, ok, refused := s.agentAdmit(r); ok {
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		} else {
+			agentRefused = refused
+		}
 		if signedOut != nil && signedOut(w, r) {
 			return
 		}
@@ -1210,6 +1229,10 @@ func (s *Server) viewerOr(next http.Handler, signedOut func(http.ResponseWriter,
 			return
 		}
 
+		if r.URL.Path == "/mcp" {
+			s.agentUnauthorized(w, r, agentRefused)
+			return
+		}
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ccquota"`)
 		httpError(w, http.StatusUnauthorized, "a viewer token is required")
 	})
