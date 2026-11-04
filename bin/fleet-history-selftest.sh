@@ -518,6 +518,30 @@ out=$(run record --key 55 --pr 9 --worktree "$WTP2" --summary 'now it has one')
 contains "the later REAL session at that worktree is still recorded" "$out" "real-sid"
 st_eq "  …as its own row" 2 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
 
+# H2d. (T72A) A reaped slot recorded a SECOND time with no session — a reaper
+# that could not tell the window's agent — must not hide the resumable row of the
+# same key, worktree and sha. Every reader keeps the newest row of a key, so the
+# empty row used to win: the panel offered 归档 and no 恢复 for a live transcript.
+: > "$FLEET_HISTORY_LEDGER"
+WTK=/w/repo-scratch-116; TDK="$WORK/tdir-116"; mkdir -p "$TDK"; : > "$TDK/sess-g85s.jsonl"
+printf '2026-11-03T05:44:12Z\tscratch-116\tgroup chat\t-\t59210784\t%s\t%s\tsess-g85s\t-\tclosed-unlanded\n' "$WTK" "$TDK" >> "$FLEET_HISTORY_LEDGER"
+printf '2026-11-03T06:22:21Z\tscratch-116\t-\t-\t59210784\t%s\t-\t-\t-\tclosed-unlanded\t-\tcodex\t-\t-\n' "$WTK" >> "$FLEET_HISTORY_LEDGER"
+contains "key reuse: meta finds the resumable row, not the empty one" "$(run meta scratch-116)" "group chat"
+contains "key reuse: resume carries the real session" "$(run resume --main /w/main scratch-116)" "sess-g85s"
+st_eq "key reuse: rows lists the slot once" 1 "$(run rows | grep -c 'landed:scratch:scratch-116')"
+contains "key reuse: …with the real session id" "$(run rows | grep 'landed:scratch:scratch-116')" "sess-g85s"
+# A different HEAD is a different use of the slot: its empty row still shows.
+printf '2026-11-03T07:00:00Z\tscratch-116\tlater\t-\tabcdef12\t%s\t-\t-\t-\tclosed-unlanded\t-\tcodex\t-\t-\n' "$WTK" >> "$FLEET_HISTORY_LEDGER"
+contains "key reuse: a moved HEAD is a new use — still listed" "$(run meta scratch-116)" "later"
+# The write side: the same slot again with no session is not appended.
+: > "$FLEET_HISTORY_LEDGER"
+printf '2026-11-03T05:44:12Z\tscratch-116\tgroup chat\t-\t59210784\t%s\t/t/dir\tsess-g85s\t-\tclosed-unlanded\n' "$WTK" >> "$FLEET_HISTORY_LEDGER"
+out=$(run record-closed --key scratch-116 --worktree "$WTK" --sha 59210784 --agent claude 2>&1)
+contains "key reuse: a session-less re-record of the slot is skipped" "$out" "already in ledger"
+st_eq "  …and writes no row" 1 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+out=$(run record-closed --key scratch-116 --worktree "$WTK" --sha abcdef12 --agent claude 2>&1)
+st_eq "  …but a moved HEAD is recorded" 2 "$(grep -c . "$FLEET_HISTORY_LEDGER")"
+
 # H2c. The fleet's OWN helper transcripts must not be indexed as "the session".
 # The status classifier (and, until #535, the dashboard summarizer) runs `claude -p`
 # from inside a window's worktree, so its transcripts land in the same project dir
