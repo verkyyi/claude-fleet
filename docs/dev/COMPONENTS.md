@@ -38,7 +38,7 @@
 | 会话内 mod（inbox / progress / compose 等其余部分） | 待定 | 待发起人定：逐文件评估必要性，本批不按草稿推测拆除。 |
 | Codex 上下文计量适配（`fleet-codex-session.py` Meter / `conf/statusline.sh`） | 核心 | 将原生读数投影到既有计量总线；显式候选复用注意力连接，收到有效事件时暂停重复 rollout 轮询，失联回退。不新增常驻服务、不默认启用，不改变其他 collector 的待定类别。 |
 | Fleet MCP（status / where / context / open / show） | 核心 | 代理读取状态和向操作者送达内容的统一接口。 |
-| 执行会话与跨会话协作 MCP（brief / task / spawn / send / ask / pr_verdict / pr_merge） | 核心 | 独立 Task 与普通消息保留；Parent 回报、等待和委托入口只留一版本退役兼容。每个会话都挂载任务工具组（#4703）。任务只认 hub 的任务记录 `T<n>`，不认领、不评论 GitHub issue（EPIC #4895）。 |
+| 执行会话与跨会话协作 MCP（brief / task / spawn / send / ask / pr_verdict / pr_merge） | 核心 | 独立 Task 与普通消息保留；Parent 回报、等待和委托入口只留一版本退役兼容。每个会话都挂载任务工具组（#4703）。任务只认 hub 的任务记录 `T<n>`，不认领、不评论 GitHub issue（EPIC #4895）；仅允许 `GuangZhouShanyouGame/24haowan-monorepo` 的仓库 fragment 工具创建 release-fragment issue 并按仓库流程更新正文，边界见 [worker 规则](WORKER.md#2-the-standing-contract-built-in-charter--the-base-layer)。 |
 | 编排 MCP 挂载组（`conf/mcp-orch.json`） | 核心 | 每个会话都挂载（#4703 撤掉了 #4334 的 `@agent_spawn` 门）；底层协作接口，和编排模板无关。 |
 
 ## 可选插件

@@ -109,6 +109,12 @@ stamped() { grep -qF -- "@seed_words '1'" "$WORK/newwin"; }
 stamped || st_fail "A a words seed must stamp @seed_words before the agent starts" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; FLEET_SEED_WORDS=0 run_spawn 234
 case "$(seed)" in "Some Issue Title"*"$FLOW"*'Closes #234'*) ;; *) st_fail "A FLEET_SEED_WORDS=0: the title, then the flow as words" "$(seed)" ;; esac
+for token in 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo' \
+  'node tools/cd/fragments-migrate.js --new <file.md>' 'then update that issue body' \
+  'Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden' \
+  'this exception does not apply to any other repository'; do
+  has "$token" || st_fail "A fallback seed missing exception boundary: $token" "$(seed)"
+done
 stamped && st_fail "A FLEET_SEED_WORDS=0 must stamp no @seed_words" "$(cat "$WORK/newwin")"
 : > "$WORK/newwin"; GH_TITLE='' run_spawn 234
 case "$(seed)" in "$FLOW"*) ;; *) st_fail "A no words and no title: the flow alone" "$(seed)" ;; esac

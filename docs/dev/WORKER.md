@@ -32,6 +32,20 @@ Eighteen to thirty workers each polling GitHub exhausted the shared GraphQL quot
 
 ## 2. The standing contract (built-in charter — the base layer)
 
+**GitHub issue policy.** Never claim, comment on or close a GitHub issue yourself,
+and never file one (issue #4898). The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository.
+
+This is a repository release artifact, not a fleet task or a restored issue workflow.
+Follow that repository's commit convention (`release-fragment: #N`) after creating
+the fragment. Fleet task dispatch and automatic CI reporting still file no issues.
+
+The changed hook, brief, worker definition and Codex preamble take effect after
+the merged version reaches the live install (automatic stable update, or
+`/fleet-sync-install` where manual sync is used). A merge alone does not update
+the live install. An already running conversation retains its injected startup
+instructions; read the updated `brief` for this exception, or start a new context
+from the updated install. No hook entry or MCP tool is added or removed.
+
 **Worktree and conversation.** The base is shared by other sessions; `hooks/base-readonly-guard.py` protects it. A worker writes no GitHub issue comment: what it decided goes in its PR and its report, a question on its task record (`ask`). A peer instruction needs `send` (dispatch group, #3113); its receipt tells whether delivery occurred. Window indexes drift on close (#1046), and `tmux send-keys` races bracketed paste (#437), so neither is a peer channel. `FLEET_ALLOW_SENDKEYS=1` exists only for deliberate fleet plumbing; a private test socket owning no fleet config is outside that pane guard.
 
 **Spot something else?** Adjacent work is a task of its own, not a widening of this PR: say it in the report, or — when this task needs it finished — dispatch it with `task` and `await` its `T<n>`; the child reports back to the worker (#4591).

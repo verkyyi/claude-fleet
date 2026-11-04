@@ -41,7 +41,10 @@ nests three levels, and this is where the confusing vocabulary starts:
   tool, an EPIC's members). A task belongs to a **person**, not to a repo; a task
   that names a repo opens a session in a worktree of it, bound to `T<n>`, which
   lands its own PR and closes the record with its report. GitHub hosts the code and
-  the PR — nothing claims, comments on or closes a GitHub issue.
+  the PR — nothing claims, comments on or closes a GitHub issue. The sole
+  release-fragment creation/body-update exception for
+  `GuangZhouShanyouGame/24haowan-monorepo` is specified in
+  [the worker issue policy](WORKER.md#2-the-standing-contract-built-in-charter--the-base-layer).
 - **Hub (入口)** — the coordinator, `tokenledger`'s `ccquota` server: accounts,
   the subscription pool, task records, placement, the console. (A tmux pane marked
   `@hub=1` — `bin/hub-session.sh` — is an older, local meaning: a plain operator

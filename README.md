@@ -22,6 +22,8 @@ and lands a pull request — **GitHub only hosts the code and the PRs**. Nothing
 claims, comments on or closes a GitHub issue, and a task with no repository
 (a page, a document, a conversation) needs no GitHub at all.
 
+The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository.
+
 The core workflow uses the CLIs' **subscription sign-in**, with no separate model
 API key required. Claude subscription account pools and quota-aware routing
 assign new work by available 5-hour / 7-day headroom and resume tasks on another

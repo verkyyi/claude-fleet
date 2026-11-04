@@ -7,12 +7,14 @@ PR → merge it yourself once the gate is green (`pr_verdict` / `pr_merge`) → 
 
 - **A hub task record `T<n>`** (the `task` tool's development task, issue #4897):
   read it first with the `brief` tool (no arguments). There is no GitHub issue —
-  never claim, comment on, close or file one for this work; the record is the
-  ticket; summarize the result in your final response.
+  the record is the ticket; summarize the result in your final response.
 - **A GitHub issue** (#N, opened on an existing issue): its words are your first
   turn. Read them with `brief`, implement, open a PR whose body carries
   `Closes #N`, land it with `pr_verdict` → `pr_merge`, then summarize the result. Never
   claim, comment on or close the issue yourself (issue #4898).
+
+Never claim, comment on or close a GitHub issue yourself, and never file one
+(issue #4898). The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository.
 
 Follow it as written, with these translations (they are the only differences):
 
@@ -25,8 +27,8 @@ Follow it as written, with these translations (they are the only differences):
   tool call. Check that it armed, then end the turn; Fleet starts a fresh Codex
   context in this same pane and worktree after the Stop hook.
 - **Every fleet step is a tool on your `fleet` MCP server** (issue #1811). Where
-  the skill says `mcp__fleet__<name>` — `brief`, `comment`, `ask`,
-  `evidence`, `pr_verdict`, `pr_merge`, `file_issue`, `gh`,
+  the skill says `mcp__fleet__<name>` — `brief`, `ask`,
+  `evidence`, `pr_verdict`, `pr_merge`, `gh`,
   `send`, `context`, `open`, `show`, … — call that tool on the `fleet` server. It
   runs the same fleet script and returns its exit code and output unchanged.
   Never type the script yourself; only if the `fleet` server is missing from this
@@ -43,8 +45,8 @@ Follow it as written, with these translations (they are the only differences):
   — never `open` it on this machine. Search the code with your own tools.
 - **The rails are unchanged and absolute:** edit in this task's worktree or its
   verified native linked worktrees, never the base checkout (a hook blocks it);
-  never run destructive tmux; file adjacent
-  work through the `file_issue` tool; converse through issue comments (`comment`);
+  never run destructive tmux; dispatch adjacent
+  work through the `task` tool; ask questions on the task record (`ask`);
   open your own PR and land it once `pr_verdict` reads `READY` (`pr_merge`); a
   real blocker is one `ask` call, then stop.
 - **An `rm` path never starts with a bare variable:** write `rm -f "${P:?}"/*`
