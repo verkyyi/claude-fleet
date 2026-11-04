@@ -6,7 +6,7 @@
 # session is bound to the hub's task record (@task T<n>), or — opened on an
 # existing GitHub issue (@issue N) — to that issue's words, already its first
 # turn. Nothing here claims, assigns, comments on or reads an issue: the record is
-# the ticket, and a PR's `Closes #N` is the only thing that touches an issue.
+# the ticket. The flow states the sole release-fragment exception for sessions.
 #
 # It prints, in order:
 #   fleet     — session / repo / base / base checkout / merge (or land) method,
@@ -145,6 +145,8 @@ printf '%s\n' \
   "3. pr_verdict (wait: true while PENDING) → pr_merge on READY. Never merge red." \
   "4. report (state: merged, pr, summary) right after the merge — $closes." \
   "   Blocked: ask, then report (state: blocked). Then stop."
+
+printf '%s\n' 'Never claim, comment on or close a GitHub issue yourself, and never file one (issue #4898).' 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository.'
 
 printf '\n===== implementation directive · this fleet (issue #234) =====\n'
 _pnum=$at_issue; [ -n "$at_task" ] && _pnum=$tname

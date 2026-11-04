@@ -97,7 +97,13 @@ has 'report (state: merged'    || st_fail "TASK the flow ends with report merged
 has 'merge=rebase'             || st_fail "TASK the merge method" "$OUT"
 has 'DIRECTIVE-MARKER for T42' || st_fail "TASK the directive" "$OUT"
 has 'origin: none'             || st_fail "TASK the origin line, none included" "$OUT"
-has 'claim'                    && st_fail "TASK no claim anywhere" "$OUT"
+has 'Never claim, comment on or close a GitHub issue yourself' || st_fail "TASK issue ban still stated" "$OUT"
+for token in 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo' \
+  'node tools/cd/fragments-migrate.js --new <file.md>' 'then update that issue body' \
+  'Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden' \
+  'this exception does not apply to any other repository'; do
+  has "$token" || st_fail "TASK missing exception boundary: $token" "$OUT"
+done
 FAKE_AT_TASK=T42 FAKE_AT_REPO=$REPO TR_RC=1 run "$WORK/widgets-scratch-3"
 [ "$RC" = 5 ] || st_fail "TASK an unreadable record exits 5 (got $RC)" "$OUT$ERR"
 has 'DIRECTIVE-MARKER' || st_fail "TASK an unreadable record still prints the rest" "$OUT"
@@ -117,6 +123,7 @@ st_pass "CODE a hub with task codes: the brief speaks codes only"
 # ===== ISSUE ===================================================================
 FAKE_AT_ISSUE=77 FAKE_AT_ORIGIN=scratch-4 run "$WORK/widgets-issue-12"
 [ "$RC" = 0 ] || st_fail "ISSUE must exit 0 (got $RC)" "$OUT$ERR"
+has 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo' || st_fail "ISSUE missing exception" "$OUT"
 has 'issue=77'          || st_fail "ISSUE @issue wins over the worktree's number" "$OUT"
 has 'Closes #77'        || st_fail "ISSUE the flow carries Closes #N" "$OUT"
 has 'origin: scratch-4' || st_fail "ISSUE the origin" "$OUT"

@@ -731,7 +731,7 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # all. No words, a Codex session (no SessionStart context road it reads the same
 # way) or FLEET_SEED_WORDS=0 ⇒ the flow rides the first turn as plain words. There
 # is no claim command any more (issue #4898): the fleet keeps no issue state.
-FLOW_SEED="Issue #$num of $REPO: call the fleet tool \`brief\`, implement in this worktree, open a PR whose body carries \`Closes #$num\`, land it with \`pr_verdict\` then \`pr_merge\` once READY, then \`report\` (state: merged). Never claim, comment on or close the issue yourself."
+FLOW_SEED="Issue #$num of $REPO: call the fleet tool \`brief\`, implement in this worktree, open a PR whose body carries \`Closes #$num\`, land it with \`pr_verdict\` then \`pr_merge\` once READY, then \`report\` (state: merged). Never claim, comment on or close the issue yourself. The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool \`node tools/cd/fragments-migrate.js --new <file.md>\`, then update that issue body according to \`doc/release-ledger/fragment-schema.md\`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository."
 SEED_WORDS=''
 _words=''
 [ -n "$WORDS_FILE" ] && [ -s "$WORDS_FILE" ] && _words=$(cat "$WORDS_FILE")

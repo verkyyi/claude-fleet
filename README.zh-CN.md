@@ -10,6 +10,8 @@ claude-fleet 只做两件事：**订阅共享**——一个小团队的 Claude�
 
 **任务是 hub 上的一条记录 `T<n>`，归人，不归仓库。** 你说要做什么（⌘P 面板的 ⚡ 行、网页控制台，或在别的会话里用 `task` 工具），入口先记下这条记录，再开出做这件事的会话。指定了仓库的任务在该仓库的 worktree 里改代码、提交 PR——**GitHub 只托管代码和 PR**；不认领、不评论、不关闭 GitHub issue。不绑仓库的任务（做页面、写文档、对话）完全不需要 GitHub。
 
+唯一例外：会话仅可在 GuangZhouShanyouGame/24haowan-monorepo 通过仓库自带的 `node tools/cd/fragments-migrate.js --new <file.md>` 创建带 `release-fragment` 标签的 issue，随后按 `doc/release-ledger/fragment-schema.md` 更新这份 issue 的正文；认领、评论任务进度、关闭 issue、创建普通 issue 仍禁止，其他仓库不适用。
+
 核心工作流使用 CLI 的**订阅登录，无需另配模型 API Key**。多个订阅放进 hub 的池子，由凭据代理按请求替会话挑（Claude 与 Codex 一样）。详见[能力表](README.md#agents-claude-code-and-codex)。
 
 项目来自一台常开 Mac mini 上的持续开发实践。本机 Transcript 核算记录到：**历史峰值 25 个 Claude 主 Session，在 25 份独立任务目录中并行处理任务**（2026 年 9 月 1 日）；另一次记录中，至少 **15 个任务连续并行约 14.46 分钟**。统计的是 CLI 处理轮次重叠，详见[实证数据与统计口径](docs/dev/USAGE-EVIDENCE.md#中文说明)。

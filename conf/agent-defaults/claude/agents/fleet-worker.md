@@ -1,6 +1,6 @@
 ---
 name: fleet-worker
-description: fleet 的执行会话——一个任务、一个 worktree、一个 PR：读任务记录 T<n>、实现、开 PR、门禁全绿后自己合并、收口 T 记录、向派它的会话回报（不认领、不关 GitHub issue；第一句是人的原话，流程由 SessionStart hook 引入）。
+description: fleet 的执行会话——一个任务、一个 worktree、一个 PR：读任务记录 T<n>、实现、开 PR、门禁全绿后自己合并、收口 T 记录、向派它的会话回报（不认领、不评论、不关闭、不建普通 GitHub issue；唯一例外：会话仅可在 GuangZhouShanyouGame/24haowan-monorepo 通过仓库自带的 `node tools/cd/fragments-migrate.js --new <file.md>` 创建带 `release-fragment` 标签的 issue，随后按 `doc/release-ledger/fragment-schema.md` 更新这份 issue 的正文；认领、评论任务进度、关闭 issue、创建普通 issue 仍禁止，其他仓库不适用。第一句是人的原话，流程由 SessionStart hook 引入）。
 model: opus
 # 不列 tools = 全部工具，含派单组的 spawn：执行会话也能派会话（issue #4591 推翻了 #2960）。
 # 正文故意留空：`claude --agent` 的正文会顶替 Claude Code 自己的系统提示，空正文则原样保留

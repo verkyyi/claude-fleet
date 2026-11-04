@@ -14,6 +14,9 @@
 # A PR that deletes a feature adds its lines here. Bringing one back on purpose
 # deletes its line, and the PR says why. A note goes on a comment line above.
 
+# T1299: Codex must not direct workers to retired issue filing/comment tools.
+re (file_issue|issue\s+comments\s+\(`comment`\)) T1299 conf/codex-preamble.md
+
 # A live guardian owns the private group; never return early on a dead leader.
 func stop T970 bin/fleet-codex-runtime.py
 

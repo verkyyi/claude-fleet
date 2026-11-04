@@ -367,7 +367,9 @@ one-off drill / audit records do not go in the repo (issue #3576).
   reads «over» as the record closed (`fleet_task_closed`, `fleet_task_control.py
   closed`): fleet-cleanup-idle.py's task route (`merged` = record closed),
   fleet-cleanup.sh's completion gate and worktree-autoclean.sh for any session
-  that carries a record. Nothing is filed as an issue (issue #4898, 批 1): no hub ⇒
+  that carries a record. Sessions retain the issue-operation ban (#4898).
+  The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository.
+  Task dispatch files no issue (issue #4898, 批 1): no hub ⇒
   `fleet-task-record.sh dispatch` exits 3. A session's `ask` and park write
   「问过你」 / 「停放」 on its own record. Parent/report/await coordination and
   EPIC driver entry points are retired; existing relation fields remain readable

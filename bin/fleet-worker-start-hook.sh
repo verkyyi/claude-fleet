@@ -12,7 +12,7 @@
 #                      「fleet-worker · tokenledger · 单 #3312 · 做完开 PR，门绿了自己合」
 #   additionalContext  the agent's instruction: read the `brief`, then the flow —
 #                      implement, PR, pr_verdict / pr_merge, final response (issue #4898:
-#                      no claim skill, nothing written to the issue).
+#                      no claim skill; only the release-fragment exception below).
 #
 # fleet-worker's body is empty on purpose (a body replaces Claude Code's own
 # system prompt), so this is the only road the flow has in; the words and the
@@ -106,7 +106,9 @@ ctx = head + (
     "1440, its `screenshots`), publish them with the page to the same 活页, and run "
     "`epic-page-surface.sh --lint` on it — a `task-evidence-shot` WARN must be fixed before the final response.\n"
     "Never claim, comment on or close a GitHub issue yourself, and never file one: the fleet keeps "
-    "no issue state (issue #4898). Do it yourself; never ask the person to run anything."
+    "no issue state (issue #4898). "
+    "The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository. "
+    "Do it yourself; never ask the person to run anything."
 ) % names
 print(json.dumps({"systemMessage": line,
                   "hookSpecificOutput": {"hookEventName": "SessionStart",

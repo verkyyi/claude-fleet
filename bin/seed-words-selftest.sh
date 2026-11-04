@@ -44,6 +44,41 @@ sys.exit(0 if ok else 1)
 EOF
 ok "T the hook runs on every SessionStart (startup included)"
 
+# The exception must reach every independent instruction source (T1299), even
+# when this host cannot run the real tmux legs below.
+python3 - "$ROOT" <<'PY_POLICY' || st_fail "P the sole release-fragment exception must be scoped in every instruction source"
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+for name in (
+    "bin/fleet-worker-start-hook.sh", "bin/dash-issue-session.sh",
+    "bin/fleet-brief.sh", "conf/codex-preamble.md", "CLAUDE.md",
+    "conf/agent-defaults/claude/agents/fleet-worker.md",
+):
+    s = (root / name).read_text().replace("\\`", "`")
+    for token in ("GuangZhouShanyouGame/24haowan-monorepo",
+                  "node tools/cd/fragments-migrate.js --new <file.md>",
+                  "release-fragment", "doc/release-ledger/fragment-schema.md"):
+        assert token in s, (name, token)
+    if name.endswith("agents/fleet-worker.md"):
+        for token in ("唯一例外", "更新这份 issue 的正文", "认领、评论任务进度、关闭 issue、创建普通 issue 仍禁止", "其他仓库不适用"):
+            assert token in s, (name, token)
+    else:
+        for token in ("The sole exception:", "then update that issue body",
+                      "Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden",
+                      "this exception does not apply to any other repository"):
+            assert token in s, (name, token)
+PY_POLICY
+ok "P every instruction source limits the exception to one repository, tool, label and body update"
+
+policy() {
+  st_has "policy repo" "$1" 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo'
+  st_has "policy tool" "$1" 'node tools/cd/fragments-migrate.js --new <file.md>'
+  st_has "policy body" "$1" 'then update that issue body'
+  st_has "policy forbidden" "$1" 'Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden'
+  st_has "policy other repos" "$1" 'this exception does not apply to any other repository'
+}
+
 command -v tmux >/dev/null 2>&1 || { echo "seed-words-selftest: no tmux — S/P/N/L skipped"; echo "selftest OK: $pass"; exit 0; }
 tmux -L "$SOCK" -f /dev/null new-session -d -s sw -x 80 -y 20 'sleep 600' || st_fail "could not start a test tmux server"
 PANE=$(tmux -L "$SOCK" display-message -p -t sw: '#{pane_id}')
@@ -66,6 +101,7 @@ ev=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["hookEventName"]')
 case "$ctx" in *"Before anything else"*'the fleet tool `brief`'*'Closes #3312'*'`pr_merge`'*'final response'*) ;; *) st_fail "S the context: brief first, then PR → merge → final response" "$ctx" ;; esac
 case "$ctx" in *fleet-claim-*|*"claim skill"*) st_fail "S no claim skill any more (issue #4898)" "$ctx" ;; esac
 case "$ctx" in *"#3312"*"acme/tokenledger"*) ;; *) st_fail "S the context must name the issue and the repo" "$ctx" ;; esac
+policy "$ctx"
 line=$(printf '%s' "$out" | field 'd["systemMessage"]')
 [ "$line" = "fleet-worker · tokenledger · 单 #3312 · 做完开 PR，门绿了自己合" ] || st_fail "S the person's grey line" "$line"
 setw @seed_words /fleet-history
@@ -103,6 +139,12 @@ line=$(printf '%s' "$out" | field 'd["systemMessage"]')
 [ "$line" = "fleet-worker · tokenledger · 任务 T42 · 做完开 PR，门绿了自己合" ] || st_fail "K the person's grey line" "$line"
 line=$(LANG_UI=en hook startup | field 'd["systemMessage"]')
 case "$line" in "fleet-worker · tokenledger · task T42 · "*merges*) ;; *) st_fail "K an English line in English" "$line" ;; esac
+policy "$ctx"  # ordinary repo: the exception must not authorize it
+setw @repo GuangZhouShanyouGame/24haowan-monorepo
+ctx=$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')
+policy "$ctx"
+st_has "K fragment repo still uses its hub record" "$ctx" 'its body names T42 and carries no `Closes #N`'
+setw @repo acme/tokenledger
 unsetw @task_flow; [ -z "$(hook startup)" ] || st_fail "K @task without @task_flow (a no-repo task, ⌘P) ⇒ nothing"
 setw @task_flow 1; setw @task bogus; [ -z "$(hook startup)" ] || st_fail "K a malformed @task ⇒ nothing"
 setw @task T42; [ -z "$(hook resume)" ] || st_fail "K resume ⇒ nothing"
