@@ -71,3 +71,19 @@ deploy/k8s/RUNBOOK.md	cloud	阿里云 ACK 自带的系统镜像地址（供应�
 # C8 (#3578): pinned to a value the code still hard-codes — goes with C7's change
 tokenledge?/hub/api/meter_test.go	corp-domain	测 meter.go 写死的放行来源；C7 把它改成配置项时一起换
 site/strings.en.json	corp-domain	官网首屏真实案例写公司英文名 24haowan，发起人同意公开（#3593）
+
+# T1299: the sole release-fragment policy exception must name its exact repository.
+CLAUDE.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+README.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+README.zh-CN.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+bin/dash-issue-session-prompt-selftest.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+bin/dash-issue-session.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+bin/fleet-brief-selftest.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+bin/fleet-brief.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+bin/fleet-worker-start-hook.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+bin/seed-words-selftest.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+conf/agent-defaults/claude/agents/fleet-worker.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+conf/codex-preamble.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+docs/dev/COMPONENTS.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+docs/dev/TERMS.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+docs/dev/WORKER.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
