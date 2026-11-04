@@ -350,6 +350,12 @@ ledger_has_session() {   # $1=ledger $2=session-id $3=transcript-dir [$4=key $5=
       if (blank(s) && !blank(t) && $7 == t) { found = 1; exit }
       if (blank(s) && blank(t) && !blank(k) && $2 == k && blank($8) && blank($7) &&
           ((!blank(p) && $4 == p) || (!blank(h) && $5 == h) || (!blank(w) && $6 == w))) {
+        found = 1; exit }
+      # ...and against a RESUMABLE row of the same key, worktree and sha (T72A):
+      # the same reaped slot recorded a second time by a caller that could not
+      # resolve its session. Both must match — a reused slot moves its HEAD.
+      if (blank(s) && blank(t) && !blank(k) && $2 == k && !blank($8) && !blank(h) && $5 == h &&
+          !blank(w) && $6 == w) {
         found = 1; exit } }
     END { exit(found ? 0 : 1) }' "$ledger"
 }
@@ -618,6 +624,18 @@ cmd_record_closed() {
   tdir="$HIST_TDIR"; sid="$HIST_SID"
   title=$(task_title "$title")
 
+  # HEAD sha of the STILL-PRESENT worktree (issue #466) — read BEFORE the dedup
+  # check, which matches a session-less record on it (T72A). There is no merge commit to
+  # record here, but the tip sha is what keeps this row resumable AFTER a later reaper
+  # removes the worktree: `resume` reuses a worktree that is still on disk and rebuilds
+  # one that is gone off this sha, at the SAME path (the path is what the transcript is
+  # keyed to). Without it a reaped-clean session degraded to REVIEW-ONLY — the common
+  # fate of a scratch, whose clean worktree worktree-autoclean prunes silently. Cheap
+  # and best-effort: no worktree on disk / no git → '-', exactly as before.
+  if [ -z "$sha" ] && [ -n "$wt" ] && [ -d "$wt" ] && command -v git >/dev/null 2>&1; then
+    sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
+  fi
+
   local ledger; ledger=$(ledger_path "$repo")
   if ledger_has_session "$ledger" "$sid" "$tdir" "$key" "$wt" "${pr:-}" "${sha:-}"; then
     printf 'closed %s → already in ledger (session %s) — skipped\n' "$(key_label "$key")" "${sid:-none}"
@@ -628,17 +646,6 @@ cmd_record_closed() {
   # summary (col 9): only an explicit --summary lands here (no dash-cache fallback, #535).
   # close time in col 1 so the reader's "act" (time-since) column is meaningful.
   [ -z "$closedat" ] && closedat=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
-
-  # HEAD sha of the STILL-PRESENT worktree (issue #466). There is no merge commit to
-  # record here, but the tip sha is what keeps this row resumable AFTER a later reaper
-  # removes the worktree: `resume` reuses a worktree that is still on disk and rebuilds
-  # one that is gone off this sha, at the SAME path (the path is what the transcript is
-  # keyed to). Without it a reaped-clean session degraded to REVIEW-ONLY — the common
-  # fate of a scratch, whose clean worktree worktree-autoclean prunes silently. Cheap
-  # and best-effort: no worktree on disk / no git → '-', exactly as before.
-  if [ -z "$sha" ] && [ -n "$wt" ] && [ -d "$wt" ] && command -v git >/dev/null 2>&1; then
-    sha=$(git -C "$wt" rev-parse HEAD 2>/dev/null)
-  fi
 
   # 11 columns: mergedAt·key·title·pr·sha·worktree·transcript-dir·session-id·summary·state·origin (#503)
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s%s\n' \
@@ -674,11 +681,22 @@ ledger_sort_desc() {
 # or landed again) is the real record and shows. The ledger stays append-only —
 # nothing is rewritten — so a reader of an older install sees one extra row with
 # state `resumed` and nothing else changes.
+#
+# It also drops a TRANSCRIPT-LESS row that a resumable row of the same key,
+# worktree AND sha already covers (T72A): a second reaper that could not tell
+# the window's agent recorded the same reaped slot again with no session, and
+# since every reader keeps only the newest row of a key, that empty row hid the
+# real one — the panel then offered 归档 but no 恢复. Same path, same HEAD, no
+# session: it is the same closed slot, with nothing in it to resume.
 ledger_live_rows() {
   awk -F'\t' '
-    NR == FNR { if ($10 == "resumed" && $8 != "" && $8 != "-") last[$8] = FNR; next }
+    function blank(v) { return (v == "" || v == "-") }
+    NR == FNR { if ($10 == "resumed" && !blank($8)) last[$8] = FNR
+                if (!blank($8) && !blank($5) && !blank($6)) full[$2 SUBSEP $5 SUBSEP $6] = 1
+                next }
     { if ($10 == "resumed") next
       if (($8 in last) && FNR <= last[$8]) next
+      if (blank($8) && blank($7) && (($2 SUBSEP $5 SUBSEP $6) in full)) next
       print }' "$1" "$1"
 }
 
