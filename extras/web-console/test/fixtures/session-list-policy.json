@@ -1,6 +1,6 @@
 [
   {
-    "name": "cap counts current and PIN",
+    "name": "PIN counts toward cap; current is protected outside it",
     "rows": [
       {
         "id": "s00",
@@ -86,10 +86,10 @@
       "s05",
       "s06",
       "s07",
+      "s08",
       "s10"
     ],
     "more": [
-      "s08",
       "s09"
     ],
     "attention": [],
@@ -273,6 +273,7 @@
       }
     ],
     "visible": [
+      "idle",
       "a0",
       "a1",
       "a2",
@@ -280,9 +281,7 @@
       "a4",
       "a5"
     ],
-    "more": [
-      "idle"
-    ],
+    "more": [],
     "attention": [
       "a0",
       "a1",
@@ -684,6 +683,188 @@
       "expired"
     ],
     "attention": [],
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
+  },
+  {
+    "name": "eleven asks leave ten ordinary recent slots",
+    "now": 1800000000,
+    "rows": [
+      {
+        "id": "ask00",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1800000000
+      },
+      {
+        "id": "ask01",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999999
+      },
+      {
+        "id": "ask02",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999998
+      },
+      {
+        "id": "ask03",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999997
+      },
+      {
+        "id": "ask04",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999996
+      },
+      {
+        "id": "ask05",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999995
+      },
+      {
+        "id": "ask06",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999994
+      },
+      {
+        "id": "ask07",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999993
+      },
+      {
+        "id": "ask08",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999992
+      },
+      {
+        "id": "ask09",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999991
+      },
+      {
+        "id": "ask10",
+        "group": "ask",
+        "state": "needs",
+        "activity_at": 1799999990
+      },
+      {
+        "id": "recent00",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999900
+      },
+      {
+        "id": "recent01",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999899
+      },
+      {
+        "id": "recent02",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999898
+      },
+      {
+        "id": "recent03",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999897
+      },
+      {
+        "id": "recent04",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999896
+      },
+      {
+        "id": "recent05",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999895
+      },
+      {
+        "id": "recent06",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999894
+      },
+      {
+        "id": "recent07",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999893
+      },
+      {
+        "id": "recent08",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999892
+      },
+      {
+        "id": "recent09",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999891
+      },
+      {
+        "id": "recent10",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999890
+      }
+    ],
+    "visible": [
+      "ask00",
+      "ask01",
+      "ask02",
+      "ask03",
+      "ask04",
+      "ask05",
+      "ask06",
+      "ask07",
+      "ask08",
+      "ask09",
+      "ask10",
+      "recent00",
+      "recent01",
+      "recent02",
+      "recent03",
+      "recent04",
+      "recent05",
+      "recent06",
+      "recent07",
+      "recent08",
+      "recent09"
+    ],
+    "more": [
+      "recent10"
+    ],
+    "attention": [
+      "ask00",
+      "ask01",
+      "ask02",
+      "ask03",
+      "ask04",
+      "ask05",
+      "ask06",
+      "ask07",
+      "ask08",
+      "ask09",
+      "ask10"
+    ],
     "sources": {
       "agent": [],
       "schedule": [],

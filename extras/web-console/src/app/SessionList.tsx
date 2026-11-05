@@ -21,7 +21,7 @@ import { viewAs } from "@/shared/viewAs";
 import { pinSession, pinWorker } from "@/shared/sessions";
 import { Failed, Loading } from "./parts";
 import {
-  archivedRows, compactRows, foldedDup, isTerminal, listItem, listRows, listStatus, listStatusLabel, members, ROW_SOURCES, rowMeta, rowRef, searchRows,
+  activityLabel, lastActive, treeAt, sessionTree, archivedRows, compactRows, foldedDup, isTerminal, listItem, listStatus, listStatusLabel, members, ROW_SOURCES, rowMeta, rowRef, searchRows,
   rowSource, rowsSignal, scheduleLines, signalOf, sourceLabel, treeContext, treeLines, urgentOf, withKids,
   type CompactGroups, type GroupSource, type ScheduleLine, type Signal, type TreeLine,
 } from "./session-list";
@@ -229,7 +229,10 @@ const PinButton: FC<{ r: Row; variant: Variant }> = ({ r, variant }) => {
   </Button>;
 };
 
-const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: Row) => void } & TreeProps> = ({ r, variant, active, onPress, line, onToggle, treeOn, context, urgent = r, dupes = 1, pinnable }) => {
+const ActivityCell: FC<{ at: number; now: number }> = ({ at, now }) =>
+  <span data-last-active title={lastActive(at, now)} className={cn("hidden min-[480px]:inline-block w-[5ch] shrink-0 text-right text-xs tabular-nums font-normal group-data-[collapsible=icon]:hidden", at && now - at < 300000 ? "text-foreground" : "text-muted-foreground")}>{activityLabel(at, now)}</span>;
+
+const SessionRow: FC<{ r: Row; now: number; variant: Variant; active: boolean; onPress: (r: Row) => void } & TreeProps> = ({ r, now, variant, active, onPress, line, onToggle, treeOn, context, urgent = r, dupes = 1, pinnable }) => {
   const { seen, markSeen, replied } = useWorkRows();
   const it = listItem(r, seen);
   const press = useLongPress(() => onPress(r));
@@ -237,17 +240,20 @@ const SessionRow: FC<{ r: Row; variant: Variant; active: boolean; onPress: (r: R
   const status = listStatusLabel(urgent);
   // asking the person: said by colour alone — the glyph and the title in clay
   const asking = listStatus(urgent).kind === "ask";
+  const at = treeAt(sessionTree([r]))(r);
   const body = (
-    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} aria-label={[context, it.title, status].filter(Boolean).join(" · ")} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
+    <Link to={sessionPath(r)} onClick={() => markSeen(r)} data-row={it.ref} aria-label={[context, it.title, status, r.board?.archived ? tr("已归档", "Archived") : "", lastActive(at, now)].filter(Boolean).join(" · ")} data-replied={isNew ? "" : undefined} aria-current={active ? "page" : undefined}
       className={cn(rowCls, listStatus(urgent).unknown && "opacity-60", variant === "page" && "hover:bg-muted/60 aria-[current]:bg-muted h-11 px-4 [-webkit-touch-callout:none] select-none")} {...(variant === "page" ? press : {})}>
       {line?.depth ? <span className={cn("shrink-0 group-data-[collapsible=icon]:hidden", INDENT[line.depth])} aria-hidden /> : null}
       <RowGlyph r={urgent} />
       {treeOn ? <Twisty line={line} onToggle={onToggle} /> : null}
       <span className={cn("flex min-w-0 flex-1 items-baseline gap-1.5", it.bold ? "font-semibold" : "font-normal", asking && "text-clay")}>
         <span className="min-w-0 truncate">{context ? <span className="text-muted-foreground font-normal">{context} › </span> : null}{r.board?.schedule_id && <span className="mr-1 rounded bg-clay/10 px-0.5" aria-label={tr("定时运行", "Scheduled run")}>⏰</span>}{it.title}</span>
+        {r.board?.archived ? <span data-archived-label className="shrink-0 text-xs font-normal text-muted-foreground">{tr("已归档", "Archived")}</span> : null}
         {dupes > 1 ? <span data-dupes className="text-muted-foreground shrink-0 font-normal">×{dupes}</span> : null}
         {line && !line.open && line.hidden ? <span data-tree-hidden className={cn("shrink-0", line.signal === "ask" ? "text-clay font-medium" : "text-muted-foreground font-normal")}>({line.hidden})</span> : null}
       </span>
+      <ActivityCell at={at} now={now} />
     </Link>
   );
   // why it is still open stays in the hover / long-press / detail — under the
@@ -320,7 +326,7 @@ const PressSheet: FC<{ r: Row | null; onClose: () => void; pinnable?: (r: Row) =
 // its most urgent run, its twisty (its runs folded under it, (N) when folded),
 // its name — red when its last run failed — and, muted at the end, its last
 // result (✓ 13:17 · ✗ 13:17) or 下次 07:10. The row opens the schedule.
-const ScheduleLineRow: FC<{ s: ScheduleLine; variant: Variant; active: boolean; open: boolean; onToggle: (open: boolean) => void }> = ({ s, variant, active, open, onToggle }) => {
+const ScheduleLineRow: FC<{ s: ScheduleLine; now: number; variant: Variant; active: boolean; open: boolean; onToggle: (open: boolean) => void }> = ({ s, now, variant, active, open, onToggle }) => {
   const line: TreeLine = { r: s.urgent || ({ id: s.id } as Row), depth: 0, kids: s.runs.length, open, hidden: open ? 0 : s.runs.length, signal: rowsSignal(s.runs) };
   const asking = !!s.urgent && listStatus(s.urgent).kind === "ask";
   const toggle = (e: { preventDefault: () => void; stopPropagation: () => void }) => { e.preventDefault(); e.stopPropagation(); onToggle(!open); };
@@ -339,6 +345,7 @@ const ScheduleLineRow: FC<{ s: ScheduleLine; variant: Variant; active: boolean; 
         <span className="min-w-0 truncate">{s.name}</span>
         {!open && s.runs.length ? <span data-tree-hidden className={cn("shrink-0", line.signal === "ask" ? "text-clay font-medium" : "text-muted-foreground font-normal")}>({s.runs.length})</span> : null}
       </span>
+      <ActivityCell at={Math.max(0, ...s.runs.map(treeAt(sessionTree(s.runs))))} now={now} />
       {s.result ? <span data-schedule-result className={cn("shrink-0 text-xs group-data-[collapsible=icon]:hidden", s.failed ? "text-destructive" : "text-muted-foreground")}>{s.result}</span> : null}
     </Link>
   );
@@ -367,7 +374,9 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const { rows: schedules } = useSchedules();
   const [showArchived, setShowArchived] = useState(false);
   const archivedCount = allRows?.filter(r => r.board?.archived).length || 0;
-  const rows = allRows?.filter(r => !!r.board?.archived === showArchived) ?? null;
+  const at = treeAt(sessionTree(allRows || []));
+  const activityRows = allRows?.map(r => ({ ...r, board: r.board ? { ...r.board, tree_at: at(r) / 1000 } : undefined })) ?? null;
+  const rows = activityRows?.filter(r => !!r.board?.archived === showArchived) ?? null;
   const { q } = useListUi();
   // 会话合一: the web's old conversation is a session of the list now (「我的对话」),
   // no row of its own — kept only on the old road
@@ -396,14 +405,12 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   if (rows === null) return failed ? <div className="px-3"><Failed what={tr("会话", "your sessions")} onRetry={reload} /></div> : <div className="px-3"><Loading /></div>;
   const grouped = compactRows(rows, { current: ref, preferences: board?.session_list, now, previous: previous.current, interacting: pointing || focused });
   previous.current = grouped;
-  const searchGroups = listRows(rows);
-  const ordered = [...searchGroups.pin, ...searchGroups.open, ...searchGroups.gone];
   const webActive = pathname === WEB_CHAT_PATH || (!!chatHome && pathname === "/");
   // the session tree: what a session opened hangs under it; the twisty's slot
   // only once the list has a tree at all
   const { tree } = grouped;
   const treeOn = tree.kids.size > 0;
-  const row = (r: Row, x: TreeProps = {}) => <SessionRow key={r.id} r={r} variant={variant} active={ref === rowRef(r)} onPress={setPressed}
+  const row = (r: Row, x: TreeProps = {}) => <SessionRow key={r.id} r={r} now={now} variant={variant} active={ref === rowRef(r)} onPress={setPressed}
     treeOn={treeOn} onToggle={toggle} {...x} />;
   const lines = (roots: Row[]) => treeLines(roots, tree, opened, ref);
   const flat = (items: Row[]): TreeLine[] => items.map((r) => ({ r, depth: 0, kids: 0, open: false, hidden: 0, signal: "" }));
@@ -418,9 +425,9 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const web = <WebChatRow key="web" variant={variant} active={webActive} />;
   const archiveToggle = <button type="button" aria-pressed={showArchived} data-archive-toggle onClick={() => { previous.current = undefined; setShowArchived(!showArchived); }} className="text-muted-foreground px-4 py-2 text-sm">{showArchived ? tr("返回会话", "Back to sessions") : tr(`已归档 · ${archivedCount}`, `Archived · ${archivedCount}`)}</button>;
   let body: ReactNode;
-  if (showArchived) {
+  if (showArchived && !searching) {
     const archives = archivedRows(rows);
-    const found = searching ? searchRows(archives, q) : archives;
+    const found = archives;
     body = <>
       {archiveToggle}
       <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档会停止会话并从列表隐藏；还在运行的会先问你。取消归档即可恢复显示。", "Archiving stops a session and hides it; a running one asks first. Unarchive to show it again.")}</p>
@@ -429,7 +436,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   } else if (searching) {
     // a hit nested under another says whose: 父标题 › 子标题 — folded ones and
     // same-title duplicates are found too, each on its own
-    const found = searchRows(ordered, q);
+    const found = searchRows(activityRows || [], q);
     const webHit = `${tr("我的对话", "My chat")} chat`.toLowerCase().includes(q.trim().toLowerCase());
     body = found.length || (webHit && oldRoad) ? <List>{webHit && oldRoad ? web : null}{found.map((r) => row(r, { context: treeContext(tree, r) }))}</List>
       : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有找到", "Nothing found")}</p>;
@@ -473,7 +480,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
           {schedShown ? <List>{[...sched.lines, ...(sched.other.length ? [otherLine] : [])].flatMap((l) => {
             const key = l.id || "other";
             const open = schedOpen(key);
-            return [<ScheduleLineRow key={`schedule-${key}`} s={l} variant={variant} active={!!l.id && scheduleRef === l.id} open={open}
+            return [<ScheduleLineRow now={now} key={`schedule-${key}`} s={l} variant={variant} active={!!l.id && scheduleRef === l.id} open={open}
               onToggle={(o) => toggle(`schedule:${key}`, o)} />, ...(open ? l.runs.map((r) => row(r, { line: runLine(r) })) : [])];
           })}</List> : null}
         </div> : null}

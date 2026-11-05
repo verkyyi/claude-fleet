@@ -196,6 +196,71 @@ class TaskList(unittest.TestCase):
         self.assertEqual(targets(), ["a", "c", "b"], "descendants also contribute to archive activity")
         self.assertFalse([e for e in v.visible(items, "", set()) if e["kind"] == "sess"])
 
+    def test_search_includes_archives_and_breaks_ties_by_tree_activity(self):
+        now = time.time()
+        items = [row("pin", group="pin", text="cost estimate", activity_at=now-100),
+                 row("arch", archived=True, text="cost estimate", id="ZX90", activity_at=now-200, tree_at=now-1),
+                 row("plain", text="cost estimate", activity_at=now-30),
+                 row("exact", text="estimate", activity_at=now-300)]
+        hits = v.visible(items, "estimate", set())
+        self.assertEqual([e["target"] for e in hits], ["exact", "arch", "plain", "pin"], "match score still wins over activity")
+        self.assertEqual(v.visible(items, "ZX90", set())[0]["target"], "arch")
+        self.assertTrue(hits[1]["archived"])
+        for lang, label in (("zh", "已归档"), ("en", "Archived")):
+            with patch.dict(os.environ, {"FLEET_UI_LANG": lang}):
+                v.caches_words_reset()
+                self.assertIn(label, "".join(t for t, _ in v.row_segs(hits[1], 100, qo.cells, qo.clip)))
+        v.caches_words_reset()
+
+    def test_activity_column_time_boundaries_and_narrow_detail(self):
+        fixture = json.loads((BIN.parent / "extras/web-console/test/fixtures/session-activity.json").read_text())
+        now = time.mktime(time.strptime(fixture["now"], "%Y-%m-%dT%H:%M:%S"))
+        for lang in ("zh", "en"):
+            with patch.dict(os.environ, {"FLEET_UI_LANG": lang}):
+                v.caches_words_reset()
+                for c in fixture["cases"]:
+                    self.assertEqual(v.activity_label(now-c["age"], now), c[lang], (lang, c))
+                self.assertEqual(v.activity_label(0, now), "—")
+        with patch.dict(os.environ, {"FLEET_UI_LANG": "zh"}), patch.object(v.time, "time", return_value=now):
+            v.caches_words_reset()
+            for ago in (299, 300):
+                e = row("a", activity_at=now-ago, archived=True)
+                for width in (39, 59, 60, 100):
+                    segs = v.row_segs(e, width, qo.cells, qo.clip)
+                    self.assertEqual(qo.cells("".join(t for t, _ in segs)), width)
+                    clock = [(t, style) for t, style in segs if t.strip() == ("4分" if ago == 299 else "5分")]
+                    self.assertEqual(bool(clock), width >= 60)
+                    if clock:
+                        self.assertEqual(qo.cells(clock[0][0]), 6, "one separator and five right-aligned cells")
+                        self.assertEqual("dim" in clock[0][1], ago == 300)
+                self.assertIn("最后活跃", v.note_of(e)[0])
+                self.assertIn("分钟前", v.note_of(e)[0])
+        v.caches_words_reset()
+
+    def test_activity_tree_and_local_fallback_are_shared_with_display(self):
+        parent = row("p", board="p", fid="p", activity_at=100, window_activity=999)
+        kid = row("k", board="k", tree_parent="p", activity_at=200)
+        local = row("local", window_activity=150)
+        out = v.compact_task_list([parent, kid, local], now=300)
+        shown = {e["target"]: e for e in out if e["kind"] == "sess"}
+        self.assertEqual(v.activity_time(shown["p"]), 200, "conversation activity wins over window output")
+        self.assertEqual(v.activity_time(shown["local"]), 150)
+        self.assertEqual(v.activity_time(v.sched_parent("s", "job", [shown["p"], shown["local"]], 300)), 200)
+        kids, _ = v.tree_link([parent, kid])
+        v.tree_times([parent, kid], kids)
+        kid["activity_at"] = 50
+        self.assertEqual(v.tree_times([parent, kid], kids)[id(parent)], 100, "derived time is recalculated")
+
+    def test_protected_trees_and_selected_rows_leave_ordinary_room(self):
+        now = time.time()
+        items = [row("parent", board="parent", activity_at=now-100),
+                 row("child", board="child", tree_parent="parent", state="needs", activity_at=now-1),
+                 row("selected", activity_at=now-200),
+                 *[row(str(i), activity_at=now-10-i) for i in range(6)]]
+        out = v.compact_task_list(items, selected="selected", preferences={"max_visible": 5}, now=now)
+        main = [e["target"] for e in out if e["kind"] == "sess" and not e.get("sec") and not e.get("tree_hidden")]
+        self.assertEqual(main, ["parent", "0", "1", "2", "3", "4", "selected"])
+
     def test_state_refresh_preserves_order_and_pin_keeps_identity(self):
         a = row("a", group="work", list_scope="fixture", source_order=0)
         b = row("b", group="queue", list_scope="fixture", source_order=1)
@@ -376,7 +441,7 @@ class SessionArchive(unittest.TestCase):
             shown = v.visible([a, b], "", set(), current=current, selected="a")
             self.assertNotIn("a", [r.get("target") for r in shown])
             self.assertIn("archived", [r.get("sec") for r in shown])
-        self.assertNotIn("a", [r.get("target") for r in v.visible([a,b], "a", set())])
+        self.assertIn("a", [r.get("target") for r in v.visible([a,b], "a", set())])
         self.assertIn("a", [r.get("target") for r in v.visible([a,b], "a", {"archived"})])
         self.assertIn("a", [r.get("target") for r in v.visible([a,b], "", {"archived"})])
         for e in (a, dict(a, record_only=True), dict(a, gone=True, home=True, ledger=True, fid="fid-a", target="id:fid-a")):
@@ -517,7 +582,7 @@ class SessionTree(unittest.TestCase):
             if width >= 40:
                 agent_x = {qo.cells(x[:x.rindex("Codex")]) for x in lines}
                 self.assertEqual(len(agent_x), 1, lines)
-                want = width - v.AGENT_W - (v.REPO_W + 2 if width >= 60 else 1)
+                want = width - v.AGENT_W - (v.REPO_W + v.ACTIVE_W + 3 if width >= 60 else 1)
                 self.assertEqual(agent_x, {want}, lines)
             else:
                 self.assertNotIn("Codex", "".join(lines))

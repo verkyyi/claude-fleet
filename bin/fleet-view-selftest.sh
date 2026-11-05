@@ -544,7 +544,7 @@ assert [e["target"] for e in v if e.get("gone")] == [e["target"] for e in ended[
 v = fv.visible(it, "", {"ended"})
 assert [e["target"] for e in v if e.get("gone")] == [e["target"] for e in ended[1:]], v
 v = fv.visible(it, "", {"gone"})
-assert not any(e.get("sec") == "gone" and e["kind"] == "sess" for e in v), v
+assert [e["target"] for e in v if e.get("sec") == "gone" and e["kind"] == "sess"] == ["@9"], v  # old local window activity expires too
 # a query finds one
 assert [e["target"] for e in fv.visible(it, "演练认看台", set())] == ["landed:3278@o/claude-fleet"]
 # ⌘↓ ⌘↑ never walk onto a reaped one

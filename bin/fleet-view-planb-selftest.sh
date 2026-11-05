@@ -132,8 +132,8 @@ for e, segs in zip(shown, lines):
     assert e["id"] not in text or not e["id"], (e["id"], text)
     agent = (e["agent"] or "").capitalize() or "未知"
     # status · title column · Agent(7) · repo(13): Agent follows the title
-    assert segs[-2][0] == " " + agent.ljust(7 - (qo.cells(agent) - len(agent))), segs[-2]
-    assert ("dim" in segs[-2][1]) == (not e["agent"]) or e.get("lost"), segs[-2]
+    assert segs[-3][0] == " " + agent.ljust(7 - (qo.cells(agent) - len(agent))), segs[-3]
+    assert ("dim" in segs[-3][1]) == (not e["agent"]) or e.get("lost"), segs[-3]
     # the title column carries the session tree (a two-cell twisty slot first);
     # the repo column is the row's last cell run
     repo = segs[-1][0]

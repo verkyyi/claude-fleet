@@ -173,6 +173,7 @@ the screen's thread, then one hub cache --refresh, so a reaped row leaves within
 the next read. A lost row (`!`) sends nothing: 「<机器> 失联，做不了 · 正在重连」.
 """
 import curses
+from datetime import date
 import getpass
 import hashlib
 import importlib.util
@@ -2103,6 +2104,8 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
+        if local:
+            e["window_activity"] = wins.get(target, ("", "", 0))[2]
         # Column 21 carried a launch-proof session's status proof; nothing writes
         # it since EPIC T497 C8, an older producer's is ignored.
         e["deploy"] = f[19].strip()
@@ -2716,6 +2719,35 @@ def match_why(e, query):
     return ""
 
 
+def activity_time(e, derived=True):
+    """The tree's conversation activity; local window output is an old-node fallback."""
+    keys = ("last_active_at", "tree_at", "activity_at") if derived else ("tree_at", "activity_at")
+    return max(int(e.get(k) or 0) for k in keys) or int(e.get("window_activity") or 0)
+
+
+def activity_label(at, now=None, detail=False):
+    """Compact five-cell time, or an elapsed phrase for the selected-row detail."""
+    if not at:
+        return "—" if not detail else ""
+    now = time.time() if now is None else now
+    age = max(0, int(now - at))
+    if age < 60:
+        return say("view_activity_now")
+    if detail:
+        unit, n = ("minutes", age // 60) if age < 3600 else ("hours", age // 3600) if age < 86400 else ("days", age // 86400)
+        return say("view_activity_ago_" + unit, n)
+    if age < 3600:
+        return say("view_activity_minutes", age // 60)
+    if age < 86400:
+        return say("view_activity_hours", age // 3600)
+    days = (date.fromtimestamp(now) - date.fromtimestamp(at)).days
+    if days == 1:
+        return say("view_activity_yesterday")
+    if days < 7:
+        return say("view_activity_weekday_" + str(time.localtime(at).tm_wday))
+    return time.strftime("%m-%d", time.localtime(at))
+
+
 def note_of(e):
     """The lit session's bottom line (plan B): what its row no longer carries — lost,
     a broken configuration (red: a person has to act), k/N, the PR's step, the
@@ -2730,7 +2762,9 @@ def note_of(e):
         word = e.get("word") if task_status(e) == "needs" else ""
     else:
         words, word = "", e.get("word")
-    facts = [("Execution status unknown" if ui_lang() == "en" else "运行情况未知") if e.get("lost") else "",
+    activity = activity_label(activity_time(e), detail=True)
+    facts = [say("view_last_activity_fmt", activity) if activity else "",
+             ("Execution status unknown" if ui_lang() == "en" else "运行情况未知") if e.get("lost") else "",
              words, e.get("board_context"), word, e.get("ask"),
              task_status_word("loop") if e.get("loop") else "",
              agent_word(e) if e.get("agent_basis") == "planned" else "", e.get("why"),
@@ -2933,7 +2967,7 @@ def sched_parent(key, name, runs, now=None):
     return {"kind": "sess", "target": "sched:" + key, "board": "sched:" + key, "sched_parent": True,
             "sched_newest": runs[0]["target"], "text": name, "name": name, "group": "queue", "state": "",
             "source": "schedule", "agent": "", "repo": runs[0].get("repo") or "", "tags": [], "depth": 0,
-            "activity_at": max(int(r.get("activity_at") or 0) for r in runs), "dup_status": urgent,
+            "activity_at": max(activity_time(r) for r in runs), "dup_status": urgent,
             "sched_tail": tail, "id": "", "foot": name}
 
 
@@ -3021,11 +3055,11 @@ def tree_times(rows, kids):
 
     def walk(e):
         if id(e) not in at:
-            at[id(e)] = max([int(e.get("tree_at") or 0), int(e.get("activity_at") or 0)] +
+            at[id(e)] = max([activity_time(e, derived=False)] +
                             [walk(k) for k in kids.get(id(e), [])])
         return at[id(e)]
     for e in rows:
-        walk(e)
+        e["last_active_at"] = walk(e)
     for lst in kids.values():
         if any(at[id(k)] for k in lst):
             lst.sort(key=lambda k: (-at[id(k)], k.get("fid") or k["target"]))
@@ -3251,7 +3285,7 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     # entering needs is itself activity — but such a row (or a tree holding
     # one) is never folded.
     protected = {id(e) for e in recent if any(x["target"] in keep or needs_attention(x) for x in whole(e))}
-    room = max(0, prefs["max_visible"] - len(pin) - len(protected))
+    room = max(0, prefs["max_visible"] - len(pin))  # protected trees are extra, never crowd out ordinary rows
     ordinary, history = [], []
     for e in recent:
         at = tat[id(e)]
@@ -3335,12 +3369,11 @@ def visible(items, query, opened, current="", selected="", folds=None):
     history and the rows a shut ▸ hides without opening either — drawn flat."""
     items = compact_task_list(items, current, selected=selected, folds=folds)
     if query.split():
-        hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess" and not e.get("sched_parent")
-                and (not e.get("archived") or "archived" in opened)]
+        hits = [(score(query, e), i, e) for i, e in enumerate(items) if e["kind"] == "sess" and not e.get("sched_parent")]
         toks = query.split()
         if len(toks) == 1 and any(e.get("open_id") and id_code_hit(toks[0].lower(), e) for _, _, e in hits):
             hits = [h for h in hits if h[2].get("open_id") or h[0] != CODE_HIT]
-        return [dict(e, tree_flat=True) for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], h[1]))]
+        return [dict(e, tree_flat=True) for _, _, e in sorted((h for h in hits if h[0] is not None), key=lambda h: (-h[0], -activity_time(h[2]), h[1]))]
     return [dict(e, closed=e["sec"] not in opened) if e["kind"] == "sec" else e
             for e in items if not (e.get("sec") and e["kind"] != "sec" and e["sec"] not in opened)
             and not (e.get("sec_parent") and e["sec_parent"] not in opened) and not e.get("tree_hidden")]
@@ -3359,7 +3392,7 @@ def legend():
 
 
 PUNCT = "，。；：、！？,;:!?·—)）」』"
-AGENT_W, REPO_W = 7, 13
+AGENT_W, ACTIVE_W, REPO_W = 7, 5, 13
 
 
 def ellipsis(text, room, cells, clip):
@@ -3396,7 +3429,7 @@ def name_col(width):
 
 def row_segs(e, width, cells, clip, lit=False, glyph=True):
     """One status slot · the title column (tree prefix · twisty slot · title,
-    the flexible one) · Agent(7) · repo(13).
+    the flexible one) · Agent(7) · last activity(5) · repo(13).
     The session ID is internal: the Tab detail shows it, the row does not (task DDBQ).
     Only a request for input is red/bold; lost observations dim the whole row.
     Legacy parent/member metadata never changes title geometry.
@@ -3406,12 +3439,13 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     base = (("dim",) if e.get("lost") or e.get("unreach") is not None else ()) + (("lit",) if lit else ())
     sym = row_status(e) if not e.get("tree_flat") else task_status(e)
     gstyle = base + (("c1", "bold") if col and sym == "needs" else ())
+    show_activity = width >= 60
     show_repo = width >= 60
     show_agent = width >= 40
     agent = "" if e.get("sched_parent") else agent_word(e)
     segs = [(" " * ICON_X, base), (gl[sym], gstyle), (" ", base)]
     used = sum(cells(t) for t, _ in segs)
-    tail = (AGENT_W + 1 if show_agent else 0) + ((REPO_W + 2) if show_repo else 1)
+    tail = (AGENT_W + 1 if show_agent else 0) + (ACTIVE_W + 1 if show_activity else 0) + ((REPO_W + 2) if show_repo else 1)
     room = max(1, width - used - tail)
     # the title column (the session tree): its prefix, a two-cell twisty slot,
     # the title — red/bold while it asks the person — and a shut one's (N)
@@ -3423,6 +3457,7 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     avail = room - cells(prefix) - cells(slot)
     more = " (%d)" % e["tree_hidden_n"] if twisty == "shut" and e.get("tree_hidden_n") else ""
     times = " ×%d" % e["dup_n"] if not flat and (e.get("dup_n") or 0) > 1 else ""
+    archived = " " + say("view_archived_label") if e.get("archived") else ""
     # a schedule's row: its last ended run, ✓ / ✗ and when (HH:MM today, MM-DD before)
     tail = ("  " + e["sched_tail"]) if e.get("sched_tail") else ""
     # a pinned row (never a child under it): ⇡ after its title, (N) and ×N
@@ -3435,7 +3470,9 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
         tail = ""
     if cells(times) + cells(more) + cells(tail) + cells(pinned) > avail - 2:
         pinned = ""
-    name = clip_name(e.get("text") or "", avail - cells(more) - cells(times) - cells(tail) - cells(pinned), cells, clip)
+    if archived:
+        archived = ellipsis(archived, max(0, avail - 2), cells, clip)
+    name = clip_name(e.get("text") or "", avail - cells(more) - cells(times) - cells(tail) - cells(pinned) - cells(archived), cells, clip)
     tone = e.get("tree_tone") if twisty == "shut" else ""
     if prefix:
         segs.append((prefix, base + ("dim",)))
@@ -3443,6 +3480,8 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
         # a shut one's ▸: asking (red/bold) > running (green) > dim — and so its (N)
         segs.append((slot, base + tone_style(tone, col)))
     segs.append((name, base + (("c1", "bold") if col and sym == "needs" else ())))
+    if archived:
+        segs.append((archived, base + ("dim",)))
     if times:
         segs.append((times, base + ("dim",)))
     if more:
@@ -3451,13 +3490,18 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
         segs.append((pinned, base + tone_style("ask", col)))
     if tail:
         segs.append((tail, base + ("dim",)))
-    segs.append((" " * max(0, avail - cells(name) - cells(times) - cells(more) - cells(pinned) - cells(tail)), base))
+    segs.append((" " * max(0, avail - cells(name) - cells(times) - cells(more) - cells(pinned) - cells(tail) - cells(archived)), base))
     if show_agent:
         # Agent after the title, a fixed aligned column; the plan marker stays visible
         if e.get("agent_basis") == "planned":
             agent = (e.get("agent") or "?").capitalize()[:3] + ("·计" if _BOARD.get("lang") == "zh" else "(P)")
         aw = ellipsis(agent, AGENT_W, cells, clip)
         segs.append((" " + aw + " " * (AGENT_W - cells(aw)), base + (("dim",) if not e.get("agent") else ())))
+    if show_activity:
+        at = activity_time(e)
+        label = activity_label(at)
+        style = base if at and time.time() - at < 300 else base + ("dim",)
+        segs.append((" " + " " * max(0, ACTIVE_W - cells(label)) + label, style))
     if show_repo:
         r = ellipsis(e.get("repo") or "", REPO_W, cells, clip)
         segs.append((" " + r + " " * (REPO_W - cells(r)) + " ", base))
