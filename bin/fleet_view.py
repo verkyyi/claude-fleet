@@ -2430,7 +2430,7 @@ def board_apply(board, groups, shut, gone, here, me):
                                                or (e.get('record_only') and r.get('worker_id')
                                                    and r.get('tag') not in ('queued', 'starting'))
                                                or r.get('tag') in ('not_seen', 'parked', 'session_parked')))
-        if g != 'gone' and not e['target'].startswith('@') and e['worker_id'] and '/' in e['worker_id'] and r.get('id'):
+        if g != 'gone' and not (e.get('target') or '').startswith('@') and e['worker_id'] and '/' in e['worker_id'] and r.get('id'):
             # Inventory keys are readable aliases; every entry action pins the ID.
             e['target'] = e['worker_id'].split('/', 1)[0] + '/' + r['id']
             e['worker_id'] = e['target']
