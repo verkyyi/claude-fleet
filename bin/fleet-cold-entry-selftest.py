@@ -25,6 +25,14 @@ OTHER = '11111111-2222-4333-8444-555555555555'
 
 
 class Entry(unittest.TestCase):
+    def test_open_missing_window_offers_restore_even_before_next_inventory(self):
+        board = {'rows': [dict(id=FID, worker_id=OTHER + '/scratch-65', machine='remote', login='alice',
+                              group='queue', state='idle', tag='idle', title='kept')]}
+        out, _ = view.board_apply(board, {g: [] for g in view.GROUPS}, [], [], 'home', 'alice')
+        row = [e for g in view.GROUPS for e in out[g]][0]
+        self.assertTrue(view.far_reopen_row(row))
+        self.assertEqual(view.far_reopen_wid('test', row), OTHER + '/' + FID)
+
     def test_board_uses_identity_even_when_key_recycled(self):
         for machine, login in [('remote', 'alice'), ('home', 'other')]:
             board = {'rows': [dict(id=FID, worker_id=OTHER + '/scratch-65',

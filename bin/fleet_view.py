@@ -2427,6 +2427,8 @@ def board_apply(board, groups, shut, gone, here, me):
         e["worker_id"] = r.get("worker_id") or ""
         e['home'] = (r.get('machine') or here) == here and (r.get('login') or me) == me
         e['recoverable'] = bool(g != 'gone' and (r.get('state') == 'parked'
+                                               or (e.get('record_only') and r.get('worker_id')
+                                                   and r.get('tag') not in ('queued', 'starting'))
                                                or r.get('tag') in ('not_seen', 'parked', 'session_parked')))
         if g != 'gone' and not e['target'].startswith('@') and e['worker_id'] and '/' in e['worker_id'] and r.get('id'):
             # Inventory keys are readable aliases; every entry action pins the ID.
