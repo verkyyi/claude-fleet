@@ -89,6 +89,7 @@ func TestSvcUnqualifiedDualSkipsWithoutCodexAttempt(t *testing.T) {
 func TestSvcTrustedEvaluationEvidenceAndRevocation(t *testing.T) {
 	h, _, prod := svcRunsHarness(t)
 	p, eval, grader := svcPolicyFixture(t, h)
+	putSetting(t, h, svcTenantsKey(p.Evaluator), "app-a", http.StatusOK) // internal eval tenants retain their separate authorization
 	digest := SvcTemplateDigest("Report honestly.")
 	if err := h.srv.Store.PutSvcTemplate(store.SvcTemplate{Principal: "svc:livepage", Digest: digest, Name: "report", AgentMD: "Report honestly."}, time.Now()); err != nil {
 		t.Fatal(err)

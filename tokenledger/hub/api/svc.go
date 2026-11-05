@@ -286,11 +286,28 @@ func SvcCreate(st *store.Store, name, scopes, actor string, now time.Time) (stor
 	return p, nil
 }
 
+// SvcSetScopes replaces a principal's scopes for all existing tokens and audits
+// the resulting set. No token rotation or authentication-cache flush is needed.
+func SvcSetScopes(st *store.Store, principal, scopes, actor string, now time.Time) (store.SvcPrincipal, error) {
+	sc, err := store.SvcScopesParse(scopes)
+	if err != nil {
+		return store.SvcPrincipal{}, err
+	}
+	p, err := st.SetSvcPrincipalScopes(principal, sc)
+	if err != nil {
+		return p, err
+	}
+	if err := SvcAudit(st, actor, "svc.scopes", p.ID, "ok", "scopes="+strings.Join(p.Scopes, ","), now); err != nil {
+		log.Printf("svc audit: %v", err)
+	}
+	return p, nil
+}
+
 // SvcAdminRequest is POST /v1/fleet/svc: one op on a principal or a token.
 type SvcAdminRequest struct {
-	Op        string `json:"op"` // create | issue | revoke | disable | enable | callback
+	Op        string `json:"op"` // create | scopes | issue | revoke | disable | enable | callback
 	Principal string `json:"principal,omitempty"`
-	Scopes    string `json:"scopes,omitempty"`
+	Scopes    string `json:"scopes"`
 	Days      *int   `json:"days,omitempty"`
 	Prefix    string `json:"prefix,omitempty"`
 	Reason    string `json:"reason,omitempty"`
@@ -332,10 +349,17 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"principals": out, "scopes": store.SvcScopes})
 	case http.MethodPost:
-		var req SvcAdminRequest
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&req); err != nil {
+		var wire struct {
+			SvcAdminRequest
+			Scopes *string `json:"scopes"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&wire); err != nil {
 			httpError(w, http.StatusBadRequest, "malformed request: "+err.Error())
 			return
+		}
+		req := wire.SvcAdminRequest
+		if wire.Scopes != nil {
+			req.Scopes = *wire.Scopes
 		}
 		actor := actorOf(r)
 		switch req.Op {
@@ -346,6 +370,17 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusCreated, p)
+		case "scopes":
+			if wire.Scopes == nil {
+				httpError(w, http.StatusBadRequest, "scopes is required (use an empty string to remove all scopes)")
+				return
+			}
+			p, err := SvcSetScopes(s.Store, req.Principal, req.Scopes, actor, now)
+			if err != nil {
+				svcAdminError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, p)
 		case "issue":
 			days := svcDefaultDays
 			if req.Days != nil {
@@ -404,7 +439,7 @@ func (s *Server) handleSvcAdmin(w http.ResponseWriter, r *http.Request) {
 			}
 			writeJSON(w, http.StatusOK, out)
 		default:
-			httpError(w, http.StatusBadRequest, "op is one of create, issue, revoke, disable, enable, callback, eval-policy")
+			httpError(w, http.StatusBadRequest, "op is one of create, scopes, issue, revoke, disable, enable, callback, eval-policy")
 		}
 	default:
 		w.Header().Set("Allow", "GET, POST")

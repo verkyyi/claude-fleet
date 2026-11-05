@@ -78,12 +78,16 @@ func (s *Server) svcTenantAllowed(principal, tenant string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, allowed := range strings.Split(settings[svcTenantsKey(principal)], ",") {
+	return svcTenantListed(settings[svcTenantsKey(principal)], tenant), nil
+}
+
+func svcTenantListed(list, tenant string) bool {
+	for _, allowed := range strings.Split(list, ",") {
 		if strings.TrimSpace(allowed) == tenant {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 func svcStandingWorker(workerID string) bool {

@@ -21,7 +21,7 @@ import (
 func runSvc(args []string) error {
 	fs := flag.NewFlagSet("svc", flag.ExitOnError)
 	dbPath := fs.String("db", "", "the hub's database (default: $CCQUOTA_DB, else ~/.ccquota/ccquota.db)")
-	scopes := fs.String("scopes", "", "create: the scopes, comma separated ("+strings.Join(store.SvcScopes, ",")+")")
+	scopes := fs.String("scopes", "", "create/scopes: the scopes, comma separated ("+strings.Join(store.SvcScopes, ",")+")")
 	days := fs.Int("days", 365, "token issue: days until the token expires (0 = never)")
 	reason := fs.String("reason", "", "token revoke: why, for the audit")
 	prefix := fs.String("prefix", "", "callback: the URL prefix every run's callback_url must sit under")
@@ -30,6 +30,7 @@ func runSvc(args []string) error {
 		fmt.Fprint(os.Stderr, `Usage:
   ccquota svc list                                    every principal and its tokens
   ccquota svc create <name> --scopes runs:write,...   add svc:<name>
+  ccquota svc scopes <name> --scopes runs:write,...   replace scopes for every existing token
   ccquota svc token issue <name> [--days N]           mint a token (printed once)
   ccquota svc token revoke <prefix> [--reason why]    refuse it from the next call
   ccquota svc disable <name> | enable <name>          switch every token of it off / on
@@ -38,7 +39,9 @@ func runSvc(args []string) error {
 
 A service token (fcs_<prefix8>_<secret>) opens /v1/svc/ only, route by route
 by scope; only its hash is stored. A principal holds at most two live tokens,
-the old and the new during a rotation.
+the old and the new during a rotation. Scope changes apply on the next call;
+--scopes "" removes all scopes. Register templates with templates:write first,
+then narrow to runs:write,runs:read for the standing runtime token.
 
 Flags:
 `)
@@ -124,6 +127,27 @@ Flags:
 			return err
 		}
 		fmt.Printf("%s created  [%s]\n", p.ID, strings.Join(p.Scopes, " "))
+		return nil
+
+	case "scopes":
+		name, err := arg(1)
+		if err != nil {
+			return err
+		}
+		supplied := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "scopes" {
+				supplied = true
+			}
+		})
+		if !supplied {
+			return errors.New("svc scopes requires --scopes (use --scopes \"\" to remove all scopes)")
+		}
+		p, err := api.SvcSetScopes(st, name, *scopes, actor, now)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s scopes replaced  [%s]\n", p.ID, strings.Join(p.Scopes, " "))
 		return nil
 
 	case "token":

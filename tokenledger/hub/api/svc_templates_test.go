@@ -42,6 +42,14 @@ func TestSvcTemplateRegisterThenRun(t *testing.T) {
 		t.Fatalf("a changed text kept its digest: %v", out)
 	}
 
+	// Register first, then remove template writes from the same runtime token.
+	if st, out := svcAdmin(t, h, SvcAdminRequest{Op: "scopes", Principal: "livepage", Scopes: "runs:write,runs:read"}); st != http.StatusOK {
+		t.Fatalf("narrow: %d %v", st, out)
+	}
+	if st, _ := svcPutTemplate(t, h, tok, SvcTemplateRequest{AgentMD: svcTestAgentV2}); st != http.StatusForbidden {
+		t.Fatalf("runtime token still writes templates: %d", st)
+	}
+
 	for i, d := range []string{"sha256:" + d1, d2} {
 		req := svcReq("space:ws:"+string(rune('a'+i)), "t"+string(rune('a'+i)))
 		req.Template, req.TemplateDigest = "report", d
