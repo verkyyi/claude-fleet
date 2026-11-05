@@ -80,8 +80,8 @@ for hub in (False, True):
     assert not any(e.get("epic") or e.get("fold") for e in it)
     shown = fv.visible(it, "", set())
     targets = [e["target"] for e in shown if e["kind"] == "sess"]
-    # one order (task DDBQ): asking (@13) and failed (@15) are not lifted
-    assert targets == ["@11", "@14", "@12", "@13", "@15", "@10"], targets
+    # Equal local activity sorts by identity; asking/failed and legacy EPIC stamps do not lift a row.
+    assert targets == ["@10", "@11", "@12", "@13", "@14", "@15"], targets
     assert not any(e["kind"] in ("hdr", "ask") for e in shown), shown
     assert all(e.get("depth", 0) == 0 for e in shown)
     text = "\n".join("".join(t for t, _ in segs) for segs in fv.paint([e for e in shown if e["kind"] == "sess"], -1, 100, qo.cells, qo.clip))
