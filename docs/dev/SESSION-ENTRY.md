@@ -53,6 +53,7 @@
 | install 换版，旧窗口还在 | 把版本旧当作不可达 | 有窗口直接进入；oldcfg 原有 broken/stale 判断独立 | 不修改启动时固定的工具和 hook 表 |
 | relay / SSH 重连 | 仅 select 修复会漏掉首次 attach | `rv_thin_window` 的 `--want` 也恢复；消息接收端同样恢复 | remote select / attach 共享 helper；消息 target 单测 |
 | 冷工作区被 autoclean | 没窗口会被判可删，之后 reopen 拒绝 | cold.json 所有者保留目录；目录已缺失则 doctor 报明原因，显式 rebuild 仍由历史证据裁决 | protect-worktree 检查；既有 no-worktree 冷却演练 |
+| hook 补写的旧账本缺 repo/worktree | 转录存在却被当作 HOME 会话，误报转录缺失 | 仅对 lazy 账本，冷记录的 FID/native SID/agent 全匹配且归属不冲突时补齐；原转录校验照常执行，重开后 spawner 补记归属 | `park-cold-lazy-placement` 真实 reopen 校验及错身份/缺历史拒绝测试 |
 | 手动名称、首句话消失 | reopen 只带 --name，下句话重新写 task_line | 新冷记录保存选项；重开在放行 agent 前从冷记录/ID 手动命名事件恢复 | cold-entry take / legacy title 单测 |
 | 并发进入 + 消息 | 重复新建窗口或过早返回 | 单 ID warm 锁，确认后才交给选择/发送 | concurrent enter/send 单测 |
 | 面板等待中通知改变尺寸 | curses 阻塞期间通知增加状态行，旧图残留 | popup 自己画进度；通知只入记录；返回安排全图重绘 | 真实 curses 复现 resize 清除错误；修后窄屏进度/失败可见、每行只画一次。不把其它未复现重影归因于此 |

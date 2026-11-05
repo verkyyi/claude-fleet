@@ -1307,6 +1307,19 @@ def continue_plan(fid, seg=None):
         raise ValueError("%s has segments 1..%d, not %s" % (fid, len(segs), seg))
     s = segs[n - 1]
     o = rec["opened"]
+    # Older hooks could mint only identity/agent, before the spawner recorded
+    # placement. A cold record is the last window's receipt, not a key lookup.
+    # Fill only such incomplete ledgers, for the exact native segment; an
+    # explicit no-repo spawn or conflicting recorded placement stays authoritative.
+    if o.get('lazy') and (not o.get('repo') or not o.get('worktree')):
+        from fleet_park_cold import read as cold_read
+        cold = cold_read(fid) or {}
+        if (cold.get('sid') == s['native'] and cold.get('agent') == s['agent']
+                and all(not o.get(k) or o[k] == cold.get(k) for k in ('repo', 'worktree'))):
+            o = dict(o)
+            for key in ('repo', 'worktree', 'task'):
+                if not o.get(key) and cold.get(key):
+                    o[key] = cold[key]
     placement = {}
     if s["agent"] == "codex":
         from fleet_history_read import landing

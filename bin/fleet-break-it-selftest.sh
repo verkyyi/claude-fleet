@@ -6965,6 +6965,14 @@ drill_wake_timeout() {
 # must come back on a wake into its saved screen and the same conversation — never
 # a fresh one, never an ended ID; a wake that found no window used to answer
 # no_session and drop the sentence.
+drill_park_cold_lazy_placement() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-view-reopen-selftest.py" ColdPlacementTests 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='hook-only ID 从同 FID/native/agent 冷记录补归属；真实 reopen 校验通过，错身份和缺转录仍拒绝'
+}
+
 drill_park_cold_entry() {
   CAP=60; local t0 out
   t0=$(now)
