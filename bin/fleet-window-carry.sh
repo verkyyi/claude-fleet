@@ -32,7 +32,7 @@ set -u
 if [ "${1:-}" = --heal ]; then
   tm() { if [ -n "${2:-}" ]; then tmux -L "$2" "${@:3}"; else tmux "${@:3}"; fi; }
   L="${2:-}"
-  tm x "$L" list-windows -a -F '#{window_id}|#{@fleet_role}|#{@fleet_id}' 2>/dev/null | sort -u |
+  tm x "$L" list-windows -a -F '#{window_id}|#{@fleet_role}|#{@fleet_id}' 2>/dev/null | sort -u | # view-ok: option repair is by window ID; sort -u collapses grouped views
   while IFS='|' read -r w role fid; do
     [ "$role" = panel ] && [ -n "$fid" ] || continue
     tm x "$L" list-panes -t "$w" -F '#{@wrap_win}' 2>/dev/null | grep -qx "$w" || continue

@@ -82,7 +82,7 @@ class Cold(fixture.Park):
         loc = self.root / 'locate'
         # as fleet_id_window: a window that is gone is not found (rc 1)
         loc.write_text('#!/bin/sh\n[ -s %s ] && exec cat %s\n'
-                       'tmux -L %s list-windows -a -F "#{window_id}" | grep -qx %s || exit 1\n'
+                       'tmux -L %s list-windows -t test -F "#{window_id}" | grep -qx %s || exit 1\n'
                        'printf "%s\\t%s\\n"\n'
                        % (shlex.quote(str(self.root / 'locate.out')), shlex.quote(str(self.root / 'locate.out')),
                           self.label, self.win, self.label, self.win))
