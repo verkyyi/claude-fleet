@@ -2391,6 +2391,8 @@ def board_apply(board, groups, shut, gone, here, me):
         if g == "gone" and probe_title(r.get("title") or ""):
             continue   # BCYB: 已收起 lists no probe — the hub's closed rows either
         e = by_fid.get(r.get("id") or "") or by_wid.get(r.get("worker_id") or "")
+        if e is not None and e.get('fid') and e['fid'] != r.get('id'):
+            e = None  # a recycled key belongs to a different conversation
         if e is not None and id(e) in used:
             e = None
         if e is None:
@@ -2423,6 +2425,16 @@ def board_apply(board, groups, shut, gone, here, me):
         e["board"] = r.get("id")
         e["archived"] = bool(r.get("archived"))
         e["worker_id"] = r.get("worker_id") or ""
+        e['home'] = (r.get('machine') or here) == here and (r.get('login') or me) == me
+        e['recoverable'] = bool(g != 'gone' and (r.get('state') == 'parked'
+                                               or r.get('tag') in ('not_seen', 'parked', 'session_parked')))
+        if g != 'gone' and not e['target'].startswith('@') and e['worker_id'] and '/' in e['worker_id'] and r.get('id'):
+            # Inventory keys are readable aliases; every entry action pins the ID.
+            e['target'] = e['worker_id'].split('/', 1)[0] + '/' + r['id']
+            e['worker_id'] = e['target']
+            e.update(record_only=False, ledger=False)
+            if e.get('cold'):
+                e['target'] = 'cold:' + r['id']
         # the identity worker_id a closed ID reopens under on its own machine (the
         # hub's history.resume_id: <its fleet UUID>/<fid>) — far 恢复's address
         h = r.get("history") if isinstance(r.get("history"), dict) else {}
@@ -3712,6 +3724,10 @@ def resolve(vid, target, row, fleet, inventory=None):
     uuid, _, fid = target.partition("/")
     if fid and uuid and uuid == row.get("fuid"):
         matches = [w for w, v in (windows(fleet) if inventory is None else inventory).items() if v[0] == fid]
+        if not matches and inventory is None:
+            import fleet_park_cold
+            if fleet_park_cold.read(fid) and fleet_park_cold.warm(fid):
+                matches = [w for w, v in windows(fleet).items() if v[0] == fid]
         return (matches[0] if len(matches) == 1 else ""), False
     return "", True
 
@@ -3726,7 +3742,7 @@ def log_switch(rec):
         pass
 
 
-def toast(client, text, level="warn", nxt="", secs=None):
+def toast(client, text, level="warn", nxt="", secs=None, draw_it=True):
     """A 看台 message on this client only: a notice (T675, bin/fleet_notice.py —
     the message row: an error until seen, warn 6 s, info 3 s; recorded for ⌘P's ✦ 消息), never a
     0.75 s display-message."""
@@ -3734,9 +3750,10 @@ def toast(client, text, level="warn", nxt="", secs=None):
         sys.path.insert(0, str(Path(__file__).absolute().parent))
         import fleet_notice
         fleet_notice.notify(level, text, nxt, client=client, sock="" if os.environ.get("TMUX") else _SOCK[0],
-                            source="看台", secs=secs)
+                            source="看台", secs=secs, draw_it=draw_it)
     except Exception:
-        tm("display-message", *(["-c", client] if client else []), "-d", "6000", text)
+        if draw_it:
+            tm("display-message", *(["-c", client] if client else []), "-d", "6000", text)
 
 
 def notice_tag():
@@ -3853,7 +3870,7 @@ def peer_select(machine, login, sock, target, vid):
         return subprocess.run(pl.ssh_cmd() + ["-S", sock, "-o", "ControlMaster=no", "-l", login,
                                               pl.link_host(machine, login), cmd],
                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              timeout=fenv("FLEET_VIEW_PEER_SECS", 3)).returncode
+                              timeout=max(fenv("FLEET_VIEW_PEER_SECS", 3), 65)).returncode
     except (OSError, subprocess.TimeoutExpired):
         return 255
 
@@ -3878,23 +3895,22 @@ def switch_args(client, g, w):
     return ["select-window", "-t", "=%s:%s" % (g, w)]
 
 
-def go_far(vid, fleet, g, target, meta, client):
+def go_far(vid, fleet, g, target, meta, client, panel_entry=False):
     """go()'s other-machine half: (method, rc, machine, login, extra)."""
     m, l = far_where(target, meta, fleet)
     if not m:
-        toast(client, say("view_far_fmt", "?"))
+        toast(client, say("view_far_fmt", "?"), draw_it=not panel_entry)
         return "far-none", 3, m, l, {}
     key = "%s@%s" % (m, l)
-    w, pcur = peer_windows(fleet, vid).get(key, ("", ""))
+    w, _ = peer_windows(fleet, vid).get(key, ("", ""))
     made = not w
     if made:
         w = peer_make(fleet, vid, m, l, target)
         if not w:
-            toast(client, say("view_far_fmt", m))
+            toast(client, say("view_far_fmt", m), draw_it=not panel_entry)
             return "far-none", 3, m, l, {}
-    if not made and pcur == "wid:" + target:
-        code, _ = tm(*switch_args(client, g, w))
-        return ("peer-window", 0) + (m, l, {}) if code == 0 else ("gone", 4, m, l, {})
+    # @peer_cur is where a view last landed, not proof that its worker still
+    # has a window. Always let the owner check it (it may have cooled meanwhile).
     sock = "" if made else peerlink().up_sock(m, l)
     extra = {}
     if sock:
@@ -3914,12 +3930,12 @@ def go_far(vid, fleet, g, target, meta, client):
                          "set-option", "-w", "-u", "-t", w, "@peer_want"])
             return ("peer-select", 0, m, l, extra) if code == 0 else ("gone", 4, m, l, extra)
         if prc == 3:
-            toast(client, say("view_gone"))
-            return "gone", 4, m, l, extra
+            toast(client, entry_unavailable(), draw_it=not panel_entry)
+            return "unavailable", 4, m, l, extra
     # the link not up (or the far 看台 not there yet): the window waits and lands there
     tm("set-option", "-w", "-t", w, "@peer_want", "wid:" + target)
     tm(*switch_args(client, g, w))
-    toast(client, say("view_peer_wait_fmt", m), "info")
+    toast(client, say("view_peer_wait_fmt", m), "info", draw_it=not panel_entry)
     return "peer-wait", 3, m, l, extra
 
 
@@ -3929,7 +3945,12 @@ def far_miss(vid, row, rc):
     which sent the person looking for a broken link (C8X3)."""
     if rc == 3 and vid.startswith("wt-") and row.get("far"):
         return say("view_web_far")
-    return say("view_far_fmt", row.get("machine") or "?") if rc == 3 else say("view_gone")
+    return say("view_far_fmt", row.get("machine") or "?") if rc == 3 else entry_unavailable()
+
+
+def entry_unavailable():
+    return ("Session window unavailable. Open its details → Restore; run fleet doctor --park for the reason."
+            if ui_lang() == 'en' else '会话窗口暂不可用。打开会话详情 → 恢复；fleet doctor --park 可查看原因。')
 
 
 WEB_GO_RE = re.compile(r"[A-Za-z0-9-]{1,64}/[A-Za-z0-9._:-]{1,128}")
@@ -3995,6 +4016,9 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     g = "%s@view-%s" % (fleet, vid)
     before = current(vid, fleet)
     meta = meta or {}
+    panel_entry = how in ('popup', 'menu')
+    if meta.get('cold') or meta.get('state') == 'parked' or target.startswith('cold:'):
+        toast(client, 'Waking session…' if ui_lang() == 'en' else '正在唤醒…', 'info', draw_it=not panel_entry)
     w, far = resolve(vid, target, row, fleet)
     stub = os.environ.pop("FLEET_STUB_DIR", "")
     far_words = None
@@ -4015,11 +4039,11 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
         if rc:
             toast(client, say("view_web_far"))
     elif far:
-        method, rc, fm, fl, extra = go_far(vid, fleet, g, target, meta, client)
+        method, rc, fm, fl, extra = go_far(vid, fleet, g, target, meta, client, panel_entry=panel_entry)
         meta = dict(meta, machine=fm or meta.get("machine") or "", login=fl or meta.get("login") or "")
     elif not w:
-        method, rc = "gone", 4
-        toast(client, say("view_gone"))
+        method, rc = "unavailable", 4
+        toast(client, entry_unavailable(), draw_it=not panel_entry)
     else:
         if vid.startswith("wt-"):
             tm(*park_unmode(w))
@@ -5239,8 +5263,8 @@ def reopen_row(r):
     its CONVERSATION only — the record is not touched, nothing is dispatched; going
     on with the task itself is still 继续任务 (#5396)."""
     t = r.get("target") or ""
-    return bool(r.get("gone") and reopen_fid(r) and r.get("home", not r.get("far"))
-                and (t.startswith("id:") and r.get("ledger") or t.startswith("landed:") and r.get("task")))
+    return bool((r.get("gone") or r.get('recoverable')) and reopen_fid(r) and r.get("home", not r.get("far"))
+                and (r.get('recoverable') or t.startswith("id:") and r.get("ledger") or t.startswith("landed:") and r.get("task")))
 
 
 def far_reopen_row(r):
@@ -5250,8 +5274,8 @@ def far_reopen_row(r):
     恢复 runs, fleet-id.sh reopen --exec --rebuild behind its gates
     (fleet-control-read.sh `resume fid:`). Conversation only, as reopen_row."""
     t = r.get("target") or ""
-    return bool(r.get("gone") and r.get("far") and not r.get("home", False) and reopen_fid(r)
-                and t.startswith("id:") and r.get("ledger"))
+    return bool((r.get("gone") or r.get('recoverable')) and r.get("far") and not r.get("home", False) and reopen_fid(r)
+                and (r.get('recoverable') or t.startswith("id:") and r.get("ledger")))
 
 
 def far_reopen_wid(fleet, r):
@@ -5519,7 +5543,7 @@ def act_row(fleet, e):
 
 def menu_of(r):
     """The actions a row gets, in the table's order: (action, label)."""
-    if reopen_row(r) or far_reopen_row(r):
+    if (r.get('gone') or r.get('record_only')) and (reopen_row(r) or far_reopen_row(r)):
         a = ACTION["resume"]
         return [(a, a["label"](r))] + ([(ACTION["archive"], ACTION["archive"]["label"](r))] if r.get("board") else [])
     if r.get("record_only"):
@@ -6899,6 +6923,14 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             return None
         return now
 
+    def entry_progress(r):
+        # Curses owns the popup. A notice growing tmux's status row while this
+        # synchronous entry waits used to resize underneath its stale frame.
+        h, w = screen.getmaxyx()
+        text = ('Waking session…' if ui_lang() == 'en' else '正在唤醒…') if r.get('state') == 'parked' or r.get('cold') else ('Opening session…' if ui_lang() == 'en' else '正在进入…')
+        panel.put(screen, max(0, h - 2), 0, text + ' ' * w, w, qo.clip, 0)
+        screen.refresh()
+
     def run(a, r, ans):
         """Do it, say how it went, read the list again (a pin, a rename, a reap
         shows at once); back on the list."""
@@ -6916,7 +6948,10 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             close_page()
             msg = say("view_act_sent_fmt", a["label"](r).rstrip("…"))
             return False
+        if a['id'] == 'enter':
+            entry_progress(r)
         rc, said, went = act_run(qo, vid, fleet, a, r, ans, client, wait=False)
+        heal.resized(screen)
         msg_until = time.time() + 3 if a["id"] == "lang" and rc == 0 else 0
         if rc == 4 and r.get("gone") and not ans:
             # a restore that asks first (#543): its question on the bottom line,
@@ -7484,7 +7519,9 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             msg = lost_msg(e) or ""
             if msg:
                 continue
+            entry_progress(e)
             rc = go(qo, vid, target, "popup", client, e)
+            heal.resized(screen)
             if rc == 0:
                 return 0
             msg = far_miss(vid, e, rc)

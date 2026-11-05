@@ -113,7 +113,7 @@ EOF
 # pr_attach — the person's terminal attaches the thin 看台 `v1` on home
 pr_attach() {
   "$REAL_TMUX" -L "$PR_TL" new-window -d -t "=$PR_TL:" -n view \
-    "env -u TMUX -u TMUX_PANE $(pr_env home) bash '$BIN/fleet-remote-view.sh' attach --thin --view v1 --route lan --token t1 --device e30=; sleep 300"
+    "env -u TMUX -u TMUX_PANE $(pr_env home) bash '$BIN/fleet-remote-view.sh' attach --thin --view v1 --want '$PR_W_home_l1' --route lan --token t1 --device e30=; sleep 300"
 }
 pr_view() { printf '%s@view-v1' "$PR_HS"; }
 pr_cur() { pr_t home display-message -p -t "=$(pr_view):" '#{window_id}' 2>/dev/null; }

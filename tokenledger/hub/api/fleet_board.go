@@ -478,15 +478,15 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			wid = *fs.WorkerID
 		}
 		b := idBy[ident]
-		t := byWID[wid]
-		if t == nil {
-			t = taskOfID(b)
-		}
+		t := taskOfID(b)
 		if t == nil && ident != "" {
 			t = byFID[ident]
 		}
 		if t == nil && wid != "" {
-			t = byWID[wid]
+			candidate := byWID[wid]
+			if candidate != nil && (candidate.FID == "" || candidate.FID == ident) {
+				t = candidate // a recycled key cannot attach another session's task
+			}
 		}
 		if t != nil && controlled[t] && (currentWorker[t] == "" || wid != currentWorker[t]) {
 			// Retained wrappers and stale inventory are history, never this Task's
@@ -527,6 +527,9 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Repo = wstr(w, "repo")
 		}
 		r.WorkerID, r.Machine, r.Login = wid, fs.MachineName, fs.OSUser
+		if fleet, _, ok := strings.Cut(wid, "/"); ok && store.IsFleetID(ident) {
+			r.WorkerID = fleet + "/" + ident // every client enters this generation
+		}
 		if v := wstr(w, "from"); store.IsFleetID(v) {
 			r.fromID = v
 		}

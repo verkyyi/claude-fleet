@@ -6965,6 +6965,15 @@ drill_wake_timeout() {
 # must come back on a wake into its saved screen and the same conversation — never
 # a fresh one, never an ended ID; a wake that found no window used to answer
 # no_session and drop the sentence.
+drill_park_cold_entry() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cold-entry-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  out=$(bash "$BIN/fleet-cold-entry-peer-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='本地、跨机、另一登录、手机和搜索按 ID 进入冷停放；网页可说话；名称保留'
+}
+
 drill_park_cold_wake() {
   CAP=60; local t0 out
   t0=$(now)

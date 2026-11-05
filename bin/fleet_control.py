@@ -86,8 +86,8 @@ def cold_opened(fid):
 
 def cold_workers(fleet):
     """The fleet's cold parks (fleet_park_cold.py) as inventory rows (PV5W): a
-    parked session with no window — listed, never a target (find_workers skips
-    `cold`), so the hub's list keeps it parked, keyed and nested instead of 看不到会话."""
+    parked session with no window — find_workers skips `cold` until an explicit
+    entry or message restores its window, so the hub's list keeps it parked, keyed and nested instead of 看不到会话."""
     try:
         import fleet_park_cold
         recs = fleet_park_cold.records(fleet["name"])
@@ -103,10 +103,10 @@ def cold_workers(fleet):
         issue = int(r["issue"]) if str(r.get("issue") or "").isdigit() and int(r["issue"]) > 0 else None
         scratch = r.get("raw") == "1" or bool(re.search(r"scratch-[0-9]+/?$", r.get("worktree") or ""))
         key = worker_key(issue, scratch, r.get("worktree") or "", repo)
-        w = dict(worker_id=worker_identity(fleet["fleet_id"], key or fid), key=key, window_id="", issue=issue,
+        w = dict(worker_id=worker_identity(fleet["fleet_id"], fid), key=key, window_id="", issue=issue,
                  repo=repo if repo and repo != "?" else None, scratch=scratch, worktree=r.get("worktree") or "", state="parked",
                  lifecycle="awake", agent=r.get("agent") or fleet["agent"], handle="", identity=fid,
-                 name=r.get("name") or "", cold=True, can_talk=False)
+                 name=r.get("name") or "", cold=True, can_talk=True)
         born = str(r.get("born") or "")
         if not born.isdigit():
             born = str(cold_opened(fid))   # a record written before it kept one
@@ -497,6 +497,13 @@ class Control(NativeExitSubmission):
         """Resolve a durable key to exactly one live window, or raise. The
         window is re-resolved here, at action time; a caller never names one."""
         matches, snapshot = self.find_workers(fleet, key)
+        if not matches and action == 'worker_message' and is_identity(key):
+            import fleet_park_cold
+            record = fleet_park_cold.read(key)
+            if record and record.get('session') == fleet['name']:
+                if not fleet_park_cold.warm(key):
+                    raise Fault('UNAVAILABLE', 'Cold session could not wake; use Restore on its session page and inspect fleet doctor --park')
+                matches, snapshot = self.find_workers(fleet, key)
         if not matches:
             raise Fault("NOT_FOUND", "No live worker holds this identity on the fleet")
         if len(matches) > 1 and action != "worker_message":

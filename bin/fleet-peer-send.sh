@@ -298,6 +298,9 @@ case "$idcode" in
   1)
     [ "$rc" -eq 0 ] && fleet_is_fid "$fid" || die 1 "${fid#fleet-id: }"
     idtag="#$(bash "$BIN/fleet-id.sh" short "$fid" 2>/dev/null)" || idtag=$tgt
+    if [ -f "${FLEET_GATE_DIR:-$FLEET_CONF_DIR/session-gate}/$fid/cold.json" ]; then
+      python3 "$BIN/fleet_park_cold.py" warm --fid "$fid" >/dev/null 2>&1 || :
+    fi
     if [ -n "$SOCK" ]; then socks="$SOCK"
     elif [ -n "${TMUX:-}" ]; then socks="-"          # bare tmux: this pane's own server
     else socks=$(fleet_sockets); fi
@@ -337,6 +340,7 @@ esac
 # --- worker_id → where it lives (issue #1420) -------------------------------------
 case "$tgt" in
   wid:*)
+    fleet_worker_warm "$tgt" "$SOCK" >/dev/null 2>&1 || :
     loc=$(fleet_worker_locate "$tgt" "$SOCK"); rc=$?
     case "$loc" in
       local\ *) loc=${loc#local }; tgt=${loc%% *}; SOCK=$(fleet_socket "${loc#* }") ;;

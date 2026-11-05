@@ -449,7 +449,13 @@ rv_wid_fid() {
 rv_select() {
   local wid="${1#wid:}" view="${2:-}" loc tgt g c w s
   loc=$(fleet_worker_locate "wid:$wid" 2>/dev/null)
-  case "$loc" in local\ *) ;; *) note "${wid#*/} is not live on $(hostname -s)"; return 3 ;; esac
+  case "$loc" in local\ *) ;; *)
+    fleet_worker_warm "wid:$wid" >/dev/null 2>&1 && loc=$(fleet_worker_locate "wid:$wid" 2>/dev/null)
+    case "$loc" in local\ *) ;; *)
+      note "${wid#*/}: window unavailable; open the session page and choose Restore; fleet doctor --park lists missing windows"
+      return 3 ;;
+    esac ;;
+  esac
   set -- $loc; w=$2; s=$3; sock=$(fleet_socket "$s")
   rv_wid_fid "$wid" "$w"
   tgt="$s"
@@ -540,6 +546,7 @@ rv_thin_window() {
   # peer window's reconnect (`--want` its @peer_cur) found no such window and
   # landed on whatever the fleet session showed — a bare shell, on the phone.
   if [ -z "$w" ] && case "$c" in */*) true ;; *) false ;; esac; then
+    fleet_worker_warm "wid:$c" "$1" >/dev/null 2>&1 || :
     loc=$(fleet_worker_locate "wid:$c" "$1" 2>/dev/null)
     case "$loc" in "local "*" $1") w=${loc#local }; w=${w%% *} ;; esac
   fi

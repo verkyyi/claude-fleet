@@ -311,6 +311,9 @@ process_locked() {
     say "KEEP  $branch  (protected)"; kept=$((kept+1)); return
   fi
   # Liveness (issue #353): key off worker IDENTITY first, cwd only as a fallback.
+  if python3 "$BIN/fleet_park_cold.py" protect-worktree --worktree "$dir"; then
+    say "KEEP  $branch  (cold parked session owns worktree)"; kept=$((kept+1)); return
+  fi
   # A worker window binds @issue=<N> and lives in the issue-<N> worktree, so an
   # exact @issue match KEEPs it whether or not its pane cwd happens to sit at the
   # worktree root — this is what stops a busy worker (cwd in a subdir, a scratch
