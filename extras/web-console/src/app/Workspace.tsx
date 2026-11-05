@@ -35,7 +35,7 @@ export function Workspace({ r }: { r: Row }) {
   }, [params, setParams]);
   const pendingRecord = !r.live && !!r.board && ["queued", "starting", "not_seen"].includes(r.board.tag);
   const cancelRef = pendingStartRef(r);
-  const { reload, rows } = useWorkRows();
+  const { reload, rows, restoreArchived } = useWorkRows();
   // a session another opened: 来自 <that one> › <this one>, the way back to it
   const opener = useMemo(() => sessionTree(rows || []).up.get(r.id), [rows, r.id]);
   const { me } = useMe();
@@ -71,7 +71,11 @@ export function Workspace({ r }: { r: Row }) {
     setContinuing(true);
     try {
       const result = await requestRowContinue(r, { post: (url, body) => sendJSON('POST', url, body) }, nextAgent);
-      if (result.ok) toast.info(tr('已提交继续请求。', 'Continue request submitted.'));
+      if (result.ok) {
+        const error = await restoreArchived(r);
+        if (error) toast.error(error);
+        else toast.info(tr('已提交继续请求。', 'Continue request submitted.'));
+      }
       else toast.error(tr(`没能继续：${result.error}`, `Could not continue: ${result.error}`));
       if (result.ok || result.status === 409) reload();
     } finally { setContinuing(false); }

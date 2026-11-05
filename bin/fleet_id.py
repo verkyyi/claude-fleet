@@ -294,6 +294,11 @@ def append(fid, ev, decide=None):
             if ev is None:
                 return None
         ev = dict(ev)
+        # Cold warm rebuilds a parked window without starting a conversation.
+        if ev.get("ev") == "reopened":
+            ev["maintenance"] = os.environ.get("FLEET_PARK_RESTORE_FID") == fid
+        elif ev.get("ev") == "native" and os.environ.get("FLEET_PARK_RESTORE_FID") == fid:
+            ev["maintenance"] = True
         ev["id"] = fid
         ev["seq"] = len(events) + 1
         ev.setdefault("ts", int(time.time()))

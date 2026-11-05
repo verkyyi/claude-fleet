@@ -325,7 +325,7 @@ const Detail: FC<{ r: Row; stale: boolean; busy: boolean; onOpen: (r: Row) => vo
 // One row's details with explicit stop / resume and their request acknowledgments —
 // 会话's side panel and a session's own page (/s/:ref, GR5E C2) alike.
 export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () => void; cli?: boolean }> = ({ r, onOpen, onTerminal, cli }) => {
-  const { stale, reload } = useWorkRows();
+  const { stale, reload, restoreArchived } = useWorkRows();
   const { me } = useMe();
   const readOnly = !me || !!me.read_only || !!me.view_as || !!viewAs;
   const [busy, setBusy] = useState(false);
@@ -347,7 +347,7 @@ export const RowPanel: FC<{ r: Row; onOpen: (r: Row) => void; onTerminal?: () =>
     if (!id) return;
     setBusy(true);
     setNote(null);
-    const why = await sessionWrite(tool, id);
+    const why = await sessionWrite(tool, id) || await restoreArchived(x);
     setBusy(false);
     if (why) setNote({ ok: false, text: tr(`没能接回：${why}`, `Could not resume it: ${why}`) });
     else setNote({ ok: true, text: tr("已接回，会话重新开始干活。", "Resumed — the session is back at work.") });

@@ -41,6 +41,7 @@ class Board(unittest.TestCase):
         self.dir = Path(tempfile.mkdtemp())
         self.p = patch.object(v, "dash_global", lambda: self.dir)
         self.p.start()
+        v._ARCHIVE_HOLD.clear()
         v._BOARD.clear()
         v._BOARD["lang"] = "zh"
 
@@ -50,6 +51,24 @@ class Board(unittest.TestCase):
     def write(self, board, age=1):
         (self.dir / "hubsess.body").write_text(json.dumps({"sessions": [], "board": board}))
         (self.dir / "hub_ok").write_text("%d\n" % (time.time() - age))
+
+    def test_saved_restore_bridges_a_stale_board(self):
+        fid = "f-restored"
+        now = int(time.time())
+        board = {"rows": [{"id": fid, "title": "old", "group": "gone", "tag": "exited",
+                           "archived": True, "activity_at": now - 864000}]}
+        project = lambda: v.board_apply(board, {g: [] for g in v.GROUPS}, [], [], "m", "u")[1][0]
+        self.assertTrue(project()["archived"])
+        v._ARCHIVE_HOLD[fid] = (False, time.monotonic() + 30, now)
+        restored = project()
+        self.assertFalse(restored["archived"])
+        self.assertEqual(restored["activity_at"], now)
+        self.assertIn(restored["target"], [r.get("target") for r in v.visible([restored], "", set())])
+        board["rows"][0]["archived"] = False
+        project()
+        self.assertNotIn(fid, v._ARCHIVE_HOLD, "Hub acknowledgment releases the local bridge")
+        board["rows"][0]["archived"] = True
+        self.assertTrue(project()["archived"], "a later archive is not masked")
 
     def test_read_fresh_stale_absent(self):
         self.assertIsNone(v.board_read())                      # no hub here

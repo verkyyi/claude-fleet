@@ -113,6 +113,80 @@ try {
     assert.deepEqual(writes.map(x=>x.args.archived),[true,true,false]);
     await context.close();
   }
+  // A successful explicit resume/message restores the row before a fresh board.
+  for (const action of ['resume', 'message']) {
+    const context = await browser.newContext({viewport:{width:1440,height:900},locale:'en-US'});
+    await context.addCookies([{name:'cf_lang',value:'en',url:origin}]);
+    const page = await context.newPage();
+    const fid='00000000-0000-4000-8000-000000000903', worker=`fleet/${fid}`;
+    let fail=true; const writes=[];
+    await page.addInitScript(() => {
+      const original=window.fetch.bind(window);
+      window.fetch=async(input,init)=>{
+        const u=new URL(String(input),location.origin);
+        if(u.pathname!='/v1/chat/view'||u.searchParams.has('cached'))return original(input,init);
+        const enc=new TextEncoder();
+        return new Response(new ReadableStream({start(c){
+          for(const f of [{t:'state',agent:'claude',session:'native',can_talk:true,busy:false,queue:[]},
+            {t:'items',replace:true,session:'native',at:1,items:[{t:'text',d:'Archived conversation'}]}])
+            c.enqueue(enc.encode('data: '+JSON.stringify(f)+'\n\n'));
+          init?.signal?.addEventListener('abort',()=>c.error(new DOMException('Aborted','AbortError')),{once:true});
+        }}),{headers:{'Content-Type':'text/event-stream'}});
+      };
+    });
+    await page.route('**/*',async route=>{
+      const req=route.request(),u=new URL(req.url());
+      if(!u.pathname.startsWith('/v1/')){
+        const rel=u.pathname.replace(/^\/app\/?/,'');
+        const file=new URL(`../dist/app/${rel.startsWith('assets/')?rel:'index.html'}`,import.meta.url);
+        return route.fulfill({body:await readFile(file),contentType:file.pathname.endsWith('.js')?'application/javascript':file.pathname.endsWith('.css')?'text/css':'text/html'});
+      }
+      let body={};
+      if(u.pathname==='/v1/me')body={role:'user',person:'test-owner',name:'Test',pages:['app'],entry:true};
+      if(u.pathname==='/v1/chat/home')body={state:'ok',machine:'test',login:'test',unified:false};
+      if(u.pathname==='/v1/fleet/tasks')body={tasks:[]};
+      if(u.pathname==='/v1/fleet/sessions')body={sessions:[],board:{count:0,active:0,groups:{},rows:[{
+        id:fid,code:'EF56',title:'Return this session',group:action==='resume'?'gone':'work',tag:action==='resume'?'ended':'working',
+        state:action==='resume'?'exited':'working',origin:'cli',worker_id:worker,archived:true,words:['空闲','Idle'],agent:'claude',
+        at:Date.now()/1000-864000,activity_at:Date.now()/1000-864000,history:action==='resume'?{id:fid,resume_id:worker}:undefined}]}};
+      if(u.pathname==='/v1/chat/view')body={mirror:null};
+      if(req.method()==='POST'){
+        writes.push(u.pathname);
+        if(u.pathname==='/v1/fleet/session_archive'){
+          assert.deepEqual(req.postDataJSON(),{id:fid,archived:false});body={status:'succeeded'};
+        }else if(fail)return route.fulfill({status:503,json:{error:'not delivered'}});
+        else body=u.pathname==='/v1/chat/say'?{state:'queued',delivery:'test'}:{status:'succeeded'};
+      }
+      return route.fulfill({json:body});
+    });
+    await page.goto(origin+'/app/s/EF56');
+    try { await page.getByText('Archived conversation',{exact:true}).waitFor({timeout:10000}); } catch(e) { console.error(action, await page.locator('body').innerText()); throw e; }
+    const list=page.locator('[data-session-list="side"]');
+    const row=list.locator('[data-row="EF56"]');
+    assert.equal(await row.count(),0,'viewing archived history alone does not restore it');
+    assert.deepEqual(writes,[]);
+    if(action==='resume'){
+      await page.getByRole('button',{name:'Details',exact:true}).click();
+      await page.getByRole('button',{name:'Resume',exact:true}).click();
+      await page.getByText(/Could not resume it/).waitFor();
+      assert.ok(!writes.includes('/v1/fleet/session_archive'),'failed resume preserves archive');
+      fail=false;
+      await page.getByRole('button',{name:'Resume',exact:true}).click();
+    }else{
+      const input=page.locator('textarea:visible').last();
+      await input.fill('Continue this conversation');
+      await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/v1/chat/say'), input.press('Enter')]);
+      assert.ok(!writes.includes('/v1/fleet/session_archive'),'failed message preserves archive');
+      fail=false;
+      await input.fill('Continue now');
+      await input.press('Enter');
+    }
+    await row.waitFor();
+    assert.equal(writes.at(-1),'/v1/fleet/session_archive','reactivation saves visibility after success');
+    assert.equal(await row.locator('[data-archived-label]').count(),0,'local saved result wins over a stale board');
+    await context.close();
+  }
+  console.log('PASS archived resume/message: failed action stays archived, successful action returns immediately, history reads write nothing');
   // Archive = stop + hide (task DDBQ): a running task asks first, then stops, then archives.
   {
     const context = await browser.newContext({viewport:{width:1440,height:900}});

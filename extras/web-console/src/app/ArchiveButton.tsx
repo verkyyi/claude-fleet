@@ -16,7 +16,7 @@ import type { Row } from "./work";
 // Archive = stop + hide (task DDBQ). Still doing something ⇒ ask first; idle ⇒
 // just goes. Unarchive only shows it again.
 export function ArchiveButton({ row }: { row: Row }) {
-  const { reload } = useWorkRows();
+  const { reload, archiveLocal } = useWorkRows();
   const { me } = useMe();
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
@@ -34,7 +34,7 @@ export function ArchiveButton({ row }: { row: Row }) {
         if (!stopped.ok) { setError(tr(`没能停止，未归档：${stopped.error}`, `Could not stop; not archived: ${stopped.error}`)); return; }
       }
       const res = await sendJSON("POST", "/v1/fleet/session_archive", { id: row.board!.id, archived: !archived });
-      if (res.ok) reload(); else setError(res.error);
+      if (res.ok) { archiveLocal(row.board!.id, !archived); reload(); } else setError(res.error);
     } catch { setError(tr("未能保存归档，请重试", "Could not save archive; retry")); }
     finally { setBusy(false); }
   };

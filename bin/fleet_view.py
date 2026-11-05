@@ -2424,6 +2424,11 @@ def board_apply(board, groups, shut, gone, here, me):
                     cold_row(e, r["id"])
         e["board"] = r.get("id")
         e["archived"] = bool(r.get("archived"))
+        held = _ARCHIVE_HOLD.get(r["id"])
+        if held and held[1] > time.monotonic() and held[0] != e["archived"]:
+            e["archived"] = held[0]
+        elif held:
+            _ARCHIVE_HOLD.pop(r["id"], None)
         e["worker_id"] = r.get("worker_id") or ""
         e['home'] = (r.get('machine') or here) == here and (r.get('login') or me) == me
         e['recoverable'] = bool(g != 'gone' and (r.get('state') == 'parked'
@@ -2468,7 +2473,7 @@ def board_apply(board, groups, shut, gone, here, me):
             e["agent"] = r.get("agent") or ""
             e["agent_basis"] = r.get("agent_basis") or ""
             e["agent_words"] = r.get("agent_words")
-        e["activity_at"] = r.get("activity_at") or r.get("at") or 0
+        e["activity_at"] = max(r.get("activity_at") or r.get("at") or 0, held[2] if held and held[1] > time.monotonic() else 0)
         e["source"] = r.get("source") if r.get("source") in SOURCES else ""
         # the session tree (hub board rows; every field optional — an older hub
         # sends none and the list is flat): the row it nests under, who opened it
@@ -5391,6 +5396,9 @@ def reopen_label(r):
 
 # Each entry: id · label · when · local · far · ask (+ prompt / choices / slow: run
 # in the background from the popup — a stop, a reap, a move take seconds).
+_ARCHIVE_HOLD = {}  # short bridge until the saved Hub preference reaches the cached board
+
+
 def archive_action(r, answer, fleet):
     return sh("fleet-hub-write.sh", "session_archive", json.dumps({"id": r["board"], "archived": not r.get("archived", False)}))
 
@@ -5648,7 +5656,34 @@ def history_pick(screen, fleet):
     return 1  # remain in the list; no session was launched
 
 
+def restore_archived(r, fleet):
+    """An explicit resume/message restores visibility after it succeeds."""
+    if not r.get("archived") or not r.get("board"):
+        return 0
+    try:
+        p = subprocess.run(sh("fleet-hub-write.sh", "session_archive",
+                             json.dumps({"id": r["board"], "archived": False})),
+                           env=act_env(fleet), capture_output=True, text=True,
+                           stdin=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return 1
+    if p.returncode == 0:
+        r["archived"] = False
+        r["activity_at"] = max(r.get("activity_at") or 0, int(time.time()))
+        _ARCHIVE_HOLD[r["board"]] = (False, time.monotonic() + 30, r["activity_at"])
+        hub_reread(fleet)
+    return p.returncode
+
+
 def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
+    reactivates = a.get("id") in ("resume", "continue", "message", "answer")
+    result = _act_run(qo, vid, fleet, a, r, ans, client, wait=True if r.get("archived") and reactivates else wait)
+    if result[0] == 0 and reactivates and restore_archived(r, fleet):
+        return 1, say("view_act_failed_fmt", ACTION["archive"]["label"](r), ""), result[2]
+    return result
+
+
+def _act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     """Do one action: (rc, the line to say, went — the 看台 is on the row now).
     `wait` False runs a slow one in the background (the popup does not freeze on
     a reap)."""
@@ -5681,6 +5716,8 @@ def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
         if p.returncode != 0:
             said = (p.stderr.strip() or p.stdout.strip()).splitlines()
             return p.returncode, say("view_act_failed_fmt", label, one_line(said[-1] if said else "", 120)), False
+        r["archived"] = not r.get("archived", False)
+        _ARCHIVE_HOLD[r["board"]] = (r["archived"], time.monotonic() + 30, 0)
         hub_reread(fleet)
         return 0, say("view_act_done_fmt", label), False
     if argv == 'taskcontinue':

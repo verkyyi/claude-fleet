@@ -38,6 +38,7 @@ def row(target, **facts):
 class TaskList(unittest.TestCase):
     def setUp(self):
         v._TASK_ORDER.clear()
+        v._ARCHIVE_HOLD.clear()
         self.env = patch.dict(os.environ, {"FLEET_UI_LANG": "zh"})
         self.env.start()
         v.caches_words_reset()
@@ -451,6 +452,33 @@ class SessionArchive(unittest.TestCase):
         argv = v.archive_action(a, "", "fleet")
         self.assertEqual(json.loads(argv[-1]), {"id": "fid-a", "archived": False})
 
+    def test_reactivation_saves_unarchive_only_after_success(self):
+        import subprocess
+        for action in ("resume", "continue", "message", "answer"):
+            for rc in (0, 1):
+                e = row("id:fid-active", board="fid-active", archived=True, activity_at=time.time())
+                with patch.object(v, "_act_run", return_value=(rc, "result", False)), \
+                        patch.object(v.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as save, \
+                        patch.object(v, "hub_reread"):
+                    result = v.act_run(qo, "view", "fleet", v.ACTION[action], e, "")
+                self.assertEqual(result[0], rc)
+                self.assertEqual(save.call_count, int(rc == 0))
+                self.assertEqual(e["archived"], rc != 0)
+                if rc == 0:
+                    self.assertEqual(json.loads(save.call_args[0][0][-1]), {"id": "fid-active", "archived": False})
+                    self.assertIn(e["target"], [x.get("target") for x in v.visible([e], "", set())])
+        e = row("id:fid-active", board="fid-active", archived=True)
+        for action in ("stop", "enter"):
+            with patch.object(v, "_act_run", return_value=(0, "done", False)), patch.object(v.subprocess, "run") as save:
+                v.act_run(qo, "view", "fleet", v.ACTION[action], e, "")
+                save.assert_not_called()
+                self.assertTrue(e["archived"])
+        with patch.object(v, "_act_run", return_value=(0, "resumed", False)), \
+                patch.object(v.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "unavailable")), \
+                patch.object(v, "say", return_value="failed"):
+            self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["resume"], e, "")[0], 1)
+            self.assertTrue(e["archived"])
+
     def test_archive_waits_for_saved_result_even_on_offline_rows(self):
         import subprocess
         e = row("id:fid-a", archived=False, board="fid-a", far=True, lost=True)
@@ -485,7 +513,8 @@ class SessionArchive(unittest.TestCase):
                     patch.object(v, "say", side_effect=lambda key, *args: key):
                 self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["archive"], idle, "", wait=False)[0], 0)
                 self.assertEqual(calls, ["stop", "archive"], "stop first, then archive")
-                calls.clear()
+            idle["archived"] = False
+            calls.clear()
             with patch.object(v, "stop_task", return_value=(1, "refused")), \
                     patch.object(v.subprocess, "run", side_effect=lambda *a, **k: calls.append("archive") or saved), \
                     patch.object(v, "act_env", return_value={}), patch.object(v, "say", side_effect=lambda key, *args: key):
@@ -529,6 +558,7 @@ class SessionTree(unittest.TestCase):
 
     def setUp(self):
         v._TASK_ORDER.clear()
+        v._ARCHIVE_HOLD.clear()
         self.tmp = tempfile.TemporaryDirectory()
         self.env = patch.dict(os.environ, {"FLEET_UI_LANG": "zh", "FLEET_CONF_DIR": self.tmp.name})
         self.env.start()
@@ -825,6 +855,7 @@ class Schedules(unittest.TestCase):
 
     def setUp(self):
         v._TASK_ORDER.clear()
+        v._ARCHIVE_HOLD.clear()
         self.tmp = tempfile.TemporaryDirectory()
         self.env = patch.dict(os.environ, {"FLEET_UI_LANG": "zh", "FLEET_CONF_DIR": self.tmp.name})
         self.env.start()

@@ -548,6 +548,16 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 		if err := s.applyIDEvent(tx, &r, ev, seq, ts); err != nil {
 			return FleetIDPushed{}, err
 		}
+		// Warm only reconstructs a parked window; migrated segments are history.
+		// Old nodes did not distinguish warm from reopen: wait for their native
+		// or turn activity instead of treating an ambiguous reopen as interaction.
+		kind := evStr(ev, "ev", 20)
+		if ev["maintenance"] != true && ((kind == "reopened" && ev["maintenance"] == false) ||
+			(kind == "native" && evStr(ev, "trigger", 20) != "migrated")) && ts > 0 && ts <= time.Now().Unix() {
+			if _, err := tx.Exec(`UPDATE fleet_ids SET activity_at=? WHERE id=? AND activity_at<?`, ts, r.ID, ts); err != nil {
+				return FleetIDPushed{}, err
+			}
+		}
 		r.Seq = seq
 		applied++
 	}

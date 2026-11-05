@@ -149,3 +149,38 @@ func TestSessionArchiveLiveAndOldHistory(t *testing.T) {
 		t.Fatal("archive leaked across owners")
 	}
 }
+
+func TestSessionArchiveReactivationReturnsToBoard(t *testing.T) {
+	s := historyCacheServer(t)
+	m := historyCacheRecord(t, s, "alice", 703, "native-return")
+	now := time.Now()
+	if _, err := s.Store.DB().Exec(`UPDATE fleet_ids SET activity_at=? WHERE id=?`, now.Unix()-20, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Store.SetSessionArchived("alice", m.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Store.DB().Exec(`UPDATE fleet_session_archives SET archived_at=? WHERE id=?`, now.Unix()-10, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A parked inventory row with no new turn remains archived, including a warm.
+	wid := "fleet/" + m.ID
+	parked := []FleetSession{{WorkerID: &wid, Availability: "online", Worker: map[string]any{"identity": m.ID, "state": "parked", "key": "scratch-1"}}}
+	b, err := s.buildBoard("alice", parked, now)
+	if err != nil || len(b.Rows) != 1 || !b.Rows[0].Archived {
+		t.Fatalf("warm: %+v %v", b, err)
+	}
+	// The same session has a real new turn (the inventory activity writer's value).
+	if _, err := s.Store.DB().Exec(`UPDATE fleet_ids SET activity_at=? WHERE id=?`, now.Unix()-1, m.ID); err != nil {
+		t.Fatal(err)
+	}
+	parked[0].Worker["state"] = "working"
+	b, err = s.buildBoard("alice", parked, now)
+	if err != nil || len(b.Rows) != 1 || b.Rows[0].Archived || b.Count != 1 {
+		t.Fatalf("reactivated: %+v %v", b, err)
+	}
+	prefs, err := s.Store.SessionArchivePreferences("alice")
+	if err != nil || prefs[m.ID] {
+		t.Fatalf("not persisted: %v %v", prefs, err)
+	}
+}
