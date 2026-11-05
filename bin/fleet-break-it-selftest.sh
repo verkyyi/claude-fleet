@@ -6970,6 +6970,7 @@ drill_park_cold_entry() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-cold-entry-selftest.py" 2>&1) || { WHY="$out"; return 1; }
   out=$(bash "$BIN/fleet-cold-entry-peer-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-panel-overlay-selftest.py" NativeTests.test_cold_entry_progress_and_resize_failure_repaint 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='本地、跨机、另一登录、手机和搜索按 ID 进入冷停放；网页可说话；名称保留'
 }

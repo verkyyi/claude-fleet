@@ -7222,6 +7222,14 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
         fast_errs = 0
         if ch is None:
             continue
+        if ch == curses.KEY_RESIZE:
+            # A resize queued during a slow entry is not an acknowledgement
+            # of its result. Preserve the explanation until an actual key.
+            heal.resized(screen)
+            follow_list = False
+            if page:
+                page.follow = False
+            continue
         last_input = time.monotonic()
         if isinstance(ch, tuple) and ch[0] == "paste":
             if page:
@@ -7242,13 +7250,6 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
                 back()
                 continue
             return 0
-        if ch == curses.KEY_RESIZE:
-            heal.resized(screen)
-            # Only clamp physical offsets in render; no reveal/reset on resize.
-            follow_list = False
-            if page:
-                page.follow = False
-            continue
         if busy:
             continue
         if ch == "\x1c":
