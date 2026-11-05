@@ -96,6 +96,64 @@ class ReopenCheckTests(unittest.TestCase):
         self.assertEqual(p.returncode, 1, '--rebuild never stands in for a missing conversation')
 
 
+class ColdPlacementTests(ReopenCheckTests):
+    """A hook-only ledger still has the cooler's exact FID/native placement."""
+
+    def setUp(self):
+        super().setUp()
+        self.env['FLEET_ID_LIVE_CMD'] = ':'
+        root = Path(self.tmp.name)
+        self.wt = root / 'repo-scratch-116'
+        self.wt.mkdir()
+        ledger = root / 'conf/ids' / (FID + '.ndjson')
+        events = [json.loads(line) for line in ledger.read_text().splitlines()][:2]
+        events[0]['lazy'] = True
+        ledger.write_text(''.join(json.dumps(e) + '\n' for e in events))
+        transcript = (self.proj / (NAT + '.jsonl')).read_text()
+        (self.proj / (NAT + '.jsonl')).unlink()
+        self.proj = root / 'home/.claude/projects' / projdir(self.wt)
+        self.proj.mkdir(parents=True)
+        (self.proj / (NAT + '.jsonl')).write_text(transcript)
+        self.cold = root / 'conf/session-gate' / FID / 'cold.json'
+        self.cold.parent.mkdir(parents=True)
+        self.record = dict(fid=FID, sid=NAT, agent='claude', session='test',
+                           repo='o/r', worktree=str(self.wt))
+        self.cold.write_text(json.dumps(self.record))
+
+    def test_exec_keeps_exact_identity_and_placement(self):
+        p = self.reopen('--exec')
+        self.assertEqual(p.returncode, 0, p.stderr)
+        args = self.spawned.read_text()
+        for value in ('--fid ' + FID, '--resume ' + NAT, '--repo o/r', '--worktree ' + str(self.wt)):
+            self.assertIn(value, args)
+        self.assertNotIn('--no-repo', args)
+
+    def test_cold_record_for_another_native_or_agent_is_not_a_receipt(self):
+        for key, value in (('fid', MU), ('sid', MU), ('agent', 'codex')):
+            self.cold.write_text(json.dumps(dict(self.record, **{key: value})))
+            p = self.reopen('--check')
+            self.assertNotEqual(p.returncode, 0, (key, p.stdout))
+            self.assertFalse(self.spawned.exists())
+
+    def test_explicit_no_repo_ledger_is_not_overridden(self):
+        ledger = Path(self.tmp.name) / 'conf/ids' / (FID + '.ndjson')
+        events = [json.loads(line) for line in ledger.read_text().splitlines()]
+        events[0].pop('lazy')
+        ledger.write_text(''.join(json.dumps(e) + '\n' for e in events))
+        self.assertNotEqual(self.reopen('--check').returncode, 0)
+
+    def test_conflicting_ledger_placement_is_not_overridden(self):
+        ledger = Path(self.tmp.name) / 'conf/ids' / (FID + '.ndjson')
+        events = [json.loads(line) for line in ledger.read_text().splitlines()]
+        events[0]['repo'] = 'other/repo'
+        ledger.write_text(''.join(json.dumps(e) + '\n' for e in events))
+        p = self.reopen()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        plan = json.loads(p.stdout)
+        self.assertEqual(plan['repo'], 'other/repo')
+        self.assertFalse(plan['worktree'])
+
+
 class RebuildTests(unittest.TestCase):
     """A': a scratch worktree the reaper removed, its conversation whole — --rebuild
     makes it again at the same path, off the old branch when origin has it."""
