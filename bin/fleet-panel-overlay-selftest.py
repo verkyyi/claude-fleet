@@ -46,6 +46,9 @@ def fixture(directory):
     v.view_lang_env = lambda *a: None
     v.order_save = lambda *a: None
     v.tm = lambda *a, **k: (0, "")
+    # Geometry compares stable frames, not the asynchronous cross-node inbox.
+    import fleet_notice
+    fleet_notice.unread = lambda: 0
     v.banner = lambda *a: ""
     v.hub_stale = lambda *a: False
     def grid(vid, repo=""):
@@ -68,6 +71,13 @@ def fixture(directory):
     v.act_run = act
     v.bolt_run = lambda argv, done: log({"argv": argv})
     v.go = lambda *args, **k: (log({"go": args[2]}) or 0)
+    if (root / 'cold-entry').exists():
+        data[1]['state'] = 'parked'
+        def delayed_entry(*args, **kwargs):
+            log({'go': args[2]})
+            time.sleep(2)
+            return 4
+        v.go = delayed_entry
     # Drive actual refresh in the input loop, with the same return contract.
     class Fresh:
         def __init__(self, *a, **k):
@@ -220,6 +230,20 @@ class NativeTests(unittest.TestCase):
     def actions(self):
         file = self.root / "actions"
         return [json.loads(x) for x in file.read_text().splitlines()] if file.exists() else []
+
+    def test_cold_entry_progress_and_resize_failure_repaint(self):
+        (self.root / 'cold-entry').touch()
+        self.start()
+        self.keys('Enter')
+        self.wait('正在唤醒')
+        self.tm('resize-window', '-t', 'test', '-x', '50', '-y', '24')
+        self.wait('暂不可用')
+        time.sleep(.5)  # the resize repair has repainted the complete frame
+        screen = self.screen()
+        self.assertNotIn('正在唤醒', screen)
+        for name in ('会话 01', '会话 02', '会话 03'):
+            self.assertEqual(screen.count(name), 1, screen)
+        self.assertEqual(len([a for a in self.actions() if 'go' in a]), 1)
 
     def test_task_physical_width_and_selected_details(self):
         (self.root / "task-width").touch()

@@ -1438,6 +1438,9 @@ fleet_is_fid "${FLEET_FROM_FID:-}" && [ "$FLEET_FROM_FID" != "$fid" ] && stamp_o
 [ "$NOREPO" = 1 ] && [ -z "$PROMPT$RESUME_SID$SEED_FILE" ] && [ "$TEST_ID" = 0 ] \
   && stamp_option @prompt_track 1 2>/dev/null
 TM ${window_stamps[@]+"${window_stamps[@]}"} 2>/dev/null
+if fleet_is_fid "$REOPEN_FID"; then
+  python3 "$BIN/fleet_park_cold.py" titles --fid "$REOPEN_FID" --socket "$SOCK" --window "$win"
+fi
 unset window_stamps
 unset -f stamp_option
 # Attach only after the task and identity stamps are visible to the reader.

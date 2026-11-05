@@ -19,10 +19,11 @@ saved screen, no agent) and then takes the wake as any parked window does.
                                                 rc 0 once the window holds parked
     fleet_park_cold.py status --fid F           the record, or rc 1
 
-No FLEET_PARK_COLD (or 0) ⇒ nothing is written and every reader is a no-op —
-byte for byte as before. BREAK-IT `park-cold-wake`.
+FLEET_PARK_COLD gates creation only. Existing cold records remain recoverable
+even after cooling is disabled. BREAK-IT `park-cold-wake`.
 """
 import argparse
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -121,21 +122,105 @@ def take(fid, sid=""):
         return False
     if sid and r.get("sid") and r["sid"] != sid:
         return False
+    w = gate.window(fid)
+    if w:
+        for key in ("name_manual", "task_line", "pin", "born", "from_fid"):
+            value = r.get(key)
+            if value:
+                gate.tmux(w['sock'], 'set-option', '-w', '-t', w['win'], '@' + key, str(value))
+        for key, opt in (("reap", "@reap_policy"), ("source", "@session_source")):
+            if r.get(key):
+                gate.tmux(w['sock'], 'set-option', '-w', '-t', w['win'], opt, str(r[key]))
     clear(fid)
     return True
 
 
+def restore_titles(fid, sock, win):
+    """Restore before releasing the spawner's launch barrier, including old records."""
+    import fleet_id
+    opened = fleet_id.fold(fleet_id.read(fid))['opened']
+    r = read(fid) or {}
+    manual = r.get('name_manual') or (opened.get('title') if opened.get('title_source') == 'manual' else '')
+    title = r.get('task_line') or (opened.get('title') if opened.get('title_source') != 'default' else '')
+    for opt, value in (('@name_manual', manual), ('@task_line', title)):
+        if value:
+            gate.tmux(sock, 'set-option', '-w', '-t', win, opt, value)
+
+
+def doctor():
+    """One login's local ledgers vs actual windows; no cached remote ID is ours."""
+    import fleet_id
+    script = '. "$1/fleet-lib.sh"; for s in $(fleet_sockets); do fleet_lw "#{@fleet_id}" tmux -L "$s"; done'
+    try:
+        p = subprocess.run(['bash', '-c', script, 'cold-doctor', str(BIN)],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        print('WARN window census unavailable; retry fleet doctor --park')
+        return
+    live = set(p.stdout.split())
+    failures = {}
+    try:
+        with (gate.conf_dir() / 'logs/park.ndjson').open() as log:
+            for line in log:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if str(event.get('event', '')).startswith('cold-warm'):
+                    failures[event.get('fid')] = event
+    except OSError:
+        pass
+    count = 0
+    for fid in fleet_id.ledger_ids():
+        rec = fleet_id.fold(fleet_id.read(fid))
+        if rec['closed'] is not None or fid in live:
+            continue
+        r = read(fid)
+        fail = failures.get(fid, {})
+        failed = r and bool(fail) and fail.get('event') != 'cold-warm' and fail.get('ts', 0) >= r.get('at', 0)
+        if r and not failed and (not r.get('worktree') or Path(r['worktree']).is_dir()):
+            continue
+        reason = ('cold wake failed: ' + (fail.get('detail') or fail.get('event', 'unknown'))) if failed else (
+            'cold worktree missing' if r else 'open ID has no window or cold record')
+        print('WARN %s %s — %s; Restore: fleet-id.sh reopen %s --exec --rebuild' %
+              (fid, rec['opened'].get('title', ''), reason, fid))
+        count += 1
+    if not count:
+        print('INFO no orphaned open IDs or missing cold worktrees on this login')
+
+
 def warm(fid, wait=None):
     """Reopen a cold park's window into park_hold; True once it holds."""
+    # A separate lock: the wrapper must be free to take the gate lock while it
+    # acknowledges park_hold. Concurrent select/chat/relay requests join one reopen.
+    if not read(fid):
+        return gate.window(fid) is not None
+    wait = env_int("FLEET_PARK_COLD_WAKE_SECS", 20, 1) if wait is None else wait
+    with (path(fid).parent / 'warm.lock').open('a') as lock:
+        end = time.monotonic() + max(30, wait) + wait
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= end:
+                    return False
+                time.sleep(0.1)
+        return _warm(fid, wait)
+
+
+def _warm(fid, wait):
     if gate.window(fid) is not None:
         return True
     r = read(fid)
     if not r:
         return False
-    wait = env_int("FLEET_PARK_COLD_WAKE_SECS", 20, 1) if wait is None else wait
     env = dict(os.environ, FLEET_PARK_RESTORE_FID=fid)
     if r.get("session"):
         env.update(FLEET_SESSION=r["session"], TARGET_SESS=r["session"])
+    # The requested login/fleet owns the reopen, never a caller's tmux pane.
+    env.pop('TMUX', None)
+    env.pop('TMUX_PANE', None)
     seam = os.environ.get("FLEET_PARK_COLD_REOPEN_CMD")
     argv = seam.split() + [fid] if seam else ["bash", str(BIN / "fleet-id.sh"), "reopen", fid, "--exec"]
     try:
@@ -170,15 +255,32 @@ def gate_log(fid, event, detail):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    p.add_argument("command", choices=("take", "warm", "status"))
-    p.add_argument("--fid", required=True)
+    p.add_argument("command", choices=("take", "warm", "status", "titles", "doctor", "protect-worktree"))
+    p.add_argument("--fid")
     p.add_argument("--sid", default="")
+    p.add_argument("--session", default="")
+    p.add_argument("--socket", default="")
+    p.add_argument("--window", default="")
+    p.add_argument("--worktree", default="")
     a = p.parse_args()
-    if not gate.FID_RE.fullmatch(a.fid):
+    if a.command == 'doctor':
+        doctor()
+        return 0
+    if a.command == 'protect-worktree':
+        return 0 if a.worktree and any(r.get('worktree') and Path(r['worktree']).resolve() == Path(a.worktree).resolve()
+                                      for r in records()) else 1
+    if not gate.FID_RE.fullmatch(a.fid or ''):
         return 2
+    if a.command == 'titles':
+        restore_titles(a.fid, a.socket, a.window)
+        return 0
     if a.command == "take":
         return 0 if take(a.fid, a.sid) else 1
     if a.command == "warm":
+        if a.session:
+            r = read(a.fid)
+            if not r or r.get('session') != a.session:
+                return 1
         return 0 if warm(a.fid) else 1
     r = read(a.fid)
     if r:

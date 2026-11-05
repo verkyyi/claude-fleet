@@ -962,6 +962,8 @@ class Cleaner:
         try:
             fleet_park_cold.write(fid, dict(session=self.args.session, agent=agent, sid=sid or "",
                                             name=snap.get("window_name", ""), worktree=snap.get("@worktree", ""),
+                                            name_manual=option(self.tm, window, "@name_manual"),
+                                            task_line=option(self.tm, window, "@task_line"),
                                             since=snap.get("@park_since", ""),
                                             # what the node's inventory lists it by while it has no
                                             # window (PV5W): its key, birth, task and who opened it

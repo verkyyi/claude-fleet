@@ -79,7 +79,7 @@ printf 'B: the person'"'"'s screen after the switch to far1/a:\n%s\n' "$(pr_scre
 pr_wait 5 grep -q "cur=$PR_U_far1/fid-a" "$PR_WORK/m/far1/conf/remote-views/v1-via-home" && st_count \
   || st_miss "B: the far row's cur=: $(cat "$PR_WORK/m/far1/conf/remote-views/v1-via-home")"
 pr_go "$PR_W_home_l1"; pr_go "$PR_U_far1/fid-a"; rc=$?
-[ "$rc" = 0 ] && last | grep -q '"method":"peer-window"' && st_count || st_miss "B: back to the session far1 already shows is not select-window alone: $(last)"
+[ "$rc" = 0 ] && last | grep -q '"method":"peer-select"' && st_count || st_miss "B: back to the session far1 already shows was not revalidated by its owner: $(last)"
 pr_go "$PR_U_far1/fid-b" && pr_wait 5 shows SCREEN-far1-b && st_count || st_miss "B: far1/b: $(last) / $(pr_screen | tr -s '\n' | head -2)"
 # a far row the hub names by its KEY (`<fleet UUID>/<key>`, the readable alias
 # fleet_worker_id_key — what remote_<sess> carries), not its @fleet_id: the far

@@ -118,7 +118,7 @@ func TestBoardOneRowPerTask(t *testing.T) {
 	if len(b.Rows) != len(want) {
 		t.Fatalf("rows = %v; want %d (a test session is never listed)", order, len(want))
 	}
-	if r := got[running.FID]; r.Task != running.Ref || r.Title != "task run" || r.WorkerID != fleet+"/o-r:scratch-1" {
+	if r := got[running.FID]; r.Task != running.Ref || r.Title != "task run" || r.WorkerID != fleet+"/"+running.FID {
 		t.Fatalf("the running task's row = %+v", r)
 	}
 	if b.Count != 4 || b.Groups["gone"] != 4 {
@@ -672,5 +672,23 @@ func TestBoardActiveLeavesParkedOut(t *testing.T) {
 	}
 	if b.Count != 3 || b.Active != 2 {
 		t.Fatalf("count = %d active = %d; want 3 listed (done · parked · needs), 2 running", b.Count, b.Active)
+	}
+}
+
+// Entry addresses must survive a recycled scratch key. The visible identity,
+// including a cold inventory row, is the identity every client will enter.
+func TestBoardEntryPinsIdentity(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	fleet := "11111111-2222-4333-8444-555555555555"
+	id := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	alias := fleet + "/scratch-65"
+	b, err := s.buildBoard("alice", []FleetSession{{WorkerID: &alias, Availability: "online",
+		MachineName: "node-b", OSUser: "alice", Worker: map[string]any{"identity": id, "state": "parked", "cold": true, "can_talk": true}}}, time.Now())
+	if err != nil || len(b.Rows) != 1 {
+		t.Fatalf("board: %+v %v", b, err)
+	}
+	if b.Rows[0].WorkerID != fleet+"/"+id || !b.Rows[0].CanTalk {
+		t.Fatalf("entry not identity pinned: %+v", b.Rows[0])
 	}
 }

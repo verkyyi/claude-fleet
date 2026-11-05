@@ -75,3 +75,5 @@
 新文档放进上面两处之一，链接用相对路径；`bin/docs-links-selftest.sh` 在每个 PR 上读一遍所有链接。
 
 - [报告监督委托：授权、读回与撤销](dev/REPORT-DELEGATION.md)
+
+- [会话进入与冷停放排查矩阵](dev/SESSION-ENTRY.md)：跨机进入、消息唤醒、缺窗诊断与恢复边界。

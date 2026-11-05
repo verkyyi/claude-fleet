@@ -1064,3 +1064,15 @@ Two consecutive resume failures disabled automatic parking for this window. Your
 From `fleet doctor`.
 
 Lists each window's origin, parking/reaping rule and next UTC deadline. `next=park@…` is its idle parking time; `next=reap@…` is its retention or reap deadline. `keep` means permanent or explicitly retained. `why` is the reaper's latest hold reason: `live` for a wake, message or draft, `no-history` when history cannot yet prove resumability, and `pending-check` before the first check. An `old wrapper` cannot park automatically; do not force-close a conversation just to clear the hint.
+
+#### `session-entry`
+
+From `fleet doctor --park`: checks whether this login's open sessions have a window
+or a recoverable cold record.
+
+WARN names IDs with neither a window nor a cold record, missing cold worktrees,
+or the reason the latest cold wake failed. On the owning machine and login, open
+the session details and choose Restore. Verified history may allow rebuilding the
+original worktree. If the machine is still restoring after a restart, check again
+when it finishes. Do not create a replacement using an old scratch number or delete
+an ID or cold record to silence the warning. Check remote sessions on their own login.

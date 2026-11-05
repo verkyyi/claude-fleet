@@ -151,6 +151,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `park-fresh` | node | [node-doctor] | 主版本不符或手动选择新对话：原话已带入新会话，旧记录保留；核对所列版本与 fresh 动作原因，不重复发送原话 |
 | `park-wake` | node | [node-doctor] | 连续接回失败已禁止自动停放：在原窗口查看失败原因，原话仍在；修好启动环境后手动重试，不强制清掉禁停标记 |
 | `park-reap` | node | [node-doctor] | 逐窗口的来源、停放/回收规则与下一步 UTC 时间；live 看唤醒/消息/草稿，no-history 先核对历史可接回，旧外壳不强制关闭 |
+| `session-entry` | node | [node-doctor] | 开放 ID 缺少窗口与冷记录，或冷工作区缺失、最近唤醒失败；在所属机器登录检查，按详情恢复原 ID，先核对历史与工作区，不按旧 key 新建替代 |
 | `peerlink` | node | [node-doctor] | 机器间链路：`fleet-peerlink.py status` |
 | `perl` | node | [mac-node-prep] | 装 Time::HiRes（不装也只是转圈按整秒） |
 | `personcert` | node | [mac-node-enroll] | 节点在用个人的 fleet login：查 node.env / 凭据代理，节点只用自己的令牌 |

@@ -67,7 +67,7 @@ ws = {w["identity"]: w for w in fc.cold_workers(fleet)}
 a, b = ws.get(A, {}), ws.get(B, {})
 check("B: another fleet's record is not listed", set(ws) == {A, B})
 check("B: a parked, window-less, cold row", a.get("state") == "parked" and a.get("window_id") == ""
-      and a.get("cold") is True and a.get("can_talk") is False)
+      and a.get("cold") is True and a.get("can_talk") is True)
 check("B: its key from its repo", a.get("key") == "verkyyi-claude-fleet:scratch-12")
 check("B: an older record's repo from its worktree", b.get("key") == "acme-web-app:scratch-70"
       and b.get("repo") == "acme/web-app")

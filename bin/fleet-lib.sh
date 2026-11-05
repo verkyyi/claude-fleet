@@ -6944,6 +6944,17 @@ fleet_hub_move() {
 # is local or unknown, nothing else — which is why a repo-qualified key
 # (`<slug>:issue-<N>`, the same shape as `sess:name`) needs its `wid:` prefix. A worker_id of a fleet configured HERE never asks the hub:
 # its fleet is this machine, so not-live-here is `unknown`.
+# Explicit entry/delivery action, never a side effect of the read-only locator.
+# Only an identity of this login's fleet may reopen a cold record; keys cannot
+# identify a generation after their old window has been recycled.
+fleet_worker_warm() {
+  local t="${1#wid:}" fid home
+  fid=${t##*/}
+  fleet_is_fid "$fid" || return 1
+  home=$(fleet_wid_home "wid:$t" "${2:-}") || return 1
+  python3 "$_FLEET_LIB_DIR/fleet_park_cold.py" warm --fid "$fid" --session "$home"
+}
+
 fleet_worker_locate() {
   local t="${1:-}" sess="${2:-}" sp u k home w node rc
   [ -n "$sess" ] || sess=$(fleet_current_session 2>/dev/null)

@@ -121,6 +121,15 @@ fi
 
 # A focused read is also useful on a node during acceptance.
 park_row() {
+  _entry_health=$(python3 "$(dirname "$0")/fleet_park_cold.py" doctor 2>/dev/null)
+  while read -r _level _detail; do
+    case "$_level" in
+      WARN) warn session-entry "$_detail" ;;
+      INFO) info session-entry "$_detail" ;;
+    esac
+  done <<EOF
+$_entry_health
+EOF
   _park_health=$(python3 "$(dirname "$0")/fleet_park_version.py" doctor 2>/dev/null)
   while IFS="$(printf '\t')" read -r _level _detail; do
     case "$_level" in
