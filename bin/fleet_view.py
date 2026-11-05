@@ -4074,9 +4074,6 @@ def go(qo, vid, target, how="go", client="", meta=None, record=True):
     log_switch(rec)
     if rc == 0 and far:
         tell_cur(g)
-    if rc == 0 and meta.get("archived"):
-        if restore_archived(meta, fleet):
-            toast(client, say("view_act_failed_fmt", ACTION["archive"]["label"](meta), ""))
     if rc == 0 and record:
         hist_save(qo, vid, qo.visit(hist_load(qo, vid), target if not target.startswith("@") else w))
     return rc
@@ -5660,7 +5657,7 @@ def history_pick(screen, fleet):
 
 
 def restore_archived(r, fleet):
-    """An explicit entry/resume/message restores visibility after it succeeds."""
+    """An explicit resume/message restores visibility after it succeeds."""
     if not r.get("archived") or not r.get("board"):
         return 0
     try:

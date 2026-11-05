@@ -468,10 +468,11 @@ class SessionArchive(unittest.TestCase):
                     self.assertEqual(json.loads(save.call_args[0][0][-1]), {"id": "fid-active", "archived": False})
                     self.assertIn(e["target"], [x.get("target") for x in v.visible([e], "", set())])
         e = row("id:fid-active", board="fid-active", archived=True)
-        with patch.object(v, "_act_run", return_value=(0, "stopped", False)), patch.object(v.subprocess, "run") as save:
-            v.act_run(qo, "view", "fleet", v.ACTION["stop"], e, "")
-            save.assert_not_called()
-            self.assertTrue(e["archived"])
+        for action in ("stop", "enter"):
+            with patch.object(v, "_act_run", return_value=(0, "done", False)), patch.object(v.subprocess, "run") as save:
+                v.act_run(qo, "view", "fleet", v.ACTION[action], e, "")
+                save.assert_not_called()
+                self.assertTrue(e["archived"])
         with patch.object(v, "_act_run", return_value=(0, "resumed", False)), \
                 patch.object(v.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "unavailable")), \
                 patch.object(v, "say", return_value="failed"):
