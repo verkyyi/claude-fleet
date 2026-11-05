@@ -12,8 +12,8 @@ import (
 // Service principals (claude-fleet#4003, the SPACE EPIC C1):
 // an identity that is not a person and not a login — SPACE's back end, which
 // dispatches runs for its own users, who have no account here. A principal
-// holds a fixed set of scopes and nothing else: it is never an admin, never a
-// viewer, never a node, so every route outside /v1/svc/ refuses it.
+// holds administrator-managed scopes and nothing else: it is never an admin,
+// viewer or node, so every route outside /v1/svc/ refuses it.
 //
 // Its keys are bearer tokens `fcs_<prefix8>_<secret>`; only the SHA-256 of the
 // whole token is stored (as api.HashToken does for ccq_), the prefix is the
@@ -222,6 +222,23 @@ func (s *Store) SvcPrincipals() ([]SvcPrincipal, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// SetSvcPrincipalScopes replaces all scopes; authentication reads them on every call.
+func (s *Store) SetSvcPrincipalScopes(id string, scopes []string) (SvcPrincipal, error) {
+	sc, err := SvcScopesParse(strings.Join(scopes, " "))
+	if err != nil {
+		return SvcPrincipal{}, err
+	}
+	p, err := s.SvcPrincipal(id)
+	if err != nil {
+		return p, err
+	}
+	if _, err := s.write.Exec(`UPDATE svc_principals SET scopes = ? WHERE id = ?`, strings.Join(sc, " "), p.ID); err != nil {
+		return p, err
+	}
+	p.Scopes = sc
+	return p, nil
 }
 
 // SetSvcPrincipalEnabled turns a principal on or off; off refuses every one

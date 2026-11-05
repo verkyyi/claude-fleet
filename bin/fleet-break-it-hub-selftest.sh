@@ -2173,6 +2173,16 @@ drill_svc_token_escalate() {
   SECS=$(since "$t0")
 }
 
+# ---- svc-run-boundaries (T1313): standing run tokens lose template writes,
+# and an explicit tenant policy gates submission and idempotent replay.
+drill_svc_run_boundaries() {
+  CAP=120; local t0; GO_RAN=0
+  t0=$(now)
+  c11_go_tests svc_boundaries_test.go TestSvcScopesRewrite TestSvcRunTenantAllowlist || return 1
+  WHAT='管理员改写 scope 后旧 token 下一次调用受限；runs 白名单外提交和重放均拒绝并审计，未配置保持兼容'
+  SECS=$(since "$t0")
+}
+
 # ---- svc-unqualified-codex (T954): registration or self-attestation must
 # never grant production Codex eligibility.
 drill_svc_unqualified_codex() {

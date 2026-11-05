@@ -2018,12 +2018,25 @@ and its prefix are stored, as for `ccq_`.
   A principal holds at most two live tokens — the old and the new during a
   rotation.
 - **The admin's.** `ccquota svc list | create <name> --scopes … | token issue
-  <name> [--days N] | token revoke <prefix> | disable | enable` on the hub's
+  <name> [--days N] | token revoke <prefix> | scopes <name> --scopes … | disable | enable` on the hub's
   database, or `POST /v1/fleet/svc` `{op, principal, scopes, days, prefix,
   reason}` (viewer + admin only; GET lists without secrets). The token is
   printed once. Audit: `svc.create` · `svc.token.issue` · `svc.token.revoke` ·
-  `svc.disable` · `svc.enable` · `svc.call` (with its outcome: ok · FORBIDDEN ·
+  `svc.scopes` (actor, principal, replacement scopes) · `svc.disable` · `svc.enable` · `svc.call` (with its outcome: ok · FORBIDDEN ·
   REVOKED · EXPIRED · DISABLED).
+- **Register, then narrow (T1313).** Create the service with
+  `runs:write,runs:read,templates:write`, register its templates, then run
+  `ccquota svc scopes <name> --scopes runs:write,runs:read` on the hub database.
+  HTTP equivalent: administrator-only `POST /v1/fleet/svc`
+  `{"op":"scopes","principal":"<name>","scopes":"runs:write,runs:read"}`.
+  This **replaces** the principal's complete scope set; all existing tokens use
+  it on their next request, including both tokens during rotation. Existing
+  templates keep their ownership and remain runnable. Only the administrator
+  can restore `templates:write` for a later template update. An explicit
+  `--scopes ""` (HTTP `scopes: ""`) removes all scopes; unknown scopes are
+  rejected without changing the principal. Scope updates do not enable a
+  disabled principal. This uses the existing principal-level permissions and
+  per-request database reads, avoiding a second token-level permission model.
 - **Where the key lives.** In the caller's cluster Secret only (SPACE:
   `space-fleet-svc`), read from the environment — never a repo, an issue, a
   comment or a log.
@@ -2035,6 +2048,17 @@ schedule that repeats it is the caller's (SPACE's `report_tasks`), never the
 hub's. A run is `R<n>` in `svc_runs` — not a `fleet_tasks` record, which is a
 person's session.
 
+- **Tenant allowlist (T1313).** If `fleet.svc.<name>.tenants` is configured,
+  every ordinary `POST /v1/svc/runs` must name an exact entry in that
+  comma-separated list. A mismatch returns 403 `tenant_not_allowed` and a
+  `svc.run.submit` / `REFUSED` audit row with principal and tenant, before
+  enqueueing, dispatch or idempotent replay. Policy read failures refuse with
+  503 `tenant_policy_unavailable`. Configure only `app-a` to force
+  `tenant=app-a`; setting another service's allowlist does not constrain this
+  service. With no setting (including after clearing it), legacy callers such
+  as SPACE keep their existing tenant behavior. This differs from standing
+  passes, whose named tenants always require an allowlist. The separately
+  authorized evaluation endpoint continues to generate its own eval tenants.
 - **Routes.** `POST /v1/svc/runs` (`runs:write`) `{template, template_digest,
   tenant, subject, inputs{…}, idempotency_key, callback_url, deadline_s=900}` →
   202 with the run (`run_id`, `state`, …); the same `idempotency_key` again is
