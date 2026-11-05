@@ -14,6 +14,8 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,9 +29,19 @@ import (
 // at the fake provider, and returns the log it writes.
 func startRefreshAgent(t *testing.T, h *harness, provider *fakeProvider) (logBuf *lockedBuf, stop func()) {
 	t.Helper()
-	const adminUser = "opadmin"
-	h.Srv.FleetAdmins = append(h.Srv.FleetAdmins, adminUser)
-	tok := enrollAs(t, h, "mac-d-admin", "mac-d", adminUser)
+	// The real agent reports this identity in its first heartbeat. Enroll it
+	// with the same identity so that a heartbeat between refresh and audit
+	// inspection cannot change the node's name underneath the assertion.
+	login, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Srv.FleetAdmins = append(h.Srv.FleetAdmins, login.Username)
+	tok := enrollAs(t, h, "refresh-admin", hostname, login.Username)
 	home := t.TempDir()
 	a, err := agent.New(agent.Config{
 		HubURL: h.HTTP.URL, Token: tok, Home: home,
