@@ -303,3 +303,6 @@ text 活页工作台 T1147 extras/web-console/src
 
 # New applications use category 1273; the retired 698 template must stay out.
 text PlJ5dFCF T1248 tokenledger/README.md,tokenledger/hub/,deploy/
+
+# Reactivation restores visibility; maintenance warm does not.
+re 新回复不会自动取消归档 T1308 docs/dev/CLIENT.md

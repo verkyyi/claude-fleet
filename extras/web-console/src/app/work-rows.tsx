@@ -11,7 +11,7 @@ import { useTasks } from "./use-tasks";
 import { boardRows, buildRows, type Row } from "./work";
 import { machineCount, repliesDone, seenMark } from "./session-list";
 import { NET_BACK } from "@/shared/net";
-import { meOnce } from "@/shared/api";
+import { meOnce, sendJSON } from "@/shared/api";
 import { viewAs } from "@/shared/viewAs";
 import { mayCache } from "./chat/local";
 import { browserListCache, markListFirst } from "./list-local";
@@ -25,6 +25,8 @@ type WorkRows = {
   stale: boolean;       // the task records are last-known
   tasks: ReturnType<typeof useTasks>;
   reload: () => void;
+  archiveLocal: (id: string, archived: boolean, at?: number) => void;
+  restoreArchived: (r: Row) => Promise<string | null>;
   seen: Record<string, string>;
   markSeen: (r: Row) => void;
   // 新回复 (会话合一 Y01K; WD8F ②): rows that finished a reply the person has
@@ -56,8 +58,31 @@ function readReplied(): Record<string, string> {
 export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
   const tasks = useTasks();
   const { live, ended, board, boardAt, failed, reload, etag, fresh, prime } = useSessions(tasks.accept, tasks.reload);
-  const rows = useMemo(() => (live && tasks.data ? (board ? boardRows(board, tasks.data.tasks, live, ended || [])
+  const rawRows = useMemo(() => (live && tasks.data ? (board ? boardRows(board, tasks.data.tasks, live, ended || [])
     : buildRows(tasks.data.tasks, live, ended || [])) : null), [live, ended, board, tasks.data]);
+
+  // Bridge the saved preference until the next board acknowledges it.
+  const [archives, setArchives] = useState<Record<string, { archived: boolean; at: number }>>({});
+  const archiveLocal = useCallback((id: string, archived: boolean, at = 0) => {
+    setArchives(old => ({ ...old, [id]: { archived, at } }));
+  }, []);
+  useEffect(() => {
+    setArchives(old => Object.fromEntries(Object.entries(old).filter(([id, value]) =>
+      rawRows?.some(r => r.board?.id === id && !!r.board.archived !== value.archived))));
+  }, [rawRows]);
+  const rows = useMemo(() => rawRows?.map(r => {
+    const saved = r.board && archives[r.board.id];
+    return r.board && saved ? { ...r, board: { ...r.board, archived: saved.archived,
+      activity_at: Math.max(r.board.activity_at || 0, saved.at), tree_at: Math.max(r.board.tree_at || 0, saved.at) } } : r;
+  }) ?? null, [rawRows, archives]);
+  const restoreArchived = useCallback(async (r: Row): Promise<string | null> => {
+    if (!r.board?.archived) return null;
+    const res = await sendJSON("POST", "/v1/fleet/session_archive", { id: r.board.id, archived: false });
+    if (!res.ok) return res.error;
+    archiveLocal(r.board.id, false, Math.floor(Date.now() / 1000));
+    reload();
+    return null;
+  }, [archiveLocal, reload]);
 
   // the list this browser kept (task T47B): read beside /v1/me (no other
   // network), drawn only when /v1/me names the same person on their own page —
@@ -161,7 +186,7 @@ export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
     return () => { document.removeEventListener("visibilitychange", vis); window.removeEventListener(NET_BACK, now); };
   }, []);
   const value: WorkRows = {
-    rows, board, boardAt, live, tasks, seen, markSeen, reload: reloadAll, replied, done, setOpenRow,
+    rows, board, boardAt, live, tasks, seen, markSeen, archiveLocal, restoreArchived, reload: reloadAll, replied, done, setOpenRow,
     machines: typeof board?.machines === "number" ? board.machines : machineCount(rows),
     failed: (failed && !live) || (tasks.failed && !tasks.data), stale: !!(tasks.failed || tasks.data?.stale),
   };

@@ -14,6 +14,7 @@ import shlex
 import subprocess
 import sys
 import time
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -35,6 +36,20 @@ FID2 = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff'
 
 
 class Due(unittest.TestCase):
+    def test_warm_ledger_is_maintenance_but_explicit_reopen_is_activity(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('cold_ids_test', BIN / 'fleet_id.py')
+        ids = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ids)
+        with tempfile.TemporaryDirectory() as conf, patch.dict(os.environ, {'FLEET_CONF_DIR': conf, 'FLEET_ID_NO_PUSH': '1'}):
+            fid = '3fa85f64-5717-4562-b3fc-2c963f66afa6'
+            with patch.dict(os.environ, {'FLEET_PARK_RESTORE_FID': fid}):
+                event = ids.append(fid, {'ev': 'reopened', 'window': '@9'})
+                self.assertTrue(event['maintenance'])
+            with patch.dict(os.environ, {'FLEET_PARK_RESTORE_FID': ''}):
+                event = ids.append(fid, {'ev': 'reopened', 'window': '@10'})
+                self.assertFalse(event['maintenance'])
+
     def test_warm_newest_and_age(self):
         now = 100000
         parks = [(fixture_fid(i), now - 4000 + i * 10) for i in range(5)] + [('not-a-fid', 1)]

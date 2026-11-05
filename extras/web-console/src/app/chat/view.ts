@@ -1,3 +1,5 @@
+import { useWorkRows } from "../work-rows";
+import { rowWorker } from "../work";
 import { firstUserMessage } from "./first-message";
 import { retryDelay } from "@/shared/terminal-retry";
 // view.ts — 只读 (task F481, EPIC GR5E C5): a session running in a terminal,
@@ -58,6 +60,15 @@ function markFirst(layer: Layer, since: number) {
 }
 
 export function useSessionView(worker: string, allowed: boolean | null = true) {
+  const workRows = useWorkRows();
+  const restore = useRef(async () => {});
+  restore.current = async () => {
+    const row = workRows?.rows?.find(r => rowWorker(r) === worker);
+    if (row) {
+      const error = await workRows.restoreArchived(row);
+      if (error) setNote(error);
+    }
+  };
   const [items, setItems] = useState<Item[]>([]);
   const [state, setState] = useState<ViewState | null>(null);
   const [gate, setGate] = useState<ViewGate>(null);
@@ -241,6 +252,7 @@ export function useSessionView(worker: string, allowed: boolean | null = true) {
     const said = r?.ok ? { ok: true, delivery: String(j.delivery || ""), state: String(j.state || "sent"), reason: j.reason ? String(j.reason) : undefined }
       : { ok: false, code: String(j.code || (r ? `http_${r.status}` : "offline")) };
     setPending((ps) => ps.map((x) => (x.id === id ? afterSay(x, said, Date.now()) : x)));
+    if (said.ok && !["failed", "returned"].includes(String(j.state || ""))) await restore.current();
   }, [worker]);
   const onSay = useCallback(async (m: AppendMessage) => {
     const text = m.content.map((c) => (c.type === "text" ? c.text : "")).join("").trim();

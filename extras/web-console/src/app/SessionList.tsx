@@ -430,7 +430,7 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
     const found = archives;
     body = <>
       {archiveToggle}
-      <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档会停止会话并从列表隐藏；还在运行的会先问你。取消归档即可恢复显示。", "Archiving stops a session and hides it; a running one asks first. Unarchive to show it again.")}</p>
+      <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档会停止会话并从列表隐藏；还在运行的会先问你。恢复或再次发话会自动回到主列表。", "Archiving stops a session and hides it; a running one asks first. Resume or send a message to return it to the main list.")}</p>
       {found.length ? <List>{timeline(flat(found))}</List> : <p className="text-muted-foreground px-4 py-3 text-sm">{tr("没有已归档会话", "No archived sessions")}</p>}
     </>;
   } else if (searching) {
