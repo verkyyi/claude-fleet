@@ -21,7 +21,7 @@ import { viewAs } from "@/shared/viewAs";
 import { pinSession, pinWorker } from "@/shared/sessions";
 import { Failed, Loading } from "./parts";
 import {
-  compactRows, foldedDup, isTerminal, listItem, listRows, listStatus, listStatusLabel, members, ROW_SOURCES, rowMeta, rowRef, searchRows,
+  archivedRows, compactRows, foldedDup, isTerminal, listItem, listRows, listStatus, listStatusLabel, members, ROW_SOURCES, rowMeta, rowRef, searchRows,
   rowSource, rowsSignal, scheduleLines, signalOf, sourceLabel, treeContext, treeLines, urgentOf, withKids,
   type CompactGroups, type GroupSource, type ScheduleLine, type Signal, type TreeLine,
 } from "./session-list";
@@ -419,7 +419,8 @@ export const SessionRows: FC<{ variant: Variant; chatHome?: boolean }> = ({ vari
   const archiveToggle = <button type="button" aria-pressed={showArchived} data-archive-toggle onClick={() => { previous.current = undefined; setShowArchived(!showArchived); }} className="text-muted-foreground px-4 py-2 text-sm">{showArchived ? tr("返回会话", "Back to sessions") : tr(`已归档 · ${archivedCount}`, `Archived · ${archivedCount}`)}</button>;
   let body: ReactNode;
   if (showArchived) {
-    const found = searching ? searchRows(ordered, q) : ordered;
+    const archives = archivedRows(rows);
+    const found = searching ? searchRows(archives, q) : archives;
     body = <>
       {archiveToggle}
       <p className="text-muted-foreground px-4 pb-2 text-xs">{tr("归档会停止会话并从列表隐藏；还在运行的会先问你。取消归档即可恢复显示。", "Archiving stops a session and hides it; a running one asks first. Unarchive to show it again.")}</p>

@@ -2180,10 +2180,12 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
             continue
         ages[target] = age
         grepo = target.rpartition("@")[2] if "@" in target else ""
+        # Legacy history has no turn activity; use its known close time until
+        # board_apply supplies the hub's conversation activity.
         word = say("view_ended_gone_merged") if glyph == "✓" else say("view_ended_gone")
         gone.append({"kind": "sess", "target": target, "far": False, "gone": True, "machine": here, "login": me,
                      "state": "landed", "text": title or name, "name": name, "reap": "", "issue": label,
-                     "depth": 0, "detail": "", "group": "folded", "sec": "gone",
+                     "depth": 0, "detail": "", "group": "folded", "sec": "gone", "activity_at": int(now - age),
                      "sym": "done" if glyph == "✓" else "fail", "lost": False, "lost_secs": None, "ask": "",
                      "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
                      "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
@@ -2208,6 +2210,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
                      "foot": " · ".join(x for x in (title, o.get("task") or "", say("view_ended_gone")) if x)})
         row_cols(gone[-1], o.get("task") or "", "", title, title)
         id_apply(gone[-1], fid, known, live=False)
+        gone[-1]["activity_at"] = rec["closed"]["ts"]
         ages["id:" + fid] = now - rec["closed"]["ts"]
     repo_fill([e for e in gone if e.get("ledger")], repos)
     gone.sort(key=lambda e: ages.get(e["target"], 0))
@@ -3222,6 +3225,9 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     """Presentation only: no lifecycle flags change when a live row is folded."""
     ordered = task_list(items)
     archived = [dict(e, sec="archived") for e in ordered if e["kind"] == "sess" and e.get("archived")]
+    archive_kids, _ = tree_link(archived)
+    archive_times = tree_times(archived, archive_kids)
+    archived.sort(key=lambda e: (-archive_times[id(e)], e.get("fid") or e["target"]))
     rows = [dict(e) for e in ordered if e["kind"] == "sess" and not e.get("archived")]
     prefs = list_preferences(preferences if preferences is not None else
                              next((e.get("list_preferences") for e in rows if e.get("list_preferences")), None))
@@ -3251,7 +3257,7 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
         at = tat[id(e)]
         expired = prefs["idle_hours"] and at and now - at >= prefs["idle_hours"] * 3600 and \
             not any(task_status(x) in ("work", "pending") for x in whole(e))
-        if id(e) in protected or (e.get("sec") != "gone" and not expired and room > 0):
+        if id(e) in protected or (not expired and room > 0):
             ordinary.append(e)
             if id(e) not in protected:
                 room -= 1
@@ -3265,6 +3271,9 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
         (list_folded: the list's choice, not the session's lifecycle)."""
         for x in tree_emit(root, kids, folds, dups):
             if x["kind"] == "sess":
+                # Keep legacy history facts when its presentation section changes.
+                if not x.get("gone") and ended(x):
+                    x["ended"] = True
                 if folded:
                     x["list_folded"] = x.get("sec") != "gone"
                 x.pop("sec", None)

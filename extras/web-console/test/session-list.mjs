@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { compactRows, descendants, foldedDup, fromRow, members, sessionTree, treeAt, treeContext, treeLines, urgentOf, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, clockOrDay, rowsSignal, scheduleLabel, scheduleLines, scheduleResult, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
+import { archivedRows, compactRows, descendants, foldedDup, fromRow, members, sessionTree, treeAt, treeContext, treeLines, urgentOf, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, clockOrDay, rowsSignal, scheduleLabel, scheduleLines, scheduleResult, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
 import { bellGroups, runFailed } from '../src/app/notices.ts';
 import { scheduleSeed } from '../src/app/new-session.ts';
 
@@ -223,6 +223,23 @@ for (const c of policyCases) {
   assert.equal(new Set([...groups.pin, ...groups.open, ...groups.gone, ...sourced].map(r => r.id)).size, input.length);
   assert.equal(searchRows([...groups.pin, ...groups.open, ...groups.gone, ...sourced], '').length, input.length);
 }
+const archives = [
+  R({ id: 'a', group: 'gone', at: 1000, board: { archived: true, activity_at: 100 } }),
+  R({ id: 'b', group: 'pin', at: 2000, board: { archived: true, activity_at: 200 } }),
+  R({ id: 'c', at: 3000, board: { archived: true, activity_at: 50, tree_at: 300 } }),
+];
+assert.deepEqual(archivedRows(archives).map(r => r.id), ['c', 'b', 'a'], 'archives use tree activity across lifecycle and pin groups');
+archives[0].board.activity_at = 400;
+assert.deepEqual(archivedRows(archives).map(r => r.id), ['a', 'c', 'b'], 'reused archive rises');
+archives[1].board.tree_at = 400;
+assert.deepEqual(archivedRows(archives).map(r => r.id), ['a', 'b', 'c'], 'equal archive activity uses identity');
+const recentEnded = R({ id: 'recent-ended', group: 'gone', tag: ['已结束', 'Ended'], at: now - 1000,
+  board: { tag: 'ended', state: 'exited', history: { id: 'recent-ended' } } });
+assert.equal(compactRows([recentEnded], { now }).open[0], recentEnded);
+assert.deepEqual(rowState(recentEnded), ['已结束', 'Ended'], 'a main-list ended row keeps its lifecycle state');
+assert.equal(recentEnded.board.history.id, 'recent-ended');
+assert.equal(listStatus(recentEnded).kind, null);
+
 const freshRows = Array.from({length:12}, (_,i) => R({id:`fresh${i}`, code:`fresh${i}`, at:now-i*1000}));
 const initial = compactRows(freshRows, {now});
 const changedRows = freshRows.map(r => r.id==='fresh11' ? {...r,at:now+1000} : r);

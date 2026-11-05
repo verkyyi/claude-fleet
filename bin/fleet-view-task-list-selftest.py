@@ -160,7 +160,7 @@ class TaskList(unittest.TestCase):
         self.assertEqual(v.schedule_label("10-30"), "10-30")
 
     def test_history_and_search_preserve_fold(self):
-        items = [row("old", sec="gone", gone=True), row("exited", state="exited", sec="gone", shut=True),
+        items = [row("old", sec="gone", gone=True, activity_at=time.time() - 86401), row("exited", state="exited", sec="gone", shut=True),
                  row("loop", loop=True, sec="gone"), row("lost", lost=True, sec="gone")]
         closed = v.visible(items, "", set())
         self.assertEqual([e["target"] for e in closed if e["kind"] == "sess"], ["exited", "loop", "lost"])
@@ -168,6 +168,33 @@ class TaskList(unittest.TestCase):
         self.assertEqual([e["target"] for e in v.visible(items, "old", set())], ["old"])
         self.assertEqual(v.visible(items, "", set())[-1]["closed"], True)
         self.assertIn("old", [e.get("target") for e in v.visible(items, "", {"gone"})])
+
+    def test_recent_ended_row_keeps_status_and_restore_in_main_list(self):
+        items = [row("id:closed", sec="gone", gone=True, ledger=True, state="exited",
+                     activity_at=time.time() - 60),
+                 row("legacy", sec="gone", activity_at=time.time() - 120)]
+        shown = [e for e in v.visible(items, "", set()) if e["kind"] == "sess"]
+        self.assertEqual([e["target"] for e in shown], ["id:closed", "legacy"])
+        self.assertTrue(all(not e.get("sec") and v.ended(e) for e in shown))
+        self.assertEqual(v.row_status(shown[0]), "quiet")
+        self.assertTrue(v.reopen_row(shown[0]))
+        self.assertEqual([a["id"] for a, _ in v.menu_of(shown[0])], ["resume"])
+        self.assertEqual(items[0]["sec"], "gone", "presentation leaves source facts intact")
+
+    def test_archives_follow_tree_activity_after_refresh(self):
+        items = [row("a", archived=True, list_scope="archives", source_order=0, activity_at=100),
+                 row("b", archived=True, list_scope="archives", source_order=1, activity_at=200),
+                 row("c", archived=True, list_scope="archives", source_order=2, activity_at=50, tree_at=300)]
+        targets = lambda: [e["target"] for e in v.visible(items, "", {"archived"}) if e["kind"] == "sess"]
+        self.assertEqual(targets(), ["c", "b", "a"])
+        items[0]["activity_at"] = 400
+        self.assertEqual(targets(), ["a", "c", "b"], "new activity replaces first-seen order")
+        items[1]["tree_at"] = 400
+        self.assertEqual(targets(), ["a", "b", "c"], "equal activity uses identity")
+        items[0]["tree_parent"] = "c"
+        items[1]["tree_at"] = 350
+        self.assertEqual(targets(), ["a", "c", "b"], "descendants also contribute to archive activity")
+        self.assertFalse([e for e in v.visible(items, "", set()) if e["kind"] == "sess"])
 
     def test_state_refresh_preserves_order_and_pin_keeps_identity(self):
         a = row("a", group="work", list_scope="fixture", source_order=0)

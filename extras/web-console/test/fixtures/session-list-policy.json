@@ -583,5 +583,111 @@
     ],
     "attention": [],
     "now": 1800000000
+  },
+  {
+    "name": "ended sessions share the main list and overflow order",
+    "now": 1800000000,
+    "preferences": {
+      "max_visible": 5,
+      "idle_hours": 24
+    },
+    "rows": [
+      {
+        "id": "ended-new",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799999999
+      },
+      {
+        "id": "live-new",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999998
+      },
+      {
+        "id": "ended-middle",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799999997
+      },
+      {
+        "id": "live-middle",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999996
+      },
+      {
+        "id": "ended-last",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799999995
+      },
+      {
+        "id": "ended-overflow",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799999994
+      },
+      {
+        "id": "live-overflow",
+        "group": "queue",
+        "state": "idle",
+        "activity_at": 1799999993
+      },
+      {
+        "id": "ended-expired",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799913600
+      }
+    ],
+    "visible": [
+      "ended-new",
+      "live-new",
+      "ended-middle",
+      "live-middle",
+      "ended-last"
+    ],
+    "more": [
+      "ended-overflow",
+      "live-overflow",
+      "ended-expired"
+    ],
+    "attention": [],
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
+  },
+  {
+    "name": "ended sessions expire at the idle boundary",
+    "now": 1800000000,
+    "rows": [
+      {
+        "id": "recent",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799913601
+      },
+      {
+        "id": "expired",
+        "group": "gone",
+        "state": "done",
+        "activity_at": 1799913600
+      }
+    ],
+    "visible": [
+      "recent"
+    ],
+    "more": [
+      "expired"
+    ],
+    "attention": [],
+    "sources": {
+      "agent": [],
+      "schedule": [],
+      "api": []
+    }
   }
 ]

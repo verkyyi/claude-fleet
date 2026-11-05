@@ -151,9 +151,9 @@ row() { local IFS="$US"; printf '%s\n' "$*"; }
 } > "$W/rows.txt"
 pl=$(printf '{"i":[{"r":"o/r#21","k":"epsilon","w":"answer:o/r#21","a":%d}]}' "$(( $(date +%s) - 7200 ))" | base64 | tr '+/' '-_' | tr -d '=\n')
 printf '%s\n' "x${US}nodeA${US}online${US}looping${US}${US}${US}0${US}park=1${US}parkl=$pl" > "$W/g/orch_fl"
-# one folded-away session (回收 D): fleet-history.sh rows' shape, kept fresh so the
-# popup reads it on its first frame; emptied again after B
-gone1="landed:issue:21@o/r${US}key${US}✓ #21      $(printf '%-26s' 'Old 收起的') $(printf '   %-8s %-7s %-4s' '5 mins' '#121' '·')${US}$(date +%s)"
+# One history row older than idle_hours, in a fresh cache so the popup reads it
+# on its first frame; emptied again after B.
+gone1="landed:issue:21@o/r${US}key${US}✓ #21      $(printf '%-26s' 'Old 收起的') $(printf '   %-8s %-7s %-4s' '5 mins' '#121' '·')${US}$(( $(date +%s) - 2 * 86400 ))"
 printf '%s\n' "$gone1" | tee "$W/gone.txt" > "$W/g/view-gone.fl"
 ti new-session -d -t fl -s 'fl@view-v1' || st_fail "B: no 看台 session"
 ti set-option -t 'fl@view-v1' key-table fleet-view
@@ -538,13 +538,13 @@ g = ended[1]
 assert g["gone"] and g["text"] == "Mac 新登录租凭据 + 演练认看台" and g["issue"] == "#3276" and g["right"] == "32 mins", g
 assert g["sym"] == "done" and ended[2]["sym"] == "fail" and g["word"] == "已合并 · 窗口已回收", g
 assert "PR #3278" in g["foot"] and "↵ 恢复" in g["foot"], g["foot"]
-# folded: none of them shows; opened: all four, after the open one
+# Recent closed rows stay in the main list even with More shut.
 v = fv.visible(it, "", set())
-assert not any(e.get("gone") for e in v), v
+assert [e["target"] for e in v if e.get("gone")] == [e["target"] for e in ended[1:]], v
 v = fv.visible(it, "", {"ended"})
-assert not any(e.get("gone") for e in v), v
+assert [e["target"] for e in v if e.get("gone")] == [e["target"] for e in ended[1:]], v
 v = fv.visible(it, "", {"gone"})
-assert [e["target"] for e in v if e.get("sec") == "gone" and e["kind"] == "sess"] == [e["target"] for e in ended[1:]]
+assert not any(e.get("sec") == "gone" and e["kind"] == "sess" for e in v), v
 # a query finds one
 assert [e["target"] for e in fv.visible(it, "演练认看台", set())] == ["landed:3278@o/claude-fleet"]
 # ⌘↓ ⌘↑ never walk onto a reaped one
@@ -680,15 +680,16 @@ assert more["text"] == "更早的 3 个 → /fleet-history" and more["sec"] == "
 ra = next(e for e in it if e.get("cmd") == "reapall")
 assert ra["row"]["targets"] == ["@8", "@9"] and "收起已结束的 2 个" in ra["text"] and "sec" not in ra, ra
 assert "Tab → 回收" in next(e for e in it if e.get("target") == "@8")["foot"]
-# 已收起 folded by default: its heading, none of its rows; → opens it, ← shuts it
+# More folds expired rows; the two closed within 24h stay in the main list.
 v = fv.visible(it, "", set())
 assert [(e["kind"], e.get("sec")) for e in v if e.get("sec")] == [("sec", "gone")], v
 assert all(e.get("closed") for e in v if e["kind"] == "sec")
+assert [e["target"] for e in v if e.get("gone")] == ["landed:901@o/r", "landed:902@o/r"], v
 assert [e.get("target") for e in v if e.get("ended")] == ["@8", "@9"], v
 opened = fv.sec_fold(set(), "gone", True)
 v = fv.visible(it, "", opened)
 assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
-    ["landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
+    ["landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
 assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
 # the panel (view-panel's rows): ✦ + $ above the same lines, ⇄ ⏏ after them (T762, T923)
 p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])

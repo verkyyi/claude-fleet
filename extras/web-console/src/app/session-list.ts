@@ -128,6 +128,11 @@ export function treeAt(tree: Tree): (r: Row) => number {
   };
   return at;
 }
+// Archives are flat, ordered by the same tree activity as the main list.
+export function archivedRows(rows: Row[]): Row[] {
+  const at = treeAt(sessionTree(rows));
+  return [...rows].sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
+}
 // Everything nested under r, depth first, siblings newest first (a folded
 // duplicate is its line's, not a row of its own).
 export function descendants(tree: Tree, r: Row): Row[] {
@@ -285,15 +290,12 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   const base = listRows(roots.filter((r) => r.group === "pin" || !groupSource(r)), previous);
   const isCurrent = (r: Row) => rowRef(r) === current;
   const pin = base.pin;
-  // history only when the whole tree is: a live child keeps its opener out of it
-  const older = (r: Row) => whole(r).every((x) => x.group === "gone" && !x.live && !listStatus(x).kind && !listStatus(x).unknown);
   const recent = [...base.open, ...base.gone].sort(byAt);
   const kept = recent.filter((r) => whole(r).some((x) => isCurrent(x) || needsAttention(x)));
   let room = Math.max(0, prefs.max_visible - pin.length - kept.length);
-  const old = new Set(recent.filter(older).map((r) => r.id));
   const visible = new Set(kept.map((r) => r.id));
   for (const r of recent) {
-    if (visible.has(r.id) || old.has(r.id) || room <= 0) continue;
+    if (visible.has(r.id) || room <= 0) continue;
     const t = at(r);
     const busy = whole(r).some((x) => { const k = listStatus(x).kind; return k === "work" || k === "pending"; });
     if (!prefs.idle_hours || !t || busy || now - t < prefs.idle_hours * 3600000) {
