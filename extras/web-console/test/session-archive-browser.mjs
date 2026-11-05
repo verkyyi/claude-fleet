@@ -6,6 +6,62 @@ const browser = await chromium.launch({ headless:true, ...(process.env.CHROME_BI
 const fid = '00000000-0000-4000-8000-000000000900';
 const origin = 'http://fleet-archive.invalid';
 try {
+  // Search always reaches archives; protected rows leave ordinary room. The same
+  // clock is visible on desktop and available in the phone's long-press detail.
+  for (const width of [390, 1440]) for (const lang of ['en', 'zh']) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, locale: lang === 'zh' ? 'zh-CN' : 'en-US' });
+    const page = await context.newPage();
+    const now = Math.floor(Date.now() / 1000);
+    const session = (n, code, title, extra = {}) => ({ id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, code, title,
+      group: 'queue', tag: 'idle', state: 'idle', words: ['空闲', 'Idle'], activity_at: now - 100 - n, at: now - 86400, ...extra });
+    const rows = [...Array.from({ length: 11 }, (_, i) => session(i, `AA${i}`, `Waiting ${i}`, { group: 'ask', tag: 'needs', state: 'needs' })),
+      ...Array.from({ length: 11 }, (_, i) => session(100 + i, `RR${i}`, `Cost estimate ${i}`)),
+      session(990, 'ZX90', 'Archived estimate', { group: 'gone', tag: 'ended', state: 'exited', archived: true, tree_at: now - 10 })];
+    await page.route('**/*', async route => {
+      const u = new URL(route.request().url());
+      if (!u.pathname.startsWith('/v1/')) {
+        const rel = u.pathname.replace(/^\/app\/?/, '');
+        const file = new URL(`../dist/app/${rel.startsWith('assets/') || rel === 'manifest.webmanifest' ? rel : 'index.html'}`, import.meta.url);
+        return route.fulfill({ body: await readFile(file), contentType: file.pathname.endsWith('.js') ? 'application/javascript' : file.pathname.endsWith('.css') ? 'text/css' : 'text/html' });
+      }
+      assert.equal(route.request().method(), 'GET', 'search and time display write nothing');
+      let body = {};
+      if (u.pathname === '/v1/me') body = { role: 'user', person: 'test-owner', name: 'Test', pages: ['app'], entry: true };
+      if (u.pathname === '/v1/chat/home') body = { state: 'ok', machine: 'test', login: 'test', unified: false };
+      if (u.pathname === '/v1/fleet/tasks') body = { tasks: [] };
+      if (u.pathname === '/v1/fleet/sessions') body = { sessions: [], board: { count: rows.length, active: 22, groups: {}, gone_days: 7, digest: 'activity', rows } };
+      return route.fulfill({ json: body });
+    });
+    await context.addCookies([{ name: "cf_lang", value: lang, url: origin }]);
+    await page.goto(`${origin}/app/`);
+    const list = page.locator(`[data-session-list="${width < 768 ? 'page' : 'side'}"]`);
+    await list.locator('[data-row="RR0"]').waitFor();
+    assert.equal(await list.locator('[data-row^="AA"]').count(), 11);
+    assert.equal(await list.locator('[data-row^="RR"]').count(), 10, 'asks do not consume ordinary slots');
+    assert.equal(await list.locator('[data-row="ZX90"]').count(), 0, 'archive stays hidden outside search');
+    await page.locator('button[aria-label="Search sessions"]:visible, button[aria-label="搜索会话"]:visible').click();
+    const input = page.locator('input[aria-label="Search by code, title or machine"]:visible, input[aria-label="搜编号、标题、机器"]:visible');
+    await input.fill('estimate');
+    const archived = list.locator('[data-row="ZX90"]');
+    await archived.waitFor();
+    assert.equal(await list.locator('[data-row]').first().getAttribute('data-row'), 'ZX90', 'tree activity breaks search ties');
+    assert.equal(await archived.locator('[data-archived-label]').innerText(), lang === 'zh' ? '已归档' : 'Archived');
+    assert.equal(await archived.locator('[data-last-active]').isVisible(), width >= 480);
+    assert.equal(await archived.locator('[data-last-active]').textContent(), lang === 'zh' ? '刚刚' : 'now');
+    assert.ok((await archived.getAttribute('aria-label')).includes(lang === 'zh' ? '最后活跃' : 'Last active'));
+    await input.fill('ZX90');
+    assert.equal(await list.locator('[data-row]').count(), 1, 'code search finds an archive with its group shut');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'no horizontal overflow');
+    if (process.env.ACTIVITY_SHOTS) { await mkdir(process.env.ACTIVITY_SHOTS, { recursive: true }); await page.screenshot({ path: `${process.env.ACTIVITY_SHOTS}/activity-${lang}-${width}.png`, fullPage: true }); }
+    if (width < 480) {
+      await archived.dispatchEvent('pointerdown', { pointerType: 'touch', clientX: 80, clientY: 180 });
+      await page.getByRole('dialog').waitFor();
+      assert.ok((await page.getByRole('dialog').innerText()).includes(lang === 'zh' ? '最后活跃' : 'Last active'));
+      await archived.dispatchEvent('pointerup', { pointerType: 'touch' });
+    }
+    await context.close();
+  }
+  console.log('PASS session activity: archives in search, time order, protected capacity, bilingual clock + narrow detail');
   for (const width of [390,1440]) {
     const context = await browser.newContext({viewport:{width,height:900}});
     const page = await context.newPage();

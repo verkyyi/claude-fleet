@@ -128,6 +128,30 @@ export function treeAt(tree: Tree): (r: Row) => number {
   };
   return at;
 }
+// Shared by ordering, the five-character column and the narrow-screen detail.
+export function activityLabel(at: number, now = Date.now(), detail = false): string {
+  if (!at || !Number.isFinite(at)) return detail ? "" : "—";
+  const age = Math.max(0, Math.floor((now - at) / 1000));
+  if (age < 60) return tr("刚刚", "now");
+  if (detail) {
+    if (age < 3600) return tr(`${Math.floor(age / 60)}分钟前`, `${Math.floor(age / 60)} min ago`);
+    if (age < 86400) return tr(`${Math.floor(age / 3600)}小时前`, `${Math.floor(age / 3600)} h ago`);
+    return tr(`${Math.floor(age / 86400)}天前`, `${Math.floor(age / 86400)} d ago`);
+  }
+  if (age < 3600) return tr(`${Math.floor(age / 60)}分`, `${Math.floor(age / 60)}m`);
+  if (age < 86400) return tr(`${Math.floor(age / 3600)}时`, `${Math.floor(age / 3600)}h`);
+  const d = new Date(at), n = new Date(now);
+  const day = (x: Date) => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate()) / 86400000;
+  const days = day(n) - day(d);
+  if (days === 1) return tr("昨天", "Yest");
+  if (days < 7) return tr(`周${"日一二三四五六"[d.getDay()]}`, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()]);
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+export const lastActive = (at: number, now = Date.now()) => {
+  const age = activityLabel(at, now, true);
+  return age ? tr(`最后活跃 ${age}`, `Last active ${age}`) : "";
+};
+
 // Archives are flat, ordered by the same tree activity as the main list.
 export function archivedRows(rows: Row[]): Row[] {
   const at = treeAt(sessionTree(rows));
@@ -292,7 +316,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   const pin = base.pin;
   const recent = [...base.open, ...base.gone].sort(byAt);
   const kept = recent.filter((r) => whole(r).some((x) => isCurrent(x) || needsAttention(x)));
-  let room = Math.max(0, prefs.max_visible - pin.length - kept.length);
+  let room = Math.max(0, prefs.max_visible - pin.length);
   const visible = new Set(kept.map((r) => r.id));
   for (const r of recent) {
     if (visible.has(r.id) || room <= 0) continue;
@@ -382,7 +406,7 @@ export function openFor(born: number, now = Date.now()): string {
 // nearly everyone has one home, and its name said nothing).
 export function rowMeta(r: Row, now = Date.now(), machines = 1): string {
   const where = r.group === "gone" && !r.live ? tr("更早的会话", "Earlier session") : "";
-  return [r.code, machines > 1 ? rowMachine(r) : "", rowAgent(r), r.board?.context ? tr(...r.board.context) : "", where, r.live ? openFor(r.live.born * 1000, now) : ""].filter(Boolean).join(" · ");
+  return [r.code, machines > 1 ? rowMachine(r) : "", rowAgent(r), r.board?.context ? tr(...r.board.context) : "", where, r.live ? openFor(r.live.born * 1000, now) : "", lastActive(ownAt(r), now)].filter(Boolean).join(" · ");
 }
 
 // How many machines the person's sessions run on: a name is shown only past one.
@@ -431,7 +455,8 @@ export function matchRow(r: Row, q: string): boolean {
 }
 
 export function searchRows(rows: Row[], q: string): Row[] {
-  return rows.filter((r) => matchRow(r, q));
+  const at = treeAt(sessionTree(rows));
+  return rows.filter((r) => matchRow(r, q)).sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
 }
 
 // New to the person: a row is bold until they open it, and again once its

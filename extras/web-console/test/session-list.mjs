@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { boardRows, nestedKids } from '../src/app/work.ts';
 import { pendingStartRef } from '../src/app/task-cancel.ts';
-import { archivedRows, compactRows, descendants, foldedDup, fromRow, members, sessionTree, treeAt, treeContext, treeLines, urgentOf, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, clockOrDay, rowsSignal, scheduleLabel, scheduleLines, scheduleResult, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
+import { activityLabel, lastActive, archivedRows, compactRows, descendants, foldedDup, fromRow, members, sessionTree, treeAt, treeContext, treeLines, urgentOf, headMeta, isTerminal, isUnread, listItem, listRows, listStatus, machineCount, needsAttention, matchRow, openFor, openLine, repliesDone, rowMeta, rowRef, rowState, clockOrDay, rowsSignal, scheduleLabel, scheduleLines, scheduleResult, scheduleRuns, searchRows, seenMark } from '../src/app/session-list.ts';
 import { bellGroups, runFailed } from '../src/app/notices.ts';
 import { scheduleSeed } from '../src/app/new-session.ts';
 
@@ -85,10 +85,10 @@ assert.equal(searchRows(rows, '').length, rows.length);
 
 // the one detail line: code · agent · how long — the machine only past one (会话合一 Y01K)
 // (node's language is the machine's: either one)
-assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · (未知|Unknown) · (开了 3 小时|open 3 h)$`));
-assert.match(rowMeta(open[0], now, 2), new RegExp(`^${open[0].code} · build-box · (未知|Unknown) · (开了 3 小时|open 3 h)$`));
+assert.match(rowMeta(open[0], now), new RegExp(`^${open[0].code} · (未知|Unknown) · (开了 3 小时|open 3 h) · (最后活跃|Last active) .+$`));
+assert.match(rowMeta(open[0], now, 2), new RegExp(`^${open[0].code} · build-box · (未知|Unknown) · (开了 3 小时|open 3 h) · (最后活跃|Last active) .+$`));
 assert.equal(machineCount(rows), 2, 'build-box and office');
-assert.match(rowMeta(gone[0], now), /^(未知 · 更早的会话|Unknown · Earlier session)$/);
+assert.match(rowMeta(gone[0], now), /^(未知 · 更早的会话|Unknown · Earlier session) · (最后活跃|Last active) .+$/);
 assert.match(openFor(now - 5 * 60e3, now), /^(开了 5 分钟|open 5 min)$/);
 assert.equal(openFor(0, now), '');
 
@@ -239,6 +239,15 @@ assert.equal(compactRows([recentEnded], { now }).open[0], recentEnded);
 assert.deepEqual(rowState(recentEnded), ['已结束', 'Ended'], 'a main-list ended row keeps its lifecycle state');
 assert.equal(recentEnded.board.history.id, 'recent-ended');
 assert.equal(listStatus(recentEnded).kind, null);
+
+const activityCases = JSON.parse(readFileSync(new URL('./fixtures/session-activity.json', import.meta.url), 'utf8'));
+const activityNow = new Date(activityCases.now).getTime();
+for (const c of activityCases.cases) assert.ok([c.zh, c.en].includes(activityLabel(activityNow - c.age * 1000, activityNow)), JSON.stringify(c));
+assert.equal(activityLabel(0, activityNow), '—');
+assert.match(lastActive(activityNow - 120000, activityNow), /^(最后活跃 2分钟前|Last active 2 min ago)$/);
+const searchActivity = [R({id:'pin',title:'estimate',group:'pin',at:1000}),
+  R({id:'archive',title:'estimate',at:500,board:{archived:true,tree_at:10}}), R({id:'plain',title:'estimate',at:5000})];
+assert.deepEqual(searchRows(searchActivity, 'estimate').map(r=>r.id), ['archive','plain','pin']);
 
 const freshRows = Array.from({length:12}, (_,i) => R({id:`fresh${i}`, code:`fresh${i}`, at:now-i*1000}));
 const initial = compactRows(freshRows, {now});
@@ -438,6 +447,7 @@ console.log('session-list: bell OK');
   const stale = ask.map((r) => ({ ...r, board: { ...r.board, activity_at: nowS - 3 * 86400, tree_at: undefined, running: false } }));
   const filler = Array.from({ length: 12 }, (_, i) => T(`f${i}`, { activity_at: nowS - i }));
   const kept = compactRows([...stale, ...filler], { now });
+  assert.equal(kept.open.filter(r => r.id.startsWith('f')).length, 10, 'an asking child protects its tree without consuming ordinary slots');
   assert.ok(ids(kept.open).includes('a') && !ids(kept.gone).includes('a'), 'a tree holding an ask is never folded into More');
   assert.ok(!ids(kept.open).includes('a2x') && !ids(kept.gone).includes('a2x'), 'a child is never a top-level row');
 
@@ -491,7 +501,7 @@ console.log('session-list: bell OK');
   assert.deepEqual(ids(dg.open), ['o', 'top2', 'plain1', 'plain2'], 'top level with the same from folds; no from never merges');
   assert.deepEqual(ids(members(dtr, dup[7])), ['top2', 'top1']);
   assert.equal(treeLines([dup[0]], dtr)[0].signal, 'ask', 'a folded duplicate\'s ask reaches the ▸');
-  assert.deepEqual(ids(searchRows(dup, 'fix the')), ['d1', 'd3', 'src'], 'a folded duplicate is still found');
+  assert.deepEqual(ids(searchRows(dup, 'fix the')), ['src', 'd3', 'd1'], 'folded duplicates are found in activity order');
   assert.ok(!compactRows(dup.map((r) => r.id === 'd2' ? { ...r, board: { ...r.board, activity_at: nowS - 5 * 86400 } } : r), { now }).gone.some((r) => r.id === 'o'));
   assert.ok(page.includes('同名会话') && page.includes('Same-title sessions'), 'the detail pane lists the same-title sessions');
 
