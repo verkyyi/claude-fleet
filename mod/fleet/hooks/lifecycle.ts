@@ -244,6 +244,15 @@ async function registerFallbackTools($: EngineInterface): Promise<void> {
 
 /** Start-up work of every feature, run once the gate is open. */
 async function onReady($: EngineInterface): Promise<void> {
+  // The shell SessionStart hook owns startup/resume/compact classification.
+  // A module reload still retires stale telemetry without learning a new sample.
+  if (pane !== undefined) {
+    try {
+      await $.process.run(feedArgv($.plugin.root, ['ctx_reset=load']), { timeoutMs: STATUSLINE_TIMEOUT_MS })
+    } catch {
+      // Telemetry failure must not prevent the heartbeat and command inbox.
+    }
+  }
   // The fallback tools (tools.ts, issue #2057) — only for a fleet session the
   // launcher did not give the tool service: FLEET_MCP_SERVER=1 says it did (issue
   // #1807), and then the mod registers nothing (#1812). Without it, advertise
@@ -312,6 +321,10 @@ export function registerLifecycle(on: On): void {
       // A /clear or /resume: no earlier turn is the one a conditional prompt follows.
       noteSessionBoundary()
       acceptSessionEnded()
+      // /clear need not emit another mod session.start. Write before returning.
+      if (pane !== undefined && (e.reason === 'clear' || e.reason === 'resume')) {
+        await $.process.run(feedArgv($.plugin.root, [`ctx_reset=${e.reason}`]), { timeoutMs: STATUSLINE_TIMEOUT_MS })
+      }
     }
     if (isOpen() && EXITS.has(e.reason)) {
       timer?.cancel()

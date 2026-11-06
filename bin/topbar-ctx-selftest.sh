@@ -58,6 +58,17 @@ st_eq "A: a measured window's field 19" "62|ok|$TS|Opus 5.5|high" "$(fld "$SIDE"
 st_eq "A: …fields 13-18 empty before it" "|||||" "$(printf '%s\n' "$SIDE" | LC_ALL=C awk -F"$US" '$4 == "measured" { print $13 "|" $14 "|" $15 "|" $16 "|" $17 "|" $18 }')"
 st_eq "A: no @ctx_pct ⇒ no field 19 (byte for byte as before)" "-" "$(fld "$SIDE" bare 19)"
 
+# Boundary states keep the same cell shape; old pinned writers need not know @ctx_est.
+T set-window-option -t "=$S:measured" @ctx_est 1 \; set-window-option -u -t "=$S:measured" @ctx_pct
+SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
+st_eq "A: local estimate" "62|est|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)"
+T set-window-option -u -t "=$S:measured" @ctx_left
+SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
+st_eq "A: local cleared" "|reset|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)"
+T set-window-option -t "=$S:measured" @ctx_pct 38 \; set-window-option -t "=$S:measured" @ctx_left 62
+SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
+st_eq "A: old writer's true value retires estimate" "62|ok|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)"
+
 # ============================================================================
 # B. a remote row: the hub cache's 21-25 → field 19, the same five `fleet ls` reads
 # ============================================================================
@@ -73,7 +84,9 @@ def s(key, **w):
                 fleet_name="x", availability="online", worker=w, observed_at="2026-10-09T10:00:00Z")
 sessions = [s("issue-41", issue=41, name="RM", ctx_left=23, ctx_band="watch", ctx_ts=ts,
               model="Fable 5.1", effort="high"),
-            s("issue-42", issue=42, name="RN")]
+            s("issue-42", issue=42, name="RN"),
+            s("issue-43", issue=43, name="RE", ctx_left=10, ctx_band="est", ctx_ts=ts),
+            s("issue-44", issue=44, name="RC", ctx_band="reset", ctx_ts=ts)]
 nodes = [dict(machine_name="tbctx-peer.invalid", availability="online", sessions=2, observed_at="2026-10-09T10:00:00Z", age_sec=3)]
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 PY
@@ -86,6 +99,9 @@ printf '%s\n' "$(date +%s)" > "$G/hub_ok"
 SIDE2=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
 st_eq "B: the remote row's field 19 is the cache's five" "23|watch|$TS|Fable 5.1|high" "$(fld "$SIDE2" RM 19)" "$SIDE2"
 st_eq "B: a remote row the node measured nothing for has none" "-" "$(fld "$SIDE2" RN 19)"
+st_eq "B: remote estimate survives inventory/cache/rows" "10|est|$TS||" "$(fld "$SIDE2" RE 19)"
+st_eq "B: remote cleared without a number survives" "|reset|$TS||" "$(fld "$SIDE2" RC 19)"
+
 LS=$(FLEET_SESSION=$S python3 - "$BIN" "wid:$F/issue-41" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("cli", sys.argv[1] + "/fleet-session-cli.py")

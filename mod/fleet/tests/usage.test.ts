@@ -88,7 +88,7 @@ test('a measurement feeds conf/statusline.sh --from mod with the context + rate-
   const before = feeds(runs).length
   await $.session.measure(FULL)
   const got = feeds(runs).slice(before)
-  expect(got).toEqual([measureFields(FULL)])
+  expect(got).toEqual([[...measureFields(FULL), 'ctx_measure=1']])
   // One bash run for the whole measurement, no tmux call of the mod's own.
   expect(runs.some(argv => argv[0] === 'tmux' && argv.includes('@ctx_pct'))).toBe(false)
 })
@@ -98,7 +98,7 @@ test('a half reading: context only — no rate-limit fields', async ($, on) => {
   await $.session.start(START)
   const before = feeds(runs).length
   await $.session.measure({ context: { window: 1_000_000, percent: 7 }, rateLimits: [{ kind: 'five_hour', percentUsed: 50 }], changed: ['context'] })
-  expect(feeds(runs).slice(before)).toEqual([['ctx_pct=7.00', 'ctx_limit=1000000']])
+  expect(feeds(runs).slice(before)).toEqual([['ctx_pct=7.00', 'ctx_limit=1000000', 'ctx_measure=1']])
 })
 
 test('no fill yet and no rate limits, or only the cost moved: no feed at all', async ($, on) => {
@@ -113,12 +113,12 @@ test('no fill yet and no rate limits, or only the cost moved: no feed at all', a
 test('session.start feeds the model at once; a /model lands within one poll, as the model alone', async ($, on) => {
   const { runs, model, clock } = engine(on)
   await $.session.start(START)
-  expect(feeds(runs)).toEqual([['model=Opus 5.5']])
+  expect(feeds(runs)).toEqual([['ctx_reset=load'], ['model=Opus 5.5']])
   await clock.advance(MODEL_POLL_MS * 3)
-  expect(feeds(runs).length).toBe(1)                       // unchanged: no re-feed
+  expect(feeds(runs).length).toBe(2)                       // unchanged: no re-feed
   model.id = 'claude-fable-5-1'
   await clock.advance(MODEL_POLL_MS)
-  expect(feeds(runs)).toEqual([['model=Opus 5.5'], ['model=Fable 5.1']])
+  expect(feeds(runs)).toEqual([['ctx_reset=load'], ['model=Opus 5.5'], ['model=Fable 5.1']])
 })
 
 test('turn.step feeds model + effort once per change; a subagent step is ignored; the stream passes', async ($, on) => {
@@ -130,6 +130,7 @@ test('turn.step feeds model + effort once per change; a subagent step is ignored
   await step($, { ...STEP, index: 3, effort: 'max' })
   await step($, { ...STEP, index: 4, model: 'claude-haiku-4-5-20251001', effort: undefined })
   expect(feeds(runs)).toEqual([
+    ['ctx_reset=load'],
     ['model=Opus 5.5'],                                        // session.start's poll
     ['model=Opus 5.5', 'effort=high'],
     ['model=Opus 5.5', 'effort=max'],
@@ -161,5 +162,19 @@ test('a real exit stops the model poll', async ($, on) => {
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 's', resume: { id: 's' } })
   model.id = 'claude-fable-5-1'
   await clock.advance(MODEL_POLL_MS * 2)
-  expect(feeds(runs)).toEqual([['model=Opus 5.5']])
+  expect(feeds(runs)).toEqual([['ctx_reset=load'], ['model=Opus 5.5']])
+})
+
+
+test('clear retires context without another start; quota-only measures cannot restore it', async ($, on) => {
+  const { runs } = engine(on)
+  await $.session.start(START)
+  const before = feeds(runs).length
+  await $.session.end({ reason: 'clear', sessionId: 's', resume: { id: 's' } })
+  await $.session.measure({ ...FULL, changed: ['rateLimits'] })
+  expect(feeds(runs).slice(before)).toEqual([
+    ['ctx_reset=clear'], measureFields(FULL).filter(f => !f.startsWith('ctx_')),
+  ])
+  await $.session.measure(FULL)
+  expect(feeds(runs).at(-1)).toEqual([...measureFields(FULL), 'ctx_measure=1'])
 })

@@ -161,7 +161,13 @@ export function registerUsage(on: On): void {
     if (!isOpen()) return next(e)
     if (e.changed.includes('context') || e.changed.includes('rateLimits')) {
       try {
-        await feed($, measureFields(e))
+        const fields = measureFields(e)
+        // A quota-only event still carries the previous context snapshot.
+        // It must neither learn a baseline nor end a boundary's placeholder.
+        const contextChanged = e.changed.includes('context')
+        const reading = contextChanged ? fields : fields.filter(f => !f.startsWith('ctx_'))
+        if (contextChanged && reading.some(f => f.startsWith('ctx_pct='))) reading.push('ctx_measure=1')
+        await feed($, reading)
       } catch {
         // A missed report leaves the last one standing; the next measurement writes.
       }

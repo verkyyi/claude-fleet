@@ -921,7 +921,7 @@ python3 "$HELPER" launcher "$BUNDLE" "$LAUNCH" || rollback 'cannot write the tar
 # The source agent's measurement-bus stamps go too — ALL of them (issue #3461:
 # @ctx_left / @ctx_ts / @ctx_src were left behind, so the top line read the old
 # agent's context % until the new one's first reading).
-for key in @origin @origin_fid @origin_wid @origin_gen @origin_retired @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @model @effort @handoff_armed @handoff_cleared_at; do
+for key in @origin @origin_fid @origin_wid @origin_gen @origin_retired @cc_account @subscription_identity @codex_identity @cc_model @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @ctx_est @ctx_sample @model @effort @handoff_armed @handoff_cleared_at; do
   TM set-option -wu -t "$WIN" "$key" 2>/dev/null || :
 done
 if { [ "$NOREPO" = 1 ] || [ -n "$QUOTA_LOOP_REPLACEMENT" ]; } && [ -n "$LOOP" ]; then TM set-option -wu -t "$WIN" @loop 2>/dev/null || :; fi
