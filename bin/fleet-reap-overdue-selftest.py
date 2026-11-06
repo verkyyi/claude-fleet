@@ -76,15 +76,15 @@ class Overdue(unittest.TestCase):
                           "@claude_state_ts": str(NOW - 600)}),
              win("@8", **{"@raw": "1", "@reap_policy": "keep", "@claude_state": "done", "@claude_state_ts": "1"})])
         self.assertEqual([(r["window"], r["agent"], r["stuck"]) for r in rows],
-                         [("@6", "codex", True), ("@5", "claude", False)])
-        self.assertEqual(rows[1]["reason"], "skip:no-resume scratch-5 REVIEW")
+                         [("@8", "claude", True), ("@6", "codex", True), ("@5", "claude", False)])
+        self.assertEqual(rows[2]["reason"], "skip:no-resume scratch-5 REVIEW")
 
-    def test_panels_and_norepo_never_count(self):
+    def test_long_done_norepo_counts_but_panels_never_do(self):
         rows = self.run_with([win("@9", **{"@norepo": "1", "@reap_policy": "done", "@claude_state": "done",
                                            "@claude_state_ts": "1"}),
                               win("@10", **{"@fleet_role": "home", "@reap_policy": "done", "@claude_state": "done",
                                             "@claude_state_ts": "1"})])
-        self.assertEqual(rows, [])
+        self.assertEqual([r["window"] for r in rows], ["@9"])
 
     def test_landed_ledger_is_read_as_utc(self):
         with tempfile.TemporaryDirectory() as d:

@@ -767,6 +767,7 @@ def _rewrite(span, new_text, note):
 HEAVY_RE_DEFAULT = (r"git\b(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+push\b"
                     r"|(?:python3?\s+-m\s+)?pytest\b"
                     r"|npm\s+(?:run\s+)?test\b"
+                    r"|(?:(?:npm\s+exec|npx|pnpm\s+(?:exec|dlx)|yarn\s+(?:exec|dlx))\s+(?:--\s+)?)?(?:\S*/)?(?:vitest|jest)\b"
                     r"|(?:(?:ba|z)?sh\s+)?(?:\S*/)?(?:run-selftests|local-prod-gate|pre-pr)\.sh\b")
 # LIGHT beats heavy (issue #1313): a test run aimed at one file / node / name
 # filter is seconds of work, and queuing it behind three multi-minute gates left

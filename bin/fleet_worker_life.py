@@ -153,6 +153,22 @@ class Worker:
         self.tm('set-option','-w','-t',self.window,name,str(value))
 
     def inspect(self):
+        # The launch already caches the native identity in @codex_identity.
+        # Reuse the ONE thread source reader directly: the transfer shell's git,
+        # repo and account preparation is irrelevant to a liveness read and can
+        # exceed its caller's entire deadline under load. Never cache idle.
+        if self.opt('@cc_agent') == 'codex':
+            from types import SimpleNamespace
+            worktree = self.opt('@worktree') or self.opt('pane_current_path')
+            args = SimpleNamespace(pane=self.pane, socket=self.session,
+                                   worktree=str(Path(worktree).resolve()), exact=True)
+            pid, sid, home, transcript, registry = TRANSFER['thread_source'](args)
+            data = CODEX['identity'](self.pane, self.session)
+            if data.get('session_id') != sid or data.get('owner') != pid:
+                raise ValueError('Codex binding changed during source read')
+            return dict(agent='codex', pid=int(pid), session_id=sid, home=home,
+                        transcript=transcript, registry=registry, worktree=args.worktree,
+                        codex_identity=data)
         return json.loads(run(['bash',BIN/'fleet-transfer.sh','--session',self.session,
                               '--window',self.pane,'--to','codex','--inspect'],timeout=30))
 
@@ -230,7 +246,7 @@ def codex_idle_turn(client, source):
     """
     sid = source['session_id']
     thread = client.call('thread/read', {'threadId': sid, 'includeTurns': True})['thread']
-    if thread.get('id') != sid or thread.get('status', {}).get('type') != 'idle':
+    if thread.get('id') != sid or thread.get('status', {}).get('type') not in ('idle', 'systemError'):
         raise ValueError('Codex is not natively idle')
     if (not thread.get('cwd') or not thread.get('path')
             or Path(thread['cwd']).resolve() != Path(source['worktree']).resolve()
@@ -242,6 +258,8 @@ def codex_idle_turn(client, source):
     if not turns or turns[-1].get('status') not in ('completed', 'interrupted', 'failed'):
         raise ValueError('no settled Codex turn')
     last = turns[-1]
+    if thread.get('status', {}).get('type') == 'systemError' and last.get('status') != 'failed':
+        raise ValueError('Codex is not natively idle: error has no settled failed turn')
     if any(item.get('status') not in (None, 'completed', 'failed', 'declined', 'interrupted')
            for item in last.get('items', [])):
         raise ValueError('Codex tool is still active or unknown')
@@ -393,7 +411,16 @@ def tool_shell(pid):
     except OSError:return False
 
 
-def child_busy(session,target,pid=0,reap=False):
+def child_busy(session, target, pid=0, reap=False):
+    for timeout in (2, 5):
+        try:
+            return _child_busy(session, target, pid, reap, timeout)
+        except (TimeoutError, subprocess.TimeoutExpired):
+            if timeout == 5:
+                raise
+
+
+def _child_busy(session,target,pid=0,reap=False,rpc_timeout=5):
     """The pids a worker's agent still owns beyond its MCP services (issue #864).
 
     A child whose turn ended while a run_in_background test or a PR-gate waiter
@@ -415,11 +442,11 @@ def child_busy(session,target,pid=0,reap=False):
     background=[]
     if source['agent']=='codex' and reap:
         binding=codex_busy_binding(w,source)
-        client=RPC(source['codex_identity']['remote'],timeout=5)
+        client=RPC(source['codex_identity']['remote'],timeout=rpc_timeout)
         try:
             turn=codex_idle_turn(client,source)
             if not turn.get('id'):raise ValueError('no settled Codex turn identity')
-            quiet_processes(source,config_home,background=background,strict=False,settled=True)
+            quiet_processes(source,config_home,background=background,strict=False,settled=True,rpc_timeout=rpc_timeout)
             # No cached idle or stale launch can waive the process gate. A turn
             # starting or a replacement session during classification vetoes.
             if codex_busy_binding(w,w.inspect())!=binding:

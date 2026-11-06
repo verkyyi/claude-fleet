@@ -5434,22 +5434,46 @@ _fleet_load_per_core() {
   awk -v l="$l" -v c="${c:-1}" 'BEGIN{ printf "%.2f", l / c }'
 }
 
+# A bounded correction for Darwin's waiting process/thread population. CPU busy
+# remains the primary gate; this only raises the emergency load ceiling, at most
+# threefold. Linux and missing population retain the configured hard ceiling.
+_fleet_load_hard_limit() {
+  awk -v cap="${1:-5}" -v p="${2:-0}" -v t="${3:-0}" -v c="${4:-0}" -v kernel="${5:-}" 'BEGIN {
+    factor=1; if (kernel == "Darwin" && c > 0 && p > 0 && t >= p) {
+      factor=1+(p+t)/(200*c); if (factor > 3) factor=3
+    }
+    printf "%.2f", cap*factor
+  }'
+}
+
+_fleet_load_population() {
+  local v c
+  # Fixture load readings must not mix with the real host population.
+  [ -z "${FLEET_LOAD_PROBE_CMD:-}" ] || return 0
+  if v=$(fleet_machine_reading load_population); then printf '%s' "$v"; return 0; fi
+  [ "$(uname -s)" = Darwin ] || return 0
+  c=$(sysctl -n hw.ncpu 2>/dev/null) || return 0
+  ps -A -M -o pid= 2>/dev/null | awk -v c="$c" '$1 ~ /^[0-9]+$/ { p[$1]=1; t++ }
+    END { for (i in p) n++; if (n && c > 0) printf "%d %d %d", n,t,c }'
+}
+
 # _fleet_pct <share 0..1> → "40%" (a busy share as the hold's words say it).
 _fleet_pct() { awk -v b="${1:-0}" 'BEGIN{ printf "%d%%", b * 100 + 0.5 }'; }
 
 # _fleet_cpu_busy → the machine's CPU busy share — user + system time over about
-# the last minute, 0..1, three decimals — or empty when it will not say (issue
+# a sampling interval, 0..1, three decimals — or empty when it will not say (issue
 # #4077). The same reading the node agent's beat carries as cpu_busy and the hub's
 # cpuVerdict judges first (#2882): macOS's load average counts every runnable and
 # uninterruptible-waiting process, so a machine of two hundred short-lived fleet
-# shells read 3.1/core on 15 cores while its CPU was 40 % busy. macOS: the sum of
-# `ps -A -o %cpu` (BSD's per-process decaying ~1-minute average) over the cores —
-# instant, no sampling; Linux: two /proc/stat reads FLEET_ADMIT_CPU_SAMPLE_SECS
+# shells read 3.1/core on 15 cores while its CPU was 40 % busy. macOS uses
+# iostat's CPU interval (discard the since-boot first sample), the same source
+# as the node heartbeat, rather than summing decayed per-process percentages.
+# Linux: two /proc/stat reads FLEET_ADMIT_CPU_SAMPLE_SECS
 # (0.5) apart. FLEET_CPU_BUSY_PROBE_CMD replaces the whole reading (a selftest
 # stub: `echo 0.40`; one that prints nothing = no reading); a FLEET_LOAD_PROBE_CMD
 # stub alone means no busy reading, so a load stub keeps the old rule.
 _fleet_cpu_busy() {
-  local b='' c secs
+  local b='' secs
   if [ -n "${FLEET_CPU_BUSY_PROBE_CMD:-}" ]; then
     b=$(sh -c "$FLEET_CPU_BUSY_PROBE_CMD" 2>/dev/null | awk 'NF{print $1; exit}')
   elif [ -n "${FLEET_LOAD_PROBE_CMD:-}" ]; then
@@ -5461,9 +5485,12 @@ _fleet_cpu_busy() {
     b=$({ awk '$1=="cpu"{print; exit}' /proc/stat; sleep "$secs"; awk '$1=="cpu"{print; exit}' /proc/stat; } 2>/dev/null \
         | awk '{ t=0; for (i=2; i<=9 && i<=NF; i++) t+=$i; tt[NR]=t; id[NR]=$5+$6 }
                END { if (NR < 2) exit; dt=tt[2]-tt[1]; if (dt <= 0) exit; printf "%.3f", 1 - (id[2]-id[1])/dt }')
-  elif command -v ps >/dev/null 2>&1; then
-    c=$({ sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null; } | head -1 | awk '{ n=$1+0; print (n>0 ? n : 1) }')
-    b=$(ps -A -o %cpu= 2>/dev/null | awk -v c="${c:-1}" '{ s+=$1 } END { if (NR) printf "%.3f", s / (100 * c) }')
+  elif [ "$(uname -s)" = Darwin ]; then
+    b=$(/usr/sbin/iostat -n0 -w1 -c2 2>/dev/null | awk '
+      NF == 6 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+        n++; idle=$3
+      }
+      END { if (n >= 2 && idle >= 0 && idle <= 100) printf "%.3f", 1-idle/100 }')
   fi
   case "$b" in ''|*[!0-9.]*) return 0 ;; esac
   awk -v b="$b" 'BEGIN{ if (b > 1) b = 1; printf "%.3f", b }'
@@ -8861,8 +8888,8 @@ EOF
   fi
   # With a CPU-busy reading it is the verdict, as the hub's cpuVerdict (issue
   # #4077): busy over FLEET_ADMIT_CPU_BUSY holds; the load only holds past the
-  # hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE (5/core — load 75 on 15 cores, where
-  # the run queue itself is the problem whatever the busy share). Without one,
+  # hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE (5/core base, up to 15/core
+  # with Darwin population correction). Without one,
   # load/core against FLEET_ADMIT_LOAD_PER_CORE, byte for byte the old rule.
   if [ -n "$busy" ]; then
     if awk -v b="$busy" -v m="$bmax" 'BEGIN{ exit !(m > 0 && b > m) }'; then
@@ -8870,9 +8897,17 @@ EOF
       cpu_why=$(printf 'machine cpu busy — 暂停开新：负载过高 (CPU busy %s over FLEET_ADMIT_CPU_BUSY=%s; load %s/core)' \
         "$(_fleet_pct "$busy")" "$bmax" "${per:-?}")
     elif [ -n "$per" ] && awk -v p="$per" -v m="$lhard" 'BEGIN{ exit !(m > 0 && p > m) }'; then
-      cpu_tag=$(printf '暂停开新：负载过高（负载 %s/核）' "$per")
-      cpu_why=$(printf 'machine load extreme — 暂停开新：负载过高 (load %s/core over the hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE=%s, CPU busy %s)' \
-        "$per" "$lhard" "$(_fleet_pct "$busy")")
+      local population processes threads popcores hard_base="$lhard"
+      population=$(_fleet_load_population)
+      read -r processes threads popcores <<EOF
+$population
+EOF
+      lhard=$(_fleet_load_hard_limit "$lhard" "${processes:-0}" "${threads:-0}" "${popcores:-0}" "$(uname -s)")
+      if awk -v p="$per" -v m="$lhard" 'BEGIN{ exit !(p > m) }'; then
+      cpu_tag=$(printf '暂停开新：负载过高（负载 %s/核，上限 %s）' "$per" "$lhard")
+      cpu_why=$(printf 'machine load extreme — 暂停开新：负载过高 (load %s/core over the hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE=%s, CPU busy %s; base %s, processes %s, threads %s)' \
+        "$per" "$lhard" "$(_fleet_pct "$busy")" "$hard_base" "${processes:-?}" "${threads:-?}")
+      fi
     fi
   elif [ -n "$per" ] && awk -v p="$per" -v m="$lmax" 'BEGIN{ exit !(m > 0 && p > m) }'; then
     cpu_tag=$(printf '暂停开新：负载过高（负载 %s/核）' "$per")
@@ -10442,7 +10477,7 @@ FLEET_HEAVY_SLOTS_DEFAULT=3
 # shellcheck disable=SC2034
 FLEET_HEAVY_WAIT_DEFAULT=1800
 # shellcheck disable=SC2034
-FLEET_HEAVY_RE_DEFAULT='git\b(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+push\b|(?:python3?\s+-m\s+)?pytest\b|npm\s+(?:run\s+)?test\b|(?:(?:ba|z)?sh\s+)?(?:\S*/)?(?:run-selftests|local-prod-gate|pre-pr)\.sh\b'
+FLEET_HEAVY_RE_DEFAULT='git\b(?:\s+(?:-[Cc]\s+\S+|-\S+))*\s+push\b|(?:python3?\s+-m\s+)?pytest\b|npm\s+(?:run\s+)?test\b|(?:(?:npm\s+exec|npx|pnpm\s+(?:exec|dlx)|yarn\s+(?:exec|dlx))\s+(?:--\s+)?)?(?:\S*/)?(?:vitest|jest)\b|(?:(?:ba|z)?sh\s+)?(?:\S*/)?(?:run-selftests|local-prod-gate|pre-pr)\.sh\b'
 # Matched BEFORE the heavy regex (issue #1313): a hit is a LIGHT test run — one
 # file, one node (::), a -k / -t name filter, run-selftests.sh <name> — and is
 # never queued. Still heavy: bare pytest, any xdist fan-out (-n/--dist/-p xdist),

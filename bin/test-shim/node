@@ -1,0 +1,21 @@
+#!/bin/bash
+# Bound package-script test runners too: npm/npx/pnpm/yarn eventually start node.
+# Keep the shim on the child's PATH; locate the real node on a filtered PATH.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+clean=''
+IFS=: read -r -a entries <<< "$PATH"
+for entry in "${entries[@]}"; do
+  # A resumed session may inherit a previous release's shim too. Remove all
+  # fleet test-shim entries or the two wrappers would resolve each other.
+  case "${entry%/}" in
+    "$HERE"|*/bin/test-shim) ;;
+    *) clean="${clean:+$clean:}$entry" ;;
+  esac
+done
+real=$(PATH="$clean" command -v node) || exit 127
+case "${1:-}" in
+  */vitest/vitest.mjs|*/vitest/vitest.js|*/jest/bin/jest.js|*/jest-cli/bin/jest.js|*/.bin/vitest|*/.bin/jest)
+    exec python3 "$HERE/../fleet-test-runner.py" "$real" "$@" ;;
+esac
+exec "$real" "$@"
