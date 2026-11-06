@@ -8,16 +8,22 @@ import sys
 def bounded(argv):
     # Enforce the fleet's two-worker budget even when a repository requests all
     # cores. Preserve smaller explicit limits; percentages are capped as well.
-    result, maximum, minimum = [], 2, 1
-    i = 0
+    result, maximum, minimum = argv[:2], 2, 1
+    i = 2
+    tail = []
     while i < len(argv):
         arg = argv[i]
+        if arg == '--':
+            tail = argv[i:]
+            break
         key, _, value = arg.partition('=')
-        if key in ('--maxWorkers', '--minWorkers', '--maxThreads', '--minThreads', '-w'):
+        if arg.startswith('-w') and arg[2:].isdigit():
+            key, value = '-w', arg[2:]
+        if key in ('--maxWorkers', '--minWorkers', '--maxThreads', '--minThreads', '--max-workers', '--min-workers', '-w'):
             if not value and i + 1 < len(argv):
                 i += 1
                 value = argv[i]
-            if key in ('--maxWorkers', '--maxThreads', '-w') and value.isdigit():
+            if key in ('--maxWorkers', '--maxThreads', '--max-workers', '-w') and value.isdigit():
                 maximum = min(maximum, max(1, int(value)))
         else:
             result.append(arg)
@@ -27,7 +33,7 @@ def bounded(argv):
         result.append('--maxWorkers=%d' % maximum)
         if 'vitest' in argv[1]:
             result.append('--minWorkers=%d' % min(minimum, maximum))
-    return result
+    return result + tail
 
 
 def main():

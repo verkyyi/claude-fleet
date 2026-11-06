@@ -6,7 +6,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 clean=''
 IFS=: read -r -a entries <<< "$PATH"
 for entry in "${entries[@]}"; do
-  [ "$entry" = "$HERE" ] || clean="${clean:+$clean:}$entry"
+  # A resumed session may inherit a previous release's shim too. Remove all
+  # fleet test-shim entries or the two wrappers would resolve each other.
+  case "${entry%/}" in
+    "$HERE"|*/bin/test-shim) ;;
+    *) clean="${clean:+$clean:}$entry" ;;
+  esac
 done
 real=$(PATH="$clean" command -v node) || exit 127
 case "${1:-}" in

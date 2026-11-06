@@ -68,9 +68,12 @@ fleet_machine_admit --short
             node = Path(d)/'node'
             node.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
             node.chmod(0o755)
-            env = dict(os.environ, PATH=str(BIN/'test-shim')+':'+d+':/usr/bin:/bin', FLEET_HEAVY='0', FLEET_SKIP_GLOBAL_CONF='1')
+            previous = Path(d)/'previous/bin/test-shim'
+            previous.mkdir(parents=True)
+            (previous/'node').symlink_to(BIN/'test-shim/node')
+            env = dict(os.environ, PATH=str(BIN/'test-shim')+':'+str(previous)+':'+d+':/usr/bin:/bin', FLEET_HEAVY='0', FLEET_SKIP_GLOBAL_CONF='1')
             p = subprocess.run([str(BIN/'test-shim/node'), '/repo/node_modules/vitest/vitest.mjs', 'run', '--maxWorkers=32'],
-                               env=env, capture_output=True, text=True)
+                               env=env, capture_output=True, text=True, timeout=5)
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn('--maxWorkers=2', p.stdout)
             self.assertNotIn('--maxWorkers=32', p.stdout)
@@ -108,6 +111,10 @@ fleet_machine_admit --short
         serial = bounded(['node', '/jest/bin/jest.js', '--runInBand'])
         self.assertNotIn('--maxWorkers=2', serial)
         self.assertIn('--maxWorkers=2', bounded(['node', '/jest/bin/jest.js', '--maxWorkers=100%']))
+        self.assertIn('--maxWorkers=1', bounded(['node', '/jest/bin/jest.js', '-w1']))
+        after = bounded(['node', '/jest/bin/jest.js', '--', '--maxWorkers=32'])
+        self.assertLess(after.index('--maxWorkers=2'), after.index('--'))
+        self.assertEqual(after[-1], '--maxWorkers=32')
 
     def test_unknown_probe_and_draft_never_authorize_park(self):
         import fleet_session_gate as gate
