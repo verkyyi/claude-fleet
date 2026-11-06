@@ -48,6 +48,20 @@ class LaunchTests(unittest.TestCase):
             result = subprocess.run([tmux, '-S', sock, '-N', 'new-session', '-d'], capture_output=True)
             self.assertNotEqual(result.returncode, 0)
 
+    def test_shim_resolution_keeps_the_managed_symlink(self):
+        with tempfile.TemporaryDirectory(prefix='fleet-gui-tool.') as d:
+            root = Path(d)
+            shim = root / 'tmux-shim'
+            stable = root / 'stable-bin'
+            shim.mkdir(); stable.mkdir()
+            binary = root / 'version-tmux'
+            binary.write_text('#!/bin/sh\nexit 0\n')
+            binary.chmod(0o755)
+            (shim / 'tmux').symlink_to(binary)
+            (stable / 'tmux').symlink_to(binary)
+            with patch.dict(os.environ, {'PATH': str(shim)+os.pathsep+str(stable)}):
+                self.assertEqual(m.real_tmux(), str(stable / 'tmux'))
+
     def test_existing_server_is_never_restarted(self):
         with patch.object(m, 'alive', return_value=True), patch.object(m, 'run') as run:
             m.ensure('isolated', '/dev/null')

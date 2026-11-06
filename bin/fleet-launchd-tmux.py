@@ -39,7 +39,8 @@ def real_tmux():
     for directory in os.environ.get('PATH', '').split(os.pathsep):
         p = Path(directory) / 'tmux'
         if p.parent.name != 'tmux-shim' and p.is_file() and os.access(p, os.X_OK):
-            return str(p.resolve())
+            # Keep managed symlinks: resolving pins a version the updater prunes.
+            return os.path.abspath(p)
     raise RuntimeError('tmux executable not found')
 
 
