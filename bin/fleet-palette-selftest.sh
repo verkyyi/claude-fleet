@@ -85,7 +85,12 @@ source-file -F '#{d:current_file}/tmux-bar.conf'" "$(cat "$WORK/conf/main.conf")
   eq "C: status-style is the palette's bg/fg" "bg=$PAL_BG,fg=$PAL_FG" "$(tm show-options -gv status-style)"
   eq "C: status-interval 60 — nothing on it changes (issue #1714)" 60 "$(tm show-options -gv status-interval)"
   hasnt "C: no PAL_* in the environment a pane inherits (%hidden)" 'PAL_' "$(tm show-environment -g)"
-  eq "C: status-right is empty on a node — no job (issue #1714)" '' "$(tm show-options -gv status-right)"
+  hasnt "C: domain warning reads a stamp — no status job" '#(' "$(tm show-options -gv status-right)"
+  hasnt "C: healthy/unstamped node has no domain warning" 'launchd:' "$(tm display-message -p '#{E:status-right}')"
+  tm set-option -g @launchd_warning 'launchd: Background'
+  has "C: abnormal domain is visible on a node" 'launchd: Background' "$(tm display-message -p '#{E:status-right}')"
+  tm set-option -g @launchd_warning ''
+  hasnt "C: recovered domain clears the warning" 'launchd:' "$(tm display-message -p '#{E:status-right}')"
   tm kill-server 2>/dev/null
 else
   printf 'fleet-palette-selftest: no tmux — leg C skipped\n' >&2

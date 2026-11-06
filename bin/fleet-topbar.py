@@ -506,7 +506,7 @@ def render_node(kv, cols):
         warning = subprocess.run(["tmux", "-S", kv["sock"], "show-options", "-gqv", "@launchd_warning"],
                                  capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
         if warning:
-            print("#[fg=%s,bold]%s#[default]" % (WARN, tmux_text(clip(warning + " · 需迁移到 Aqua", cols))))
+            print("#[fg=%s,bold]%s#[default]" % (WARN, tmux_text(clip(warning + " · " + say("topbar_launchd_migrate"), cols))))
             return 0
     upload = render_upload(kv, cols)
     if upload is not None:
