@@ -187,7 +187,8 @@ def main():
             }
             version = subprocess.check_output([binary, '--version'], env=environment,
                                                text=True, timeout=10).strip()
-            check(version == '2.1.295 (Claude Code)', 'probe is pinned to verified Claude 2.1.295')
+            pinned = json.loads((Path(__file__).resolve().parent.parent / 'release.json').read_text())['components']['claude']['version']
+            check(version == f'{pinned} (Claude Code)', f'probe is pinned to the release Claude {pinned}')
             socket = root / 'tmux.sock'
 
             def tm(*argv):
