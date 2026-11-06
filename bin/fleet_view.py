@@ -2100,7 +2100,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
              "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
-             "today": today, "act": act, "list_scope": fleet, "source_order": len(seen),
+             "today": today, "ctx": f[18], "act": act, "list_scope": fleet, "source_order": len(seen),
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
@@ -3446,6 +3446,16 @@ def name_col(width):
     return TEXT_X
 
 
+def context_word(cell):
+    """Inventory's context cell; estimates stay explicit in the panel too."""
+    left, band = ((cell or "").split("|") + ["", ""])[:2]
+    if band == "reset":
+        return say("view_ctx_reset")
+    if left.isdigit() and 0 <= int(left) <= 100:
+        return say("view_ctx_left_fmt", ("≈" if band == "est" else "") + left + "%")
+    return ""
+
+
 def row_segs(e, width, cells, clip, lit=False, glyph=True):
     """One status slot · the title column (tree prefix · twisty slot · title,
     the flexible one) · Agent(7) · last activity(5) · repo(13).
@@ -3478,7 +3488,8 @@ def row_segs(e, width, cells, clip, lit=False, glyph=True):
     times = " ×%d" % e["dup_n"] if not flat and (e.get("dup_n") or 0) > 1 else ""
     archived = " " + say("view_archived_label") if e.get("archived") else ""
     # a schedule's row: its last ended run, ✓ / ✗ and when (HH:MM today, MM-DD before)
-    tail = ("  " + e["sched_tail"]) if e.get("sched_tail") else ""
+    tail_word = e.get("sched_tail") or context_word(e.get("ctx"))
+    tail = "  " + tail_word if tail_word else ""
     # a pinned row (never a child under it): ⇡ after its title, (N) and ×N
     pinned = " " + cmd_icons()["pin"] if e.get("group") == "pin" and not e.get("tree_up") else ""
     if cells(more) > avail - 2:

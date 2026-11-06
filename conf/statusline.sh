@@ -106,7 +106,15 @@
 # name and the task bar show both), so this never runs git.
 # Requires: jq on the Claude path (silently exits if absent); none on the mod's.
 
-FROM='' RLTS='' OWNER='' THREAD=''
+# Boundary protocol: ctx_reset=clear|startup|compact|resume|load retires @ctx_pct,
+# stamps @ctx_est=1, @ctx_band=ok and @ctx_ts now. @ctx_left is the baseline's
+# remaining %, or absent. Readers project @ctx_est into the existing wire band
+# as est/reset only while @ctx_pct is absent (an old pinned writer retires
+# the placeholder by writing a real @ctx_pct; no cache column changes). ctx_measure=1 is a real context event;
+# it replaces the placeholder. @ctx_sample arms ONE clear/startup first reading.
+FROM='' RLTS='' OWNER='' THREAD='' CTX_RESET='' CTX_MEASURE=''
+SL_HERE="${BASH_SOURCE[0]%/*}"
+[[ "$SL_HERE" == "${BASH_SOURCE[0]}" ]] && SL_HERE=.
 if [[ "${1:-}" == --from ]]; then FROM="${2:-}"; shift 2; fi
 
 US=$'\x1f'   # field separator — never whitespace, so `read` keeps EMPTY fields
@@ -117,6 +125,8 @@ if [[ "$FROM" == mod || "$FROM" == proxy || "$FROM" == codex ]]; then
   CTX_PCT='' CTX_SIZE='' MODEL='' EFFORT='' RL5='-' RL7='-' RLR5='-' RLR7='-' RLTS=''
   for kv in "$@"; do
     case "$kv" in
+      ctx_reset=*) CTX_RESET=${kv#*=} ;;
+      ctx_measure=*) CTX_MEASURE=${kv#*=} ;;
       ctx_pct=*|pct=*)     CTX_PCT=${kv#*=} ;;
       ctx_limit=*|limit=*) CTX_SIZE=${kv#*=} ;;
       model=*)     MODEL=${kv#*=} ;;
@@ -131,7 +141,7 @@ if [[ "$FROM" == mod || "$FROM" == proxy || "$FROM" == codex ]]; then
     esac
   done
   # the proxy feeds quota only: whatever else it might say is not its to say
-  [[ "$FROM" == proxy ]] && { CTX_PCT=''; MODEL=''; }
+  [[ "$FROM" == proxy ]] && { CTX_PCT=''; MODEL=''; CTX_RESET=''; CTX_MEASURE=''; }
   # The jq path floors a decimal %; floor the mod's the same way.
   [[ "$RL5" =~ ^[0-9]+\.[0-9]+$ ]] && RL5=${RL5%%.*}
   [[ "$RL7" =~ ^[0-9]+\.[0-9]+$ ]] && RL7=${RL7%%.*}
@@ -221,15 +231,17 @@ fi
 
 # ── one read of what is on the bus now; queue only what differs ─────────────
 # The quota writer + time lead as two space-separated words (`-` = unset): an
-# older tmux prints a control character as `_` to a client it does not take for
-# UTF-8, so the proxy-wins rule below must not hang on the \x1f split.
-CUR=$(tmux display-message -p -t "$TMUX_PANE" \
-        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}${US}#{@ctx_left}${US}#{@ctx_ts}" 2>/dev/null)
+# older tmux escapes control characters even for UTF-8 clients. Use printable
+# separators and q-escaped model/effort; the stdin JSON split above stays local.
+CUR=$(tmux -u display-message -p -t "$TMUX_PANE" \
+        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}|#{@ctx_limit}|#{@ctx_band}|#{q:@model}|#{q:@effort}|#{@ctx_src}|#{@ctx_left}|#{@ctx_ts}|#{@ctx_est}|#{@ctx_sample}|#{@mod_alive}" 2>/dev/null)
 cur_rlsrc='' cur_rlts=''
 if [[ "$CUR" =~ ^([^ ]+)\ ([^ ]+)\ (.*)$ ]]; then
   cur_rlsrc=${BASH_REMATCH[1]}; cur_rlts=${BASH_REMATCH[2]}; CUR=${BASH_REMATCH[3]}
 fi
-IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_left cur_ts <<< "$CUR"
+# tmux q: backslash escapes protect literal pipes/spaces in model names.
+# shellcheck disable=SC2162
+IFS='|' read cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_left cur_ts cur_est cur_sample cur_mod_alive <<< "$CUR"
 
 # The proxy's quota reading wins while it is fresh (issue #1978): a status-line
 # render or a mod measure then leaves the @rl* set as the proxy stamped it.
@@ -247,7 +259,37 @@ stamp() {
   if [[ -n "$2" ]]; then ARGS+=(set-window-option -t "$TMUX_PANE" "$1" "$2")
   else                   ARGS+=(set-window-option -u -t "$TMUX_PANE" "$1"); fi
 }
+# With no live mod, Claude's ordinary statusLine remains the real-reading
+# fallback. A live mod owns context, so a redraw of its OLD snapshot is ignored.
+mod_fresh=0
+if [[ "$cur_mod_alive" =~ ^[0-9]+$ ]] && (( $(date +%s) - cur_mod_alive <= 45 )); then mod_fresh=1; fi
+# Pending estimates are display-only: @ctx_pct stays absent and @ctx_band ok.
+# Old statusLine redraws and quota-only measures cannot resurrect the old value.
+# ctx_sample is armed only by clear/startup, never compact/resume (which retain history).
+if [[ -n "$CTX_RESET" || ( "$cur_est" == 1 && -z "$cur_pct" && -n "$MODEL" && "$MODEL" != "$cur_model" ) ]]; then
+  baseline=$(python3 "$SL_HERE/../bin/fleet-ctx-baseline.py" "${MODEL:-$cur_model}" 2>/dev/null)
+  left=''; [[ "$baseline" =~ ^[0-9]+$ ]] && left=$((100 - baseline))
+  stamp @ctx_pct '' "$cur_pct"
+  stamp @ctx_left "$left" "$cur_left"
+  stamp @ctx_band ok "$cur_band"
+  stamp @ctx_est 1 "$cur_est"
+  sample=$cur_sample
+  case "$CTX_RESET" in clear|startup) sample=1 ;; compact|resume) sample='' ;; esac
+  stamp @ctx_sample "$sample" "$cur_sample"
+  stamp @ctx_ts "$(date +%s)" "$cur_ts"
+  # A warning from the previous context is no longer evidence.
+  [[ ${#ARGS[@]} -gt 0 ]] && ARGS+=(\;)
+  ARGS+=(set-window-option -u -t "$TMUX_PANE" @ctx_warn)
+  want_pct=''
+elif [[ "$cur_est" == 1 && -z "$cur_pct" && "$CTX_MEASURE" != 1 && ( -n "$FROM" || "$mod_fresh" == 1 ) ]]; then
+  want_pct=''
+fi
 if [[ -n "$want_pct" ]]; then
+  if [[ "$CTX_MEASURE" == 1 && "$cur_sample" == 1 ]]; then
+    python3 "$SL_HERE/../bin/fleet-ctx-baseline.py" "${MODEL:-$cur_model}" "$want_pct" >/dev/null 2>&1
+  fi
+  stamp @ctx_est '' "$cur_est"
+  [[ "$CTX_MEASURE" == 1 || "$FROM" == codex ]] && stamp @ctx_sample '' "$cur_sample"
   stamp @ctx_pct  "$want_pct"  "$cur_pct"
   [[ -n "$want_limit" ]] && stamp @ctx_limit "$want_limit" "$cur_limit"
   stamp @ctx_band "$want_band" "$cur_band"

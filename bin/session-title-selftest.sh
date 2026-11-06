@@ -261,6 +261,10 @@ assert "detail" not in x, x
 full = base + tail + ["title=t", "reap=", "detail=", "role=", "epic=", "epicstale=", "backfill="]
 p, x = inventory_row(full + ["ctxleft=62", "ctxband=ok", "ctxts=1800000000", "model=Opus 5.5", "effort=high"])
 assert (x["ctx_left"], x["ctx_band"], x["ctx_ts"], x["model"], x["effort"], x["title"]) == (62, "ok", 1800000000, "Opus 5.5", "high", "t"), x
+for band, left in (("est", "10"), ("reset", "")):
+    p, x = inventory_row(full + ["ctxleft=" + left, "ctxband=" + band, "ctxts=1800000000", "model=", "effort="])
+    assert x["ctx_band"] == band, x
+    assert x.get("ctx_left") == (10 if left else None), x
 p, x = inventory_row(full + ["ctxleft=", "ctxband=bad", "ctxts=x", "model=a;b", "effort="])
 assert not any(k in x for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort")) and x["title"] == "t", x
 p0, x0 = inventory_row(full)

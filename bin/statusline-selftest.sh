@@ -65,6 +65,7 @@ cp "$SL" "$WORK/inst/conf/statusline.sh"
 TMUXLOG="$WORK/tmux.log"; GITLOG="$WORK/git.log"; ERR="$WORK/err"
 cat > "$WORK/stub/tmux" <<STUB
 #!/bin/sh
+[ "\${1:-}" != "-u" ] || shift
 if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
 case "\${1:-}" in
   display-message)   printf '%s\n' "\${FAKE_CUR:-}" ;;
@@ -75,7 +76,7 @@ STUB
 printf '#!/bin/sh\necho "git \$*" >> "%s"\nexit 99\n' "$GITLOG" > "$WORK/stub/git"
 chmod +x "$WORK/stub/tmux" "$WORK/stub/git"
 
-US=$(printf '\037')
+US='|'
 PANE='TMUX=/private/tmp/tmux-501/fleet-x,123,0 TMUX_PANE=%1'
 # render [VAR=val …] — the sandboxed status line in a fleet-x pane, payload on stdin.
 render() {

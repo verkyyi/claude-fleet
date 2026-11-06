@@ -447,7 +447,7 @@ def inventory_row(parts):
         ef, md, ts, bd, lf = (parts.pop().split("=", 1)[1] for _ in range(5))
         if re.fullmatch(r"[0-9]{1,3}", lf):
             extra["ctx_left"] = int(lf)
-        if bd in ("ok", "watch", "handoff"):
+        if bd in ("ok", "watch", "handoff", "est", "reset"):
             extra["ctx_band"] = bd
         if re.fullmatch(r"[0-9]{9,11}", ts):
             extra["ctx_ts"] = int(ts)

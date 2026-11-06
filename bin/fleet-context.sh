@@ -136,12 +136,14 @@ fi
 # statusline is not the stamping one" — only the second is a dead bus (#477).
 in_tmux=0
 [ -n "${TMUX:-}" ] && [ -n "$pane" ] && in_tmux=1
-stamp="" stamp_limit=""
+stamp="" stamp_limit="" estimated=""
 if [ "$in_tmux" = 1 ]; then
   stamp=$(tmux display-message -p -t "$pane" '#{@ctx_pct}' 2>/dev/null)
+  estimated=$(tmux display-message -p -t "$pane" '#{@ctx_est}' 2>/dev/null)
   stamp_limit=$(tmux display-message -p -t "$pane" '#{@ctx_limit}' 2>/dev/null)
 fi
 case "$stamp" in ''|*[!0-9]*) stamp="" ;; esac
+[ -z "$stamp" ] || estimated=""  # an old pinned writer has supplied a new real reading
 case "$stamp_limit" in ''|*[!0-9]*) stamp_limit="" ;; esac
 [ -n "$stamp_limit" ] && [ "$stamp_limit" -le 0 ] && stamp_limit=""
 
@@ -149,6 +151,7 @@ case "$stamp_limit" in ''|*[!0-9]*) stamp_limit="" ;; esac
 # ARE in a pane and it does not — the silent failure that also switches off the
 # auto-handoff nudge; `n/a` outside tmux, where there is nothing to expect.
 if   [ "$in_tmux" != 1 ]; then bus="n/a"
+elif [ "$estimated" = 1 ]; then bus="pending"
 elif [ -n "$stamp" ];     then bus="ok"
 else                           bus="unstamped"
 fi
@@ -164,7 +167,7 @@ fi
 # (session spend) and the max (the pre-compact peak). `fromjson?` skips a torn
 # final line — the file is being appended to while we read it.
 live=0 turns=0 out_total=0 peak=0
-if [ -n "$tpath" ] && [ -f "$tpath" ]; then
+if [ "$estimated" != 1 ] && [ -n "$tpath" ] && [ -f "$tpath" ]; then
   if ! command -v jq >/dev/null 2>&1; then
     [ -n "$stamp" ] || { printf 'fleet-context: jq not on PATH and no @ctx_pct stamp — nothing to read\n' >&2; exit 2; }
   else
@@ -200,7 +203,8 @@ fi
 # --- resolve ONE percentage + say which source it came from -------------------
 derived=-1
 [ "$live" -gt 0 ] && derived=$(( (live * 100 + LIMIT / 2) / LIMIT ))
-if [ -n "$stamp" ]; then pct="$stamp"; src="statusline"
+if [ "$estimated" = 1 ]; then pct=-1; src="pending"
+elif [ -n "$stamp" ]; then pct="$stamp"; src="statusline"
 elif [ "$derived" -ge 0 ];  then pct="$derived"; src="transcript"
 else pct=-1; src="none"
 fi
@@ -226,7 +230,8 @@ if [ "$thr" -gt 0 ]; then
 else
   hand=80; warn=50                       # conf/statusline.sh's own red/yellow bands
 fi
-if   [ "$pct" -lt 0 ];        then verdict="UNKNOWN"; why="no @ctx_pct stamp and no usage record yet"
+if   [ "$estimated" = 1 ]; then verdict="UNKNOWN"; why="awaiting the first context measurement after a session boundary"
+elif [ "$pct" -lt 0 ];        then verdict="UNKNOWN"; why="no @ctx_pct stamp and no usage record yet"
 elif [ "$pct" -ge "$hand" ];  then verdict="HANDOFF"; why="at/over ${hand}% — run /fleet-handoff now, before the window forces a compaction"
 elif [ "$pct" -ge "$warn" ];  then verdict="WATCH";   why="past ${warn}% — finish this thread, then /fleet-handoff rather than starting a broad sweep"
 else                               verdict="OK";      why="under ${warn}% — carry on"

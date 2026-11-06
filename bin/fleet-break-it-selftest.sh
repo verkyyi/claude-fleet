@@ -8612,6 +8612,14 @@ drill_release_oidc_runtime() {
   SECS=$(since "$t0")
 }
 
+drill_ctx_reset() {
+  local t0; t0=$(now); CAP=60
+  python3 "$BIN/ctx-reset-selftest.py" >"$WORK/ctx-reset.log" 2>&1 || {
+    WHY="context reset regression: $(tail -60 "$WORK/ctx-reset.log")"; return 1;
+  }
+  SECS=$(since "$t0"); WHAT='clear/compact/resume retire stale context; baseline stays advisory until measured'
+}
+
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill

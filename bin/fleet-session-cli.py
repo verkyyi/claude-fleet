@@ -409,8 +409,8 @@ def bus_local(keys):
     sess = os.environ.get("FLEET_SESSION", "")
     if not keys or not sess:
         return {}
-    fmt = ("#{window_id}\t#{@cc_agent}\t#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}"
-           "\t#{@ctx_band}\t#{@ctx_ts}\t#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t#{@effort}"
+    fmt = ("#{window_id}\t#{@cc_agent}\t#{?#{!=:#{@ctx_left},},#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}"
+           "\t#{?#{&&:#{@ctx_est},#{==:#{@ctx_pct},}},#{?#{!=:#{@ctx_left},},est,reset},#{@ctx_band}}\t#{@ctx_ts}\t#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}\t#{@effort}"
            "\t#{?#{==:#{@test_identity},1},1,}"
            "\t#{?#{==:#{@claude_state},needs},#{@claude_needs},}\t#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}")
     try:
@@ -479,10 +479,13 @@ def ask_text(r, short=False):
 
 def left_cell(r, colour):
     """剩余: `62%`, `47% (8 分钟前)` when stale; — when the node never said."""
+    if r.get("band") == "reset":
+        return "\x1b[90m已清空\x1b[0m" if colour else "已清空"
+    estimated = r.get("band") == "est"
     left = r.get("left", "")
     if not re.fullmatch(r"[0-9]{1,3}", left or ""):
         return "—"
-    text = left + "%"
+    text = ("≈" if estimated else "") + left + "%"
     age = now() - int(r["ts"]) if re.fullmatch(r"[0-9]+", r.get("ts") or "") else -1
     stale = age >= STALE_SECS
     if stale:
@@ -490,7 +493,7 @@ def left_cell(r, colour):
     if not colour:
         return text
     n = int(left)
-    code = "90" if stale else "31" if r.get("band") == "handoff" or n < 20 else "33" if n <= 50 else "32"
+    code = "90" if stale or estimated else "31" if r.get("band") == "handoff" or n < 20 else "33" if n <= 50 else "32"
     return "\x1b[%sm%s\x1b[0m" % (code, text)
 
 

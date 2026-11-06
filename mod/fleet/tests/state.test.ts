@@ -36,7 +36,7 @@ function engine(on: On, version: string = SUPPORTED.min, env: Record<string, str
 /** The fleet-script calls only (the heartbeat's own tmux writes left out). */
 function writes(runs: Run[]): string[] {
   return runs
-    .filter(r => r.argv[0] !== 'tmux')
+    .filter(r => r.argv[0] !== 'tmux' && !r.argv[1]?.endsWith('/conf/statusline.sh'))
     .map(r => {
       const script = (r.argv[1] ?? '').split('/').pop()
       return [script, ...r.argv.slice(2)].join(' ')

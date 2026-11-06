@@ -897,7 +897,7 @@ def ctx_of(w):
     validated; None when the node sent none (an older node: `fleet ls` says —)."""
     lf, bd, ts, md, ef = (w.get(k) for k in ("ctx_left", "ctx_band", "ctx_ts", "model", "effort"))
     out = (str(lf) if isinstance(lf, int) and not isinstance(lf, bool) and 0 <= lf <= 100 else "",
-           bd if bd in ("ok", "watch", "handoff") else "",
+           bd if bd in ("ok", "watch", "handoff", "est", "reset") else "",
            str(ts) if isinstance(ts, int) and not isinstance(ts, bool) and ts > 0 else "",
            md if isinstance(md, str) and re.fullmatch(r"[A-Za-z0-9 ._()+-]{1,64}", md) else "",
            ef if isinstance(ef, str) and re.fullmatch(r"[a-z]{1,16}", ef) else "")

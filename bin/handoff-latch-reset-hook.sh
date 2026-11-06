@@ -65,6 +65,13 @@ else
     | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' | head -n1)
 fi
 
+# Retire every old context field through the shared writer, including compact and
+# resume. This existing hook also reaches sessions launched with older hook tables.
+case "$src" in clear|startup|compact|resume)
+  _ctx_bus="$(dirname "$0")/../conf/statusline.sh"
+  [ ! -f "$_ctx_bus" ] || bash "$_ctx_bus" --from mod "ctx_reset=$src" >/dev/null 2>&1 ;;
+esac
+
 # 3. Record WHICH session this pane now holds (issue #1296): crash-restore resumes
 #    @cc_session_id rather than the newest transcript in the worktree, which a
 #    helper `claude -p` run from that worktree can be. Every source counts — a

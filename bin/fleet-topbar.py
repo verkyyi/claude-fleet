@@ -114,14 +114,17 @@ def ctx_parts(rec, cols, now):
     what is left (>50 green, 20–50 amber, <20 red; the handoff band adds ⚠), the
     whole of it grey with 「· N 分钟前」 once the reading is 5 minutes old. No
     ctx_left (nothing measured, an older node) ⇒ no parts."""
+    band = rec.get("ctx_band")
+    if band == "reset":
+        return [(say("topbar_ctx_reset"), DIM, "")]
+    estimated = band == "est"
     left = rec.get("ctx_left")
     if not isinstance(left, int) or isinstance(left, bool):
         return []
     ts = rec.get("ctx_ts")
     old = isinstance(ts, int) and not isinstance(ts, bool) and ts > 0 and now - ts >= 300
-    band = rec.get("ctx_band")
-    pcol = DIM if old else BAD if band == "handoff" or left < 20 else WARN if left <= 50 else OK
-    pct = "%d%%" % left
+    pcol = DIM if old or estimated else BAD if band == "handoff" or left < 20 else WARN if left <= 50 else OK
+    pct = ("≈" if estimated else "") + "%d%%" % left
     pct = (say("topbar_left_fmt", pct) if cols >= WIDE else pct) + (" ⚠" if band == "handoff" else "")
     out = [(pct, pcol, "")]
     model, effort = rec.get("model") or "", rec.get("effort") or ""
@@ -132,7 +135,7 @@ def ctx_parts(rec, cols, now):
     if old and cols >= MID:
         tail += " · " + say("topbar_ago_fmt", (now - ts) // 60)
     if tail:
-        out.append((tail, DIM if old else FG, ""))
+        out.append((tail, DIM if old or estimated else FG, ""))
     return out
 
 
@@ -290,7 +293,7 @@ US = "\x1f"
 NODE_FMT = "|".join(["#{@fleet_id}", "#{@peer_cur}", "#{@peer_node}", "#{@peer_login}",
                      # parked (task EQBE): the park page draws no row of its own
                      "#{?#{&&:#{@parked},#{@park_held}},#{?@park_waking,waking,parked},#{@claude_state}}", "#{@claude_needs}", "#{@issue}", "#{@ctx_left}",
-                     "#{@ctx_band}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
+                     "#{?#{&&:#{@ctx_est},#{==:#{@ctx_pct},}},#{?#{!=:#{@ctx_left},},est,reset},#{@ctx_band}}", "#{@ctx_ts}", "#{@model}", "#{@effort}", "#{@fleet_role}",
                      "#{window_name}", "#{@task}"])
 TASK_RE = re.compile(r"T[1-9][0-9]{0,17}")
 
@@ -359,7 +362,7 @@ def stamp_ctx(p):
     out = {}
     if p[7].isdigit() and int(p[7]) <= 100:
         out["ctx_left"] = int(p[7])
-    if p[8] in ("ok", "watch", "handoff"):
+    if p[8] in ("ok", "watch", "handoff", "est", "reset"):
         out["ctx_band"] = p[8]
     if p[9].isdigit() and int(p[9]) > 0:
         out["ctx_ts"] = int(p[9])

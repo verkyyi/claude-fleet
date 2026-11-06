@@ -422,6 +422,10 @@ fleet_ui_t() {
     en:view_gone_hint) printf '↵ restore' ;;
     zh:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
     en:view_pr_fmt) printf 'PR %s' "${1:-}" ;;
+    zh:view_ctx_reset) printf '已清空' ;;
+    en:view_ctx_reset) printf 'Cleared' ;;
+    zh:view_ctx_left_fmt) printf '剩余 %s' "${1:-}" ;;
+    en:view_ctx_left_fmt) printf '%s left' "${1:-}" ;;
     zh:view_today_fmt) printf '今天 %s token' "${1:-}" ;;
     en:view_today_fmt) printf '%s tokens today' "${1:-}" ;;
     zh:view_tok_style) printf 'zh' ;;
@@ -1378,6 +1382,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     zh:topbar_no_record)        printf '顶行无记录' ;;
     en:topbar_no_record)        printf 'no top-line record' ;;
     # the top line's own words (fleet-topbar.py reads `dump topbar_`, issue #3324)
+    zh:topbar_ctx_reset)        printf '已清空' ;;
+    en:topbar_ctx_reset)        printf 'Cleared' ;;
     zh:topbar_left_fmt)         printf '剩余 %s' "${1:-}" ;;
     en:topbar_left_fmt)         printf '%s left' "${1:-}" ;;
     zh:topbar_ago_fmt)          printf '%s 分钟前' "${1:-}" ;;

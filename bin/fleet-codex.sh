@@ -254,7 +254,7 @@ if [ -n "${TMUX_PANE:-}" ]; then
   fleet_launch_wset @cc_launcher_pid "$$"
   # New ownership invalidates the old JSON even if the process died before its
   # SessionEnd. Clear visible context too; the first root hook supplies truth.
-  for _opt in @codex_identity @codex_session_id @codex_attention @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @model @effort @cc_model @handoff_armed; do
+  for _opt in @codex_identity @codex_session_id @codex_attention @ctx_pct @ctx_limit @ctx_band @ctx_left @ctx_ts @ctx_src @ctx_est @ctx_sample @model @effort @cc_model @handoff_armed; do
     fleet_launch_wset -u "$_opt"
   done
   # a resume's thread until its first hook writes @codex_identity, in its shape (#4728)

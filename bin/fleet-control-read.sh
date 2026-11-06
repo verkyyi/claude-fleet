@@ -209,7 +209,7 @@ case "$mode" in
     # Columns 24-28 (issue #2431): the measurement bus, so `fleet ls` on any
     # computer shows each session's context LEFT · model · effort the way its
     # header does — `ctxleft=` (% left: @ctx_left, else 100 - @ctx_pct on a
-    # window stamped before it), `ctxband=` (ok|watch|handoff), `ctxts=` (the
+    # window stamped before it), `ctxband=` (ok|watch|handoff|est|reset), `ctxts=` (the
     # reading's epoch, empty before #2431), `model=` (@model), `effort=`.
     # Read as conf/statusline.sh stamped them, never recomputed; an unmeasured
     # window carries the five keys empty.
@@ -217,7 +217,7 @@ case "$mode" in
     # own report, @agent_status as bin/fleet-status-7501.py stamped it (one line of
     # JSON, no tab); inventory_row turns it into the worker's `status_kind` /
     # `status_msg`. Empty on a window whose agent never said anything.
-    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?@ctx_left,#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{@ctx_band}\t=#{@ctx_ts}\t=#{@model}\t=#{@effort}\t=#{@agent_status}\t=#{@reap_why}\t=#{@session_origin}\t=#{@cc_agent}:#{@mod_accept}:#{?@parked,1,}:#{?@codex_identity,1,}' 2>/dev/null) || ctxs=''
+    ctxs=$(tmux -u -L "$sock" list-windows -t "=$sess" ${lwf[@]+"${lwf[@]}"} -F $'#{window_id}\t=#{?#{!=:#{@ctx_left},},#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}\t=#{?#{&&:#{@ctx_est},#{==:#{@ctx_pct},}},#{?#{!=:#{@ctx_left},},est,reset},#{@ctx_band}}\t=#{@ctx_ts}\t=#{@model}\t=#{@effort}\t=#{@agent_status}\t=#{@reap_why}\t=#{@session_origin}\t=#{@cc_agent}:#{@mod_accept}:#{?@parked,1,}:#{?@codex_identity,1,}' 2>/dev/null) || ctxs=''
     # Column 30 (issue #2505): `test=1` on a session the TEST identity's client
     # placed (@test_identity, `fleet --test-identity`): the person's list hides
     # it, `fleet ls` marks it 测试. Empty on every other window.
@@ -373,7 +373,7 @@ case "$mode" in
         case "$cw" in *[!a-z0-9:-]*) cw='' ;; esac
         case "$cas" in '{'*'}') ;; *) cas='' ;; esac
         case "$cl" in *[!0-9]*) cl='' ;; esac
-        case "$cb" in ok|watch|handoff) ;; *) cb='' ;; esac
+        case "$cb" in ok|watch|handoff|est|reset) ;; *) cb='' ;; esac
         case "$cts" in *[!0-9]*) cts='' ;; esac
         case "$cm" in *[!-A-Za-z0-9\ ._\(\)+]*) cm='' ;; esac
         case "$ce" in *[!a-z]*) ce='' ;; esac
