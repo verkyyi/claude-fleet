@@ -132,7 +132,7 @@ def start(repo, agent, fleet, title, via, default_agent, print_win=True, reap="m
                    requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
                    request_payload=dict(dispatch=d, title=title, body="", repo=repo.lower(),
                                         reap="" if reap == "merged" else reap,
-                                        template="fleet-worker", rule="", draft="", pr_note=""))
+                                        template="fleet-worker", rule="", draft="", pr_note="", blank=True))
     made_here = env.get("FLEET_PRESTART") if env.get("FLEET_PRESTART") != os.environ.get("FLEET_PRESTART") else ""
 
     def refused(why):
@@ -183,7 +183,8 @@ def start(repo, agent, fleet, title, via, default_agent, print_win=True, reap="m
     argv = ["bash", str(BIN / "dash-raw-session.sh"), "--repo", repo, "--task", tid, "--name", title,
             "--reap", reap or "merged", "--as", "fleet-worker"] + (["--agent", agent] if agent else []) \
         + ["--origin", "hub"] + (["--print"] if print_win else []) + ["--placeholder", fleet]
-    p = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=180)
+    p = subprocess.run([sys.executable, str(BIN / "fleet_start_result.py")] + argv,
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, env=env, timeout=180)
     return p.returncode, head + (p.stdout or "").splitlines(), p.stderr or ""
 
 

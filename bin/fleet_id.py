@@ -651,6 +651,8 @@ def clean_title(value):
         line = " ".join("".join(" " if unicodedata.category(c) == "Cc" else c for c in raw).split())
         if line:
             break
+    if line == "dispatch_new_title":
+        line = "新会话"
     return line if len(line) <= 80 else line[:79].rstrip() + "…"
 
 

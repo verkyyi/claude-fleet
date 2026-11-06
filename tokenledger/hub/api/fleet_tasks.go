@@ -111,6 +111,8 @@ func (s *Server) taskAnswered(task *store.FleetTask, out *ClientPlaceResponse) {
 // live word off the inventory (empty when the session is gone or unknown).
 type taskView struct {
 	store.FleetTask
+	StartRetry   bool   `json:"start_retry"`
+	StartFailure string `json:"start_failure,omitempty"`
 	// Preserve an explicitly empty controlled binding on the wire. Its absence
 	// is reserved for legacy records that still use worker_id.
 	CurrentExecutionOwner *string        `json:"execution_owner,omitempty"`
@@ -153,7 +155,8 @@ func (s *Server) taskViews(tasks []store.FleetTask) ([]taskView, error) {
 			}
 		}
 		live := s.taskLive(&t, rows)
-		v := taskView{FleetTask: t, Live: live, PRState: "unverified"}
+		v := taskView{FleetTask: t, Live: live, PRState: "unverified", StartFailure: t.StartFailure()}
+		v.StartRetry, _ = s.Store.TaskStartRetryable(t)
 		if worker, controlled := s.taskCurrentWorker(&t); controlled {
 			v.CurrentExecutionOwner = &worker
 		}
@@ -281,6 +284,10 @@ func (s *Server) handleFleetTasks(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, FleetTasksPath), "/")
 	if rest != "" {
 		ref, what, _ := strings.Cut(rest, "/")
+		if what == "retry-start" {
+			s.retryFleetTaskStart(w, r, p, ref)
+			return
+		}
 		if what == "continue" {
 			s.continueFleetTask(w, r, p, ref)
 			return

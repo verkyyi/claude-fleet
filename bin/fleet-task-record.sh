@@ -451,11 +451,11 @@ PYTITLE
     # the dispatch and the record's payload in ONE interpreter (T992: they were
     # fleet_dispatch.py + a payload `python3 -` — two starts, ~0.2 s): line 1 the
     # dispatch (fleet_dispatch.resolve, its CLI's own call), line 2 the payload
-    both=$(python3 - "$BIN" "$agent" "$template" "${FLEET_AGENT:-}" "$tok" "$title" "$body" "$repo" "$reap" "$as_agent" "$via" "$model" "${FLEET_FROM_FID:-}" <<'JSON'
+    both=$(python3 - "$BIN" "$agent" "$template" "${FLEET_AGENT:-}" "$tok" "$title" "$body" "$repo" "$reap" "$as_agent" "$via" "$model" "$blank" "${FLEET_FROM_FID:-}" <<'JSON'
 import json,re,sys
 sys.path.insert(0, sys.argv[1])
 import fleet_dispatch
-agent,template,default,tok,title,body,repo,reap,as_agent,via,model,from_fid=sys.argv[2:]
+agent,template,default,tok,title,body,repo,reap,as_agent,via,model,blank,from_fid=sys.argv[2:]
 try:
     d=fleet_dispatch.resolve([agent] if agent else [], template, "", default, None, tok)
 except (ValueError, TypeError) as e:
@@ -464,7 +464,7 @@ repo=repo.lower()
 print(json.dumps(d, separators=(",", ":")))
 print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, via=via, repo=repo,
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
-    request_payload=dict(dispatch=d,title=title,body=body,repo=repo,reap=reap,template=as_agent,rule="",draft="",pr_note="",
+    request_payload=dict(dispatch=d,title=title,body=body,blank=blank=="1",repo=repo,reap=reap,template=as_agent,rule="",draft="",pr_note="",
                          **({"model": model} if model else {}),
                          # who opened it, by ID (task PV5W): the list draws it under that session
                          **({"from_fid": from_fid} if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", from_fid) else {}))),
@@ -541,7 +541,7 @@ EOF
       pfa="--prompt-file=$pf"
     fi
     trap - EXIT   # its prestart is the spawner's now (FLEET_PRESTART)
-    exec bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" ${src:+--source "$src"} \
+    exec python3 "$BIN/fleet_start_result.py" bash "$BIN/dash-raw-session.sh" --repo "$repo" --task "$t" --name "$title" --reap "${reap:-merged}" ${src:+--source "$src"} \
       ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${model:+--model "$model"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
   fi
   [ "$spawn" = 1 ] || exit 0
@@ -551,7 +551,7 @@ EOF
     printf '%s\n' "${body:-$title}" > "$pf"
     pfa="--prompt-file=$pf"
   fi
-  exec bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} ${src:+--source "$src"} \
+  exec python3 "$BIN/fleet_start_result.py" bash "$BIN/dash-raw-session.sh" --no-repo --task "$t" --name "$title" ${reap:+--reap "$reap"} ${src:+--source "$src"} \
     ${as_agent:+--as "$as_agent"} ${agent:+--agent "$agent"} ${model:+--model "$model"} ${origin:+--origin "$origin"} $pwin ${pfa:+"$pfa"} ${tsess:+"$tsess"}
 fi
 

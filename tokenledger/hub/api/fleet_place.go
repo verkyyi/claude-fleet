@@ -234,6 +234,9 @@ func (s *Server) handleNodePlace(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "the body must be one JSON object")
 		return
 	}
+	failureResponse := &taskPlacementResponse{ResponseWriter: w}
+	w = failureResponse
+	defer func() { s.placementFailure(failureResponse, s.nodeTaskOwner(ep), req.Dispatch) }()
 	if req.Idem == "" && req.CodingAgent != "" {
 		req.Idem = "place-" + newOperationID()
 	}

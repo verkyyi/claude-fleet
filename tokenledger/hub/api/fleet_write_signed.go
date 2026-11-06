@@ -72,11 +72,11 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "the body must be one JSON object: cert, sig, ts, tool, args_json")
 		return
 	}
-	if !fleetWriteTools[req.Tool] && req.Tool != "operation_get" && req.Tool != "task_continue" {
+	if !fleetWriteTools[req.Tool] && req.Tool != "operation_get" && req.Tool != "task_continue" && req.Tool != "task_retry_start" {
 		httpError(w, http.StatusBadRequest, "tool must be one of the hub's write tools, or operation_get")
 		return
 	}
-	if req.Tool == "task_continue" && (r.Header.Get("X-Fleet-Worker") != "" || strings.HasPrefix(bearer(r), "fcp-h")) {
+	if (req.Tool == "task_continue" || req.Tool == "task_retry_start") && (r.Header.Get("X-Fleet-Worker") != "" || strings.HasPrefix(bearer(r), "fcp-h")) {
 		httpError(w, http.StatusForbidden, "continuation requires the task owner's viewer/session credential or connection certificate")
 		return
 	}
@@ -87,7 +87,7 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "args_json must be one JSON object of tool arguments")
 		return
 	}
-	if req.Tool == "task_continue" || req.Tool == "session_archive" {
+	if (req.Tool == "task_continue" || req.Tool == "task_retry_start") || req.Tool == "session_archive" {
 		var extra any
 		if dec.Decode(&extra) != io.EOF {
 			httpError(w, http.StatusBadRequest, "args_json must contain exactly one object")
@@ -133,7 +133,7 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.Tool == "task_continue" {
+	if req.Tool == "task_continue" || req.Tool == "task_retry_start" {
 		// A signed person tool, not a node/worker tool or another spawn path.
 		// Preserve the certificate's actor, including an administrator's identity.
 		p, err := s.clientPrincipal(id)
@@ -150,7 +150,11 @@ func (s *Server) handleFleetWrite(w http.ResponseWriter, r *http.Request) {
 		body, _ := json.Marshal(args)
 		r = r.Clone(r.Context())
 		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		s.continueFleetTask(w, r, p, ref)
+		if req.Tool == "task_retry_start" {
+			s.retryFleetTaskStart(w, r, p, ref)
+		} else {
+			s.continueFleetTask(w, r, p, ref)
+		}
 		return
 	}
 	ctx := r.Context()

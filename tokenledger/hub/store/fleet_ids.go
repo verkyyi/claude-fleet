@@ -985,6 +985,9 @@ func FleetTitle(value string) string {
 			break
 		}
 	}
+	if title == "dispatch_new_title" {
+		title = "新会话"
+	}
 	runes := []rune(title)
 	if len(runes) > 80 {
 		return strings.TrimSpace(string(runes[:79])) + "…"

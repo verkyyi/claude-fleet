@@ -76,7 +76,7 @@ _fcd="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}"
 [ -f "$_fcd/fleet.conf" ] && . "$_fcd/fleet.conf"
 
 WRITE_NS="fleet-write@claude-fleet"
-WRITE_TOOLS=" session_archive task_continue worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_pin worker_transfer worker_start gh_comment config_set service_control "
+WRITE_TOOLS=" session_archive task_continue task_retry_start worker_message worker_stop worker_resume worker_answer worker_reap worker_switch worker_rename worker_reap_policy worker_pin worker_transfer worker_start gh_comment config_set service_control "
 
 usage() { sed -n '/^#   fleet-hub-write.sh <tool>/,/^# nothing was sent/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 note() { [ "$QUIET" = 1 ] || printf 'fleet-hub-write: %s\n' "$*" >&2; }
@@ -140,7 +140,7 @@ token_source() {
 # node_door → rc 0 when this login would write by its node token (no network:
 # the broker pair is minted only by node_pair, at send time).
 node_door() {
-  [ "${TOOL:-}" != task_continue ] || return 1
+  [ "${TOOL:-}" != task_continue ] && [ "${TOOL:-}" != task_retry_start ] || return 1
   [ "${FLEET_HUB_WRITE_NODE_TOKEN:-1}" != 0 ] || return 1
   local f="$_fcd/node.env"
   if [ -r "$f" ]; then grep -q '^CCQUOTA_TOKEN=.' "$f" 2>/dev/null; return; fi
@@ -227,7 +227,7 @@ post_token() {
     local id; id=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("operation_id",""))')
     code=$(curl -sS -m 25 -o "$out" -w '%{http_code}' -H "Authorization: Bearer $TOK" \
            "$url/v1/fleet/operation_get?operation_id=$id" 2>/dev/null)
-  elif [ "$tool" = task_continue ]; then
+  elif { [ "$tool" = task_continue ] || [ "$tool" = task_retry_start ]; }; then
     local req
     req=$(python3 -c 'import json,sys; print(json.dumps({"tool":sys.argv[1],"args_json":sys.argv[2]}))' "$tool" "$body") || return 1
     code=$(printf 'header = "Authorization: Bearer %s"\n' "$TOK" |
@@ -300,7 +300,7 @@ send() {
   fi
   if token_source >/dev/null; then post_token "$url" "$tool" "$body"; return; fi
   case "$(cert_state)" in ok\ *) post_cert "$url" "$tool" "$body"; return ;; esac
-  if [ "$tool" = task_continue ]; then
+  if { [ "$tool" = task_continue ] || [ "$tool" = task_retry_start ]; }; then
     note "Task continuation needs the owner's viewer/session credential or valid connection certificate (fleet login); node/session worker credentials cannot continue — nothing sent"
     return 1
   fi
