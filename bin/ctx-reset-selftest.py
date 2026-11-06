@@ -34,6 +34,7 @@ class Reset(unittest.TestCase):
         env_patch = patch.dict(os.environ, self.env)
         env_patch.start()
         self.addCleanup(env_patch.stop)
+        self.tmux('set-window-option', '@mod_alive', str(int(time.time())))
         self.feed('model=Opus 5.5', 'ctx_pct=95', 'ctx_limit=200000')
 
     def tmux(self, *args):
@@ -91,6 +92,17 @@ class Reset(unittest.TestCase):
                            env=dict(self.env, CLAUDE_CODE_ENTRYPOINT='cli'), check=True)
             self.assertEqual(self.opt('ctx_pct'), '', source)
             self.assertEqual(self.opt('ctx_est'), '1', source)
+
+    def test_without_mod_statusline_still_replaces_placeholder(self):
+        self.tmux('set-window-option', '-u', '@mod_alive')
+        self.feed('ctx_reset=startup')
+        subprocess.run(['bash', str(ROOT / 'conf/statusline.sh')],
+                       input='{"context_window":{"used_percentage":12}}', text=True, env=self.env, check=True)
+        self.assertEqual((self.opt('ctx_pct'), self.opt('ctx_est')), ('12', ''))
+        # A startup redraw before the mod begins must not consume its first sample.
+        self.feed('ctx_pct=20', 'ctx_measure=1')
+        self.feed('ctx_reset=clear')
+        self.assertEqual(self.opt('ctx_left'), '80')
 
     def test_recent_five_and_resume_does_not_train(self):
         for n in (99, 10, 20, 30, 40, 50):

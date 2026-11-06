@@ -234,12 +234,12 @@ fi
 # older tmux prints a control character as `_` to a client it does not take for
 # UTF-8, so the proxy-wins rule below must not hang on the \x1f split.
 CUR=$(tmux display-message -p -t "$TMUX_PANE" \
-        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}${US}#{@ctx_left}${US}#{@ctx_ts}${US}#{@ctx_est}${US}#{@ctx_sample}" 2>/dev/null)
+        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}${US}#{@ctx_left}${US}#{@ctx_ts}${US}#{@ctx_est}${US}#{@ctx_sample}${US}#{@mod_alive}" 2>/dev/null)
 cur_rlsrc='' cur_rlts=''
 if [[ "$CUR" =~ ^([^ ]+)\ ([^ ]+)\ (.*)$ ]]; then
   cur_rlsrc=${BASH_REMATCH[1]}; cur_rlts=${BASH_REMATCH[2]}; CUR=${BASH_REMATCH[3]}
 fi
-IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_left cur_ts cur_est cur_sample <<< "$CUR"
+IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_left cur_ts cur_est cur_sample cur_mod_alive <<< "$CUR"
 
 # The proxy's quota reading wins while it is fresh (issue #1978): a status-line
 # render or a mod measure then leaves the @rl* set as the proxy stamped it.
@@ -257,6 +257,10 @@ stamp() {
   if [[ -n "$2" ]]; then ARGS+=(set-window-option -t "$TMUX_PANE" "$1" "$2")
   else                   ARGS+=(set-window-option -u -t "$TMUX_PANE" "$1"); fi
 }
+# With no live mod, Claude's ordinary statusLine remains the real-reading
+# fallback. A live mod owns context, so a redraw of its OLD snapshot is ignored.
+mod_fresh=0
+if [[ "$cur_mod_alive" =~ ^[0-9]+$ ]] && (( $(date +%s) - cur_mod_alive <= 45 )); then mod_fresh=1; fi
 # Pending estimates are display-only: @ctx_pct stays absent and @ctx_band ok.
 # Old statusLine redraws and quota-only measures cannot resurrect the old value.
 # ctx_sample is armed only by clear/startup, never compact/resume (which retain history).
@@ -275,7 +279,7 @@ if [[ -n "$CTX_RESET" || ( "$cur_est" == 1 && -z "$cur_pct" && -n "$MODEL" && "$
   [[ ${#ARGS[@]} -gt 0 ]] && ARGS+=(\;)
   ARGS+=(set-window-option -u -t "$TMUX_PANE" @ctx_warn)
   want_pct=''
-elif [[ "$cur_est" == 1 && -z "$cur_pct" && "$CTX_MEASURE" != 1 ]]; then
+elif [[ "$cur_est" == 1 && -z "$cur_pct" && "$CTX_MEASURE" != 1 && ( -n "$FROM" || "$mod_fresh" == 1 ) ]]; then
   want_pct=''
 fi
 if [[ -n "$want_pct" ]]; then
@@ -283,7 +287,7 @@ if [[ -n "$want_pct" ]]; then
     python3 "$SL_HERE/../bin/fleet-ctx-baseline.py" "${MODEL:-$cur_model}" "$want_pct" >/dev/null 2>&1
   fi
   stamp @ctx_est '' "$cur_est"
-  stamp @ctx_sample '' "$cur_sample"
+  [[ "$CTX_MEASURE" == 1 || "$FROM" == codex ]] && stamp @ctx_sample '' "$cur_sample"
   stamp @ctx_pct  "$want_pct"  "$cur_pct"
   [[ -n "$want_limit" ]] && stamp @ctx_limit "$want_limit" "$cur_limit"
   stamp @ctx_band "$want_band" "$cur_band"
