@@ -92,6 +92,10 @@ fi
 # opens — the Bash tool, `bash -c`, Codex's, Claude's `!` — finds bin/tmux-shim
 # first, and a delete aimed at a fleet's server is refused there. Only the agent
 # gets it: the wrapper's own tmux calls (and the recycle) stay on the real one.
+# Every package-script test runner inherits a bounded node entry, including
+# Codex exec commands (whose hook protocol cannot rewrite shell commands).
+PATH="$BIN/test-shim:$PATH"
+export VITEST_MAX_WORKERS=2 VITEST_MIN_WORKERS=1 VITEST_MAX_THREADS=2 VITEST_MIN_THREADS=1
 SHIM_PATH="$PATH"
 [ -x "$BIN/tmux-shim/tmux" ] && case ":$PATH:" in
   *":$BIN/tmux-shim:"*) ;;

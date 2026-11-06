@@ -25,6 +25,7 @@
 | 免确认运行（Claude `bypassPermissions` / `skipDangerousModePermissionPrompt`；Codex `approval_policy` / `sandbox_mode`） | 待定 | 待发起人定：本批明确不改，随托管隔离环境一起决定；守卫只防手滑，不构成安全隔离。 |
 | Codex 思考档位（`model_reasoning_effort`）及其它模型设置 | 待定 | 待发起人定：当前 Codex 仍填入 `high`；本批四键指标仅指 Claude，不能把读数 0 解释成两种模型的全部设置都原生。 |
 | 登录 MCP 默认包（context7 / playwright / github / fetch） | 待定 | 待发起人定：当前两种代理的配置仍默认填入四个服务；本批不改变安装包。 |
+| 会话测试并发预算（`fleet-test-runner.py`、`test-shim/node`） | 核心 | T1327：每个 vitest/jest 限 2 worker，复用机器级 heavy 槽位，防止会话争抢整机 CPU；不新增守护进程。 |
 | 会话状态钩子（`set-claude-state.sh`） | 核心 | 执行会话仍属核心；工作、等待、退出状态用于恢复和回收，保留既有钩子。 |
 | 会话恢复与事件记录（`fleet-codex-session.py`、`fleet-emit.sh`、`handoff-latch-reset-hook.sh`、`fleet_loop_mark.py`、历史/退出/压缩钩子） | 核心 | 维持会话身份、连续性和生命周期；本批不拆执行会话的恢复与合并流程。 |
 | 操作者设备位置（`mod/fleet/hooks/where.ts` / `bin/fleet-where-hook.sh`） | 核心 | 发起人 2026-10-15 拍板 5：保留「你在哪台设备」，让会话知道当前设备及打开网页、接收文件等能力。 |
@@ -164,7 +165,7 @@ Codex 映射和插件管理器的文件依赖，相关改动会进入 PR 的自�
 | 额度观察 | `fleet-quota* usage-*` | 额度与用量 |
 | 项目依赖复用 | `fleet-deps-*` | 显式依赖克隆/链接，不属于默认会话启动 |
 | 版本维护 | `fleet-install* fleet-base-sync* fleet-update* fleet-versions* fleet-stable* fleet-sync-logins* fleet-release* fleet-dist-source* fleet-src-digest* fleet-bootstrap-cache* fleet-brew-perms* fleet-shared-dirs* fleet-login-bootstrap* fleet-login-install* fleet-host-install* fleet-dev-mode*` | 安装、版本与包 |
-| 宿主清理与保护 | `fleet-cleanup* fleet-reconcile-tick* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-park* fleet_park* fleet_wake_guard.py` | 资源、退出与停放；停放页保留屏幕与未确认输入，回车接回同一会话 |
+| 宿主清理与保护 | `fleet-cleanup* fleet-reconcile-tick* fleet-diskguard* fleet-memguard* fleet-loadgen* fleet-heavy* fleet-test-runner.py test-shim/* fleet-load-governance-selftest.py fleet-worktree-drop* fleet-window-reap* fleet-reap* fleet_reap* worktree-autoclean* dash-reap* fleet-worker-stop* fleet-orphan-reports* fleet-park* fleet_park* fleet_wake_guard.py` | 资源、退出与停放；停放页保留屏幕与未确认输入，回车接回同一会话 |
 | 休眠（ | `fleet-sleep* fleet_sleep*` | 休眠的一版兼容转发 |
 | 收集与账本观察 | `fleet-collect* fleet-ledger* tmux-dash-collect*` | 收集与账本 |
 | 终端状态与节点连接 | `tmux-spinner* fleet-render-watch.py fleet-peerlink* fleet-peer-list* fleet-peer-queue* fleet-row-remote*` | 状态与节点连接；spinner 的 shell 入口加载配置后 exec Python 主循环，复用 render-watch 的常驻 control transport、可见性和有界等待 |

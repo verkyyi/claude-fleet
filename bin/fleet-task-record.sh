@@ -366,6 +366,13 @@ if [ "$cmd" = dispatch ]; then
     shift
   done
   [ -n "$title" ] || usage
+  # Placement names are at most 64 Unicode characters. Validate BEFORE the
+  # record's POST so a rejected title cannot leave an undispatched task behind.
+  python3 - "$title" <<'PYTITLE' || die 2 "title must be 1-64 printable characters"
+import sys
+s = sys.argv[1]
+sys.exit(0 if 0 < len(s.strip()) <= 64 and all(c.isprintable() for c in s) else 1)
+PYTITLE
   [ "$blank" = 0 ] || [ -z "$bodyf" ] || die 2 "--blank takes no words"
   # a dispatch that opens its session is clocked from here when no ↵ came with it
   # (T716, fleet_timing.py): every stage to its agent's input box under one run

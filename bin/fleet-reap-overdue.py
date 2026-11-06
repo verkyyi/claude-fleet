@@ -42,7 +42,7 @@ import fleet_reap_policy  # noqa: E402
 FIELDS = ("window_id", "@issue", "@repo", "@reap_policy", "@claude_state", "@claude_state_ts",
           "@reap_skip", "@reap_due", "@reap_key", "@raw", "@norepo", "@fleet_role", "@cc_agent", "@worktree", "window_name", "@reap_origin", "@origin", "@origin_fid", "@origin_wid",
           "@agent_def", "@test_identity", "@session_origin", "@park_wrap_ver", "@parked", "@park_held",
-          "@agent_status", "@claude_needs", "@park_since", "@park_waiting", "@park_presence", "@park_watched_at", "@pin", "@reap_keep_by", "@reap_why")
+          "@agent_status", "@claude_needs", "@park_since", "@park_waiting", "@park_presence", "@park_watched_at", "@pin", "@reap_keep_by", "@reap_why", "@park_refusal")
 FINISHED = ("done", "exited")
 
 
@@ -178,11 +178,25 @@ def collect(now, stuck_secs, found=None):
     rows = []
     for sock, first_repo in found:
         for w in windows(sock):
-            repo = w["@repo"] or first_repo
-            if not repo:
+            if w["@fleet_role"] in ("home", "panel") or (not w["@fleet_role"] and w["window_name"] in ("home", "dash", "plan", "backlog")):
                 continue
-            prs, landed = merged_prs(cache, repo), landed_at(repo)
-            got = due_of(w, repo, prs, landed, now)
+            repo = "" if w["@norepo"] == "1" else w["@repo"] or first_repo
+            # Long-done residents must be visible even with keep/no repo. This
+            # is an observation, never permission to close or override a draft.
+            try:
+                done_at = int(w["@claude_state_ts"] or 0)
+            except ValueError:
+                done_at = 0
+            long_done = (w["@claude_state"] == "done" and done_at > 0
+                         and now - done_at >= 86400
+                         and not (w["@parked"] and w["@park_held"]))
+            if long_done:
+                got = (done_at + 86400, "done >24h, not parked")
+            elif repo:
+                prs, landed = merged_prs(cache, repo), landed_at(repo)
+                got = due_of(w, repo, prs, landed, now)
+            else:
+                continue
             if got is None or got[0] > now:
                 continue
             due, what = got
@@ -198,7 +212,7 @@ def collect(now, stuck_secs, found=None):
                 held = ("held for a person: " + w["@reap_key"]) if w["@reap_due"] == "hold" else ""
                 reason = held or said or tick or w["@reap_skip"]
             else:
-                reason = w["@reap_skip"] or said or tick
+                reason = w.get("@park_refusal") or w["@reap_skip"] or said or tick
             rows.append({"session": sock, "window": w["window_id"], "key": key, "repo": repo,
                          "agent": w["@cc_agent"] or "claude", "policy": w["@reap_policy"] or "merged",
                          "due": due, "over": now - due, "why_due": what,

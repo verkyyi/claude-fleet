@@ -950,6 +950,14 @@ def presence(w):
 
 def park_background(w):
     seam = os.environ.get("FLEET_GATE_BG_CMD")
+    if w["agent"] == "codex" and not seam:
+        from fleet_worker_life import child_busy
+        try:
+            return "bg" if child_busy(w["sock"], w["win"], reap=True) else ""
+        except (TimeoutError, subprocess.TimeoutExpired):
+            return "bg_probe_timeout"
+        except (OSError, ValueError, KeyError, EOFError, subprocess.SubprocessError):
+            return "bg_probe_unknown"
     argv = shlex.split(seam) if seam else [
         "bash", "-c", '. "$1/fleet-lib.sh" >/dev/null 2>&1; '
         'fleet_window_bg_busy "$2" "$3" "" 1', "park-bg", str(BIN), w["sock"], w["win"]]
@@ -1030,6 +1038,16 @@ def park_dialog(w):
 
 
 def park_native_input(w):
+    # Retry a transient native deadline once. Every attempt reads identity,
+    # thread, queue and composer afresh; a previous idle result is never reused.
+    for _ in range(2):
+        result = _park_native_input(w)
+        if result.get("why") != "probe_timeout":
+            return result
+    return result
+
+
+def _park_native_input(w):
     """The native background inventory already vetoed tools / goals / subagents.
 
     Re-read the current thread and queue, then the TUI's empty composer. The
@@ -1044,8 +1062,11 @@ def park_native_input(w):
         client = mkclient(data["remote"])
         try:
             thread = client.call("thread/read", dict(threadId=w["sid"]))["thread"]
-            if thread.get("id") != w["sid"] or thread.get("status", {}).get("type") != "idle":
+            if thread.get("id") != w["sid"] or thread.get("status", {}).get("type") not in ("idle", "systemError"):
                 return dict(ok=False, why="not_idle")
+            if thread.get("status", {}).get("type") == "systemError":
+                from fleet_worker_life import codex_idle_turn
+                codex_idle_turn(client, dict(session_id=w["sid"], worktree=data["cwd"], transcript=data["transcript"]))
             queue = client.call("thread/queue/list", dict(threadId=w["sid"], limit=1))
             if queue.get("data") != [] or queue.get("nextCursor"):
                 return dict(ok=False, why="words_waiting")
@@ -1056,6 +1077,8 @@ def park_native_input(w):
         if snap.get("state") != "empty":
             return dict(ok=False, why="draft" if snap.get("state") == "draft" else "unknown_input")
         return dict(ok=True)
+    except (TimeoutError, subprocess.TimeoutExpired):
+        return dict(ok=False, why="probe_timeout")
     except Exception:  # noqa: BLE001 — a failed native read must never authorize exit
         return dict(ok=False, why="probe_failed")
 
@@ -1074,7 +1097,12 @@ def park_saved_mb(w):
 
 def park(fid, why="idle", force=False):
     with lock(fid):
-        return park_locked(fid, why, force)
+        result = park_locked(fid, why, force)
+        w = window(fid)
+        if w:
+            tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_refusal",
+                 "" if result.get("ok") else str(result.get("why") or "unknown"))
+        return result
 
 
 def stale_park(w):
@@ -1141,8 +1169,9 @@ def park_locked(fid, why, force):
     if watched(w):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_watched_at", str(int(now())))
         return dict(ok=False, why="watched")
-    if park_background(w):
-        return dict(ok=False, why="bg")
+    background = park_background(w)
+    if background:
+        return dict(ok=False, why=background if isinstance(background, str) else "bg")
     if any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid)):
         return dict(ok=False, why="words_waiting")
     generation = relay_request(w, dict(op="status"))

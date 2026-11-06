@@ -105,7 +105,7 @@ r=$(busy 'echo 0.92' 'echo 0.30');                case "$r" in 1\|*'CPU busy 92%
 r=$(SHORT=--short busy 'echo 0.92' 'echo 3.10');  [ "$r" = "1|暂停开新：负载过高（CPU 92%）" ] || st_fail "K --short names the CPU reading (got '$r')"
 r=$(busy 'echo 0.40' 'echo 6.20')
 case "$r" in 1\|*'machine load extreme'*'6.20/core over the hard cap FLEET_ADMIT_LOAD_HARD_PER_CORE=5'*'CPU busy 40%'*) ;; *) st_fail "K load past the 5/core hard cap holds even with CPU idle (got '$r')" ;; esac
-r=$(SHORT=--short busy 'echo 0.40' 'echo 6.20');  [ "$r" = "1|暂停开新：负载过高（负载 6.20/核）" ] || st_fail "K --short hard cap names the load (got '$r')"
+r=$(SHORT=--short busy 'echo 0.40' 'echo 6.20');  [ "$r" = "1|暂停开新：负载过高（负载 6.20/核，上限 5.00）" ] || st_fail "K --short hard cap names the load (got '$r')"
 r=$(busy 'echo 0.40' 'echo 6.20' FLEET_ADMIT_LOAD_HARD_PER_CORE=0); [ "$r" = "0|" ] || st_fail "K HARD_PER_CORE=0 turns the cap off (got '$r')"
 r=$(busy 'true' 'echo 1.60')
 case "$r" in 1\|*'machine load high'*'1.60/core, over FLEET_ADMIT_LOAD_PER_CORE=1.5; no CPU-busy reading'*) ;; *) st_fail "K no busy reading falls back to the load rule (got '$r')" ;; esac
