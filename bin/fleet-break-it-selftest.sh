@@ -8615,7 +8615,7 @@ drill_release_oidc_runtime() {
 drill_ctx_reset() {
   local t0; t0=$(now); CAP=60
   python3 "$BIN/ctx-reset-selftest.py" >"$WORK/ctx-reset.log" 2>&1 || {
-    WHY="context reset regression: $(tail -8 "$WORK/ctx-reset.log")"; return 1;
+    WHY="context reset regression: $(tail -60 "$WORK/ctx-reset.log")"; return 1;
   }
   SECS=$(since "$t0"); WHAT='clear/compact/resume retire stale context; baseline stays advisory until measured'
 }

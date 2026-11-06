@@ -233,7 +233,7 @@ fi
 # The quota writer + time lead as two space-separated words (`-` = unset): an
 # older tmux prints a control character as `_` to a client it does not take for
 # UTF-8, so the proxy-wins rule below must not hang on the \x1f split.
-CUR=$(tmux display-message -p -t "$TMUX_PANE" \
+CUR=$(tmux -u display-message -p -t "$TMUX_PANE" \
         "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}${US}#{@ctx_left}${US}#{@ctx_ts}${US}#{@ctx_est}${US}#{@ctx_sample}${US}#{@mod_alive}" 2>/dev/null)
 cur_rlsrc='' cur_rlts=''
 if [[ "$CUR" =~ ^([^ ]+)\ ([^ ]+)\ (.*)$ ]]; then

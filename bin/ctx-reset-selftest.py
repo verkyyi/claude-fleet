@@ -5,6 +5,7 @@ import os
 import json
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import time
@@ -27,6 +28,17 @@ class Reset(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='ctx-reset-')
         self.addCleanup(self.tmp.cleanup)
         self.env = dict(os.environ, HOME=self.tmp.name, TMPDIR=self.tmp.name, FLEET_CONF_DIR=self.tmp.name, FLEET_SKIP_GLOBAL_CONF='1', FLEET_UI_LANG='zh')
+        # Older tmux clients replace control separators without -u. Model that
+        # behavior even on newer local tmux, so Linux's bus read is covered here.
+        real_tmux = shutil.which('tmux')
+        shim = Path(self.tmp.name) / 'bin'
+        shim.mkdir()
+        wrapper = shim / 'tmux'
+        wrapper.write_text("#!/bin/sh\nif [ \"${1:-}\" = display-message ]; then\n  "
+                           + shlex.quote(real_tmux) + " \"$@\" | tr '\\037' '_'\nelse\n  exec "
+                           + shlex.quote(real_tmux) + " \"$@\"\nfi\n")
+        wrapper.chmod(0o755)
+        self.env['PATH'] = str(shim) + os.pathsep + self.env['PATH']
         self.sock = str(Path(self.tmp.name) / 'tmux')
         self.tmux('new-session', '-d', '-s', 'ctx', 'sleep 120')
         self.addCleanup(lambda: self.tmux('kill-server'))

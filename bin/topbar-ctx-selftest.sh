@@ -69,6 +69,10 @@ T set-window-option -t "=$S:measured" @ctx_pct 38 \; set-window-option -t "=$S:m
 SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
 st_eq "A: old writer's true value retires estimate" "62|ok|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)"
 
+T set-window-option -u -t "=$S:measured" @ctx_est \; set-window-option -t "=$S:measured" @ctx_pct 0 \; set-window-option -t "=$S:measured" @ctx_left 100
+SIDE=$(TMUX="$SOCK,0,0" FLEET_SESSION=$S bash "$ROWS" --rows 2>"$WORK/err" | strip)
+st_eq "A: a real zero is a reading" "100|ok|$TS|Opus 5.5|high" "$(fld "$SIDE" measured 19)"
+
 # ============================================================================
 # B. a remote row: the hub cache's 21-25 → field 19, the same five `fleet ls` reads
 # ============================================================================

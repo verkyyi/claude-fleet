@@ -65,6 +65,7 @@ cp "$SL" "$WORK/inst/conf/statusline.sh"
 TMUXLOG="$WORK/tmux.log"; GITLOG="$WORK/git.log"; ERR="$WORK/err"
 cat > "$WORK/stub/tmux" <<STUB
 #!/bin/sh
+[ "\${1:-}" != "-u" ] || shift
 if [ "\${1:-}" = "-L" ] || [ "\${1:-}" = "-S" ]; then shift 2; fi
 case "\${1:-}" in
   display-message)   printf '%s\n' "\${FAKE_CUR:-}" ;;
