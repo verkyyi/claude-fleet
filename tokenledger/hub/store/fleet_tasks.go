@@ -175,6 +175,7 @@ const fleetTaskCols = `id, token, owner, title, via, device, repo, agent, machin
 // the caller's one-time key (the place's idempotency key): writing the same
 // token twice returns the first record, never a second one.
 func (s *Store) CreateFleetTask(t FleetTask, token string, now time.Time) (FleetTask, error) {
+	normalizeTaskTitle(&t)
 	if t.AuthorityVersion != 0 {
 		return s.acceptFleetTask(t, token, now)
 	}

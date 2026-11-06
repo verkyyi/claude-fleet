@@ -8620,6 +8620,13 @@ drill_ctx_reset() {
   SECS=$(since "$t0"); WHAT='clear/compact/resume retire stale context; baseline stays advisory until measured'
 }
 
+drill_task_start_refused() {
+  local t0; t0=$(now); CAP=120
+  _drill_go_tests 'TestTaskStartFailure TestTaskPlaceholderTitleRepair' "$ROOT/tokenledger/hub/store/fleet_task_start_failure_test.go" \
+    '派发拒绝原因保留，同一记录可重试，取消和已启动记录拒绝重试' ./hub/store || return 1
+  SECS=$(since "$t0")
+}
+
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill

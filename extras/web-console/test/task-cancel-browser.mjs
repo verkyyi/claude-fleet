@@ -10,8 +10,8 @@ const origin = 'http://fleet-cancel.invalid';
 const fid = '00000000-0000-4000-8000-000000000900';
 const worker = `00000000-0000-4000-8000-000000000001/${fid}`;
 
-async function scenario({ status = 200, readonly = false, pending = true, tag = 'queued', live = false, controlled = false } = {}) {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 850 } });
+async function scenario({ status = 200, readonly = false, pending = true, tag = 'queued', live = false, controlled = false, retry = false, width = 1280 } = {}) {
+  const context = await browser.newContext({ viewport: { width, height: 850 } });
   const page = await context.newPage();
   const writes = [];
   let cancelled = false, reads = 0;
@@ -32,7 +32,8 @@ async function scenario({ status = 200, readonly = false, pending = true, tag = 
       reads++;
       body = { sessions: live ? [{ machine_name: 'test', worker: { worker_id: worker, key: 'scratch-900', state: 'working', title: 'Controlled task' } }] : [],
         board: { count: 1, groups: {}, gone_days: 7, digest: String(reads), rows: [{ id: fid, task_id: fid, task: 'T900', title: 'Controlled task',
-          group: 'queue', tag: cancelled ? 'idle' : tag, pending_start: cancelled ? false : pending,
+          group: 'queue', tag: cancelled ? 'idle' : tag, pending_start: cancelled ? false : pending, start_retry: retry && !cancelled, generation: 1,
+          context: retry ? ['启动失败：capacity', 'Start failed: capacity'] : undefined,
           ...(live ? { worker_id: worker } : {}), words: ['待启动', 'Waiting to start'], at: 1 }] } };
     }
     if (req.method() === 'POST') {
@@ -52,6 +53,24 @@ async function scenario({ status = 200, readonly = false, pending = true, tag = 
 }
 
 try {
+  for (const width of [390, 1440]) {
+    const retry = await scenario({ retry: true, pending: false, tag: 'start_failed', width });
+    const button = retry.page.getByRole('button', { name: /^(重试启动|Retry start)$/ });
+    await button.click();
+    await retry.page.waitForFunction(() => document.querySelector('[data-sonner-toast]'));
+    assert.equal(retry.writes[0].path, `/v1/fleet/tasks/${fid}/retry-start`);
+    assert.deepEqual(retry.writes[0].body, { expected_generation: 1 });
+    assert.ok(await retry.page.getByText(/capacity/).count());
+    assert.equal(await retry.page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await retry.page.getByRole('button', { name: /^(删除请求|Delete request)$/ }).click();
+    await retry.page.waitForTimeout(100);
+    assert.equal(retry.writes.at(-1).path, `/v1/fleet/tasks/${fid}/cancel`);
+    await retry.context.close();
+  }
+  const readonlyRetry = await scenario({ retry: true, pending: false, readonly: true });
+  assert.equal(await readonlyRetry.page.getByRole('button', { name: /^(重试启动|Retry start)$/ }).isDisabled(), true);
+  assert.equal(await readonlyRetry.page.getByRole('button', { name: /^(删除请求|Delete request)$/ }).isDisabled(), true);
+  await readonlyRetry.context.close();
   for (const opts of [{ pending: false }, { pending: undefined }, { tag: 'idle' }, { tag: 'ended' }, { live: true }]) {
     // Explicitly cover absence with null; the scenario's default is true.
     const s = await scenario({ ...opts, ...(opts.pending === undefined && 'pending' in opts ? { pending: null } : {}) });

@@ -88,6 +88,8 @@ type BoardRow struct {
 	// Read-only facts for both lists, not a new task lifecycle. Explicit false
 	// suppresses older clients' guesses from legacy group/tag words.
 	PendingStart bool   `json:"pending_start"`
+	StartRetry   bool   `json:"start_retry"`
+	StartFailure string `json:"start_failure,omitempty"`
 	Running      bool   `json:"running"`
 	Active       bool   `json:"active"`
 	Loop         *bool  `json:"loop,omitempty"`
@@ -181,7 +183,7 @@ var boardWords = map[string][2]string{
 	"completed": {"已完成", "Completed"}, "cancelled": {"已取消", "Cancelled"}, "turn_done": {"本轮结束", "Turn ended"},
 	"retained_completed": {"已完成 · 保留中", "Completed · retained"}, "session_parked": {"已停放", "Parked"},
 	"idle": {"空闲", "Idle"}, "unknown": {"状态未知", "Unknown"}, "starting": {"正在开", "Starting"},
-	"queued": {"未派发", "Not dispatched"}, "not_seen": {"看不到会话", "Session not seen"}, "exited": {"已退出", "Exited"},
+	"start_failed": {"启动失败", "Start failed"}, "queued": {"未派发", "Not dispatched"}, "not_seen": {"看不到会话", "Session not seen"}, "exited": {"已退出", "Exited"},
 	"ended": {"已结束", "Ended"}, "ended_no_result": {"结束·没交回结果", "Ended · no result"},
 	"lost":   {"机器失联", "Machine lost"},
 	"parked": {"已停放 · 等你", "Parked · waiting on you"}, "stopped": {"出错停住", "Stopped on an error"},
@@ -697,6 +699,14 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			}
 		}
 		r.PendingStart = r.Tag == "starting"
+		if r.Tag == "queued" {
+			r.StartRetry, _ = s.Store.TaskStartRetryable(*t)
+			r.StartFailure = t.StartFailure()
+			if r.StartFailure != "" {
+				r.Tag = "start_failed"
+				r.Context = [2]string{r.StartFailure, r.StartFailure}
+			}
+		}
 		if b != nil {
 			usedID[b.ID] = true
 		}

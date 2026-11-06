@@ -121,6 +121,9 @@ func (s *Store) EnsureNodes() error {
 	if err := s.ensureFleetIDs(); err != nil {
 		return err
 	}
+	if err := s.repairTaskPlaceholderTitles(); err != nil {
+		return err
+	}
 	// The team configuration layer (claude-fleet#1726).
 	if err := s.ensureFleetTeamBundles(); err != nil {
 		return err

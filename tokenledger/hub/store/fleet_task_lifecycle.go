@@ -243,6 +243,13 @@ func (s *Store) CancelUnopenedTask(id int64, owner, evidence string, now time.Ti
 // record still has to carry — so the rename happens once and a later prompt, or
 // another writer, changes nothing (the record answers itself unchanged).
 func (s *Store) RetitleTask(id int64, owner, from, to string, now time.Time) (FleetTask, error) {
+	// Older running sessions still send the pre-repair placeholder as `from`.
+	if from == "dispatch_new_title" {
+		from = "新会话"
+	}
+	if to == "dispatch_new_title" {
+		to = "新会话"
+	}
 	if strings.TrimSpace(from) == "" || strings.TrimSpace(to) == "" {
 		return FleetTask{}, ErrTaskInvalid
 	}

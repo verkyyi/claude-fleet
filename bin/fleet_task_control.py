@@ -278,6 +278,32 @@ def cancel(task, event):
     return 2
 
 
+def retry_start_task(row):
+    """Eligibility comes from the Hub's no-execution check, not missing inventory."""
+    task = row.get("task") or ""
+    if (row.get("start_retry") is True and row.get("record_only") is True
+            and not any(row.get(k) for k in ("worker_id", "running", "lost", "gone", "ended"))
+            and re.fullmatch(r"T[1-9][0-9]*", task)):
+        return task
+    return ""
+
+
+def retry_task_start(row, lang="zh", *, bin_dir=None):
+    task = retry_start_task(row)
+    if not task or type(row.get("generation")) is not int:
+        return 1, "Task changed; refresh before retrying"
+    payload = dict(task=task, expected_generation=row["generation"])
+    try:
+        p = subprocess.run(["bash", str(Path(bin_dir or BIN) / "fleet-hub-write.sh"),
+                            "task_retry_start", json.dumps(payload)], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=50)
+        if p.returncode:
+            return p.returncode, (p.stderr.strip() or p.stdout.strip())[-1000:]
+    except (OSError, subprocess.SubprocessError):
+        return 1, "Retry response unavailable; refresh before retrying"
+    return 0, "Start request submitted" if lang == "en" else "已提交启动请求"
+
+
 def pending_start_task(row):
     """Only an explicit pending, record-only row may cancel a task's start."""
     task = row.get("task") or ""

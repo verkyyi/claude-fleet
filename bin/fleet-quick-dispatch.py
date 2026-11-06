@@ -408,6 +408,8 @@ def task_send(data, view="", client=""):
     blank = bool(data.get("blank"))
     if blank:
         title = tr("dispatch_new_title")
+        if title == "dispatch_new_title":
+            title = "New session" if os.environ.get("FLEET_UI_LANG", os.environ.get("FLEET_VIEW_LANG", "zh")).startswith("en") else "新会话"
     host = socket.gethostname().split(".")[0]
     if repo and repo.lower() not in hosted(fleet):
         failed(data, view, "not hosted here")

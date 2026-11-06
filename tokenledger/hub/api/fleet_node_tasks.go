@@ -315,6 +315,15 @@ func (s *Server) handleNodeTasks(w http.ResponseWriter, r *http.Request) {
 		s.requestFleetTaskStop(w, r, t)
 		return
 	}
+	if task, route, found := strings.Cut(ref, "/"); found && route == "start-failed" {
+		t, own, err := s.nodeOwnTask(owners, task)
+		if err != nil || t.Owner != own {
+			httpError(w, http.StatusNotFound, "no such task of this node's owner")
+			return
+		}
+		s.recordStartFailure(w, r, t)
+		return
+	}
 	if s.nodeTaskExecution(w, r, ep, owners, ref) {
 		return
 	}

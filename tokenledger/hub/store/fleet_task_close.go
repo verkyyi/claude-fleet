@@ -190,6 +190,8 @@ func (s *Store) ReconcileClosedTasks(owner string, apply bool, now time.Time) (T
 					return out, err
 				}
 			}
+		case t.StartFailure() != "":
+			continue // explicit retry/delete remains available; failure is not a work outcome
 		case now.Sub(t.CreatedAt) > TaskNeverStartedAfter:
 			out.NeverStarted++
 			out.Items = append(out.Items, TaskReconcileItem{Task: t.Ref, Short: t.Short, From: t.State, To: TaskCancelled,

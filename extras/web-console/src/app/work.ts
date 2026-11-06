@@ -151,7 +151,7 @@ export function buildRows(tasks: Task[], live: SessionRow[], ended: SessionRow[]
 // colour; stopped (its agent's error stopped it) a red cross.
 const GLYPH_OF: Record<string, Glyph> = {
   asking: "ask", waiting_you: "ask", failed: "fail", refused: "fail", working: "work", looping: "work",
-  retained_completed: "done", completed: "done", turn_done: "done", ended: "done", starting: "wait", queued: "wait", not_seen: "wait",
+  retained_completed: "done", completed: "done", turn_done: "done", ended: "done", starting: "wait", start_failed: "wait", queued: "wait", not_seen: "wait",
   parked: "wait", stopped: "fail",
 };
 const TONE_OF: Record<string, Tone> = {

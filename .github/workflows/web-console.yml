@@ -48,6 +48,8 @@ jobs:
         run: node --experimental-strip-types test/task-stop.mjs
       - name: Explicit Task continuation and idempotent retries
         run: node --experimental-strip-types test/task-continue.mjs
+      - name: Retry refused starts from the original Task
+        run: node --experimental-strip-types test/task-start-retry.mjs
       - name: New session — chat or terminal, five starts (GR5E C3)
         run: node --experimental-strip-types test/new-session.mjs
       - name: New session's wait — press to first reply, sent once (PNWW)

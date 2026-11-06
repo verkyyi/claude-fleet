@@ -196,7 +196,7 @@ if str(Path(__file__).absolute().parent) not in sys.path:
 import fleet_timing  # noqa: E402 — the panel's and the new session's clock (issue #3551)
 import fleet_stub  # noqa: E402 — a new session's window before the session (T992)
 import fleet_view_link  # noqa: E402 — this machine's link to a row's machine (FQAR)
-from fleet_task_control import continue_task, pending_start_task, cancel_pending_start, controlled_stop_task, stop_task
+from fleet_task_control import retry_start_task, retry_task_start, continue_task, pending_start_task, cancel_pending_start, controlled_stop_task, stop_task
 
 US = "\x1f"
 VIEW_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
@@ -2457,6 +2457,8 @@ def board_apply(board, groups, shut, gone, here, me):
         # Only starting proves an accepted start; never infer it from no session.
         e["pending_start"] = bool(r["pending_start"]) if "pending_start" in r else r.get("tag") == "starting"
         e["pending_start_explicit"] = r.get("pending_start") is True
+        e["start_retry"] = r.get("start_retry") is True
+        e["start_failure"] = r.get("start_failure") or ""
         if "running" in r:
             e["running"] = r["running"] is True
         if "active" in r:
@@ -4523,6 +4525,7 @@ def quick_dispatch():
                                                       str(Path(__file__).absolute().parent / "fleet-quick-dispatch.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        mod.TEXT = mod.load_text()
         _QD.append(mod)
     return _QD[0]
 
@@ -5427,6 +5430,12 @@ def archive_ask(r):
 
 
 ACTIONS = [
+    {"id": "retrystart", "label": lambda r: "Retry start" if ui_lang() == "en" else "重试启动",
+     "when": lambda r: bool(retry_start_task(r)), "local": lambda r, a, f: "retrystart",
+     "far": lambda r, a, f: "retrystart", "ask": None, "slow": True, "thread": True},
+    {"id": "deletestart", "label": lambda r: "Delete request" if ui_lang() == "en" else "删除请求",
+     "when": lambda r: bool(retry_start_task(r)), "local": lambda r, a, f: "deletestart",
+     "far": lambda r, a, f: "deletestart", "ask": None, "slow": True, "thread": True},
     {"id": "archive", "label": lambda r: (("Unarchive" if r.get("archived") else "Archive") if ui_lang() == "en" else ("取消归档" if r.get("archived") else "归档")),
      "when": lambda r: bool(r.get("board")), "local": archive_action, "far": archive_action, "ask": archive_ask,
      "prompt": lambda r: ("Still running — stop and archive? y / n" if ui_lang() == "en" else "会话还在运行，归档会停止它。确定？ y / n"),
@@ -5567,6 +5576,8 @@ def menu_of(r):
     if (r.get('gone') or r.get('record_only')) and (reopen_row(r) or far_reopen_row(r)):
         a = ACTION["resume"]
         return [(a, a["label"](r))] + ([(ACTION["archive"], ACTION["archive"]["label"](r))] if r.get("board") else [])
+    if retry_start_task(r):
+        return [(ACTION[k], ACTION[k]["label"](r)) for k in ("retrystart", "deletestart")]
     if r.get("record_only"):
         a = ACTION["cancelstart"] if pending_start_task(r) else ACTION["stop"]
         items = [(a, a["label"](r))] if pending_start_task(r) or controlled_stop_task(r) else []
@@ -5590,7 +5601,7 @@ def menu_of(r):
 # in ACTIONS for `fleet view-act` and the command line, and are done from
 # elsewhere (进入 answers and resumes; ⌃\ the shell; ⌃T the pin). A
 # reaped session's one item is 恢复.
-PAGE_ACTIONS = ("continue", "resume", "enter", "pr", "rename", "agent", "webopen", "stop", "cancelstart")
+PAGE_ACTIONS = ("retrystart", "deletestart", "continue", "resume", "enter", "pr", "rename", "agent", "webopen", "stop", "cancelstart")
 
 
 def _page_of(r, missing=None):
@@ -5616,6 +5627,8 @@ def _page_of(r, missing=None):
                      else "在 %s 上：到那台机器恢复" % m)]
         return [(a, a["label"](r), "No session is recorded for this row — nothing to reopen" if en
                  else "这一行没有记下会话：没有可恢复的")]
+    if retry_start_task(r):
+        return [(a, label, "") for a, label in menu_of(r)]
     if r.get("record_only"):
         if pending_start_task(r):
             a = ACTION["cancelstart"]
@@ -5736,6 +5749,14 @@ def _act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
             return 1, 'Choose the continuation agent explicitly', False
         options = {'agent': ans} if ans in ('claude', 'codex') else {}
         rc, said = continue_task(r, ui_lang(), bin_dir=act_bin(), **options)
+        hub_reread(fleet)
+        return rc, said, False
+    if argv == "retrystart":
+        rc, said = retry_task_start(r, ui_lang(), bin_dir=act_bin())
+        hub_reread(fleet)
+        return rc, said, False
+    if argv == "deletestart":
+        rc, said = cancel_pending_start(retry_start_task(r), ui_lang())
         hub_reread(fleet)
         return rc, said, False
     if argv == "cancelstart":

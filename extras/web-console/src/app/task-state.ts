@@ -7,6 +7,7 @@ export type Task = {
   session_key?: string; worker_id?: string; operation_id?: string; state?: string; task_state?: string;
   issue?: string; ticket_ref?: string; parked?: string; asked?: string;
   created_at: string; updated_at?: string; authority_version?: number;
+  start_retry?: boolean; start_failure?: string;
   generation?: number; outcome?: string; cancel_request?: string;
   execution_endpoint?: string; execution_owner?: string;
   task_blockers?: { version: number; generation: number; items: TaskBlocker[] };

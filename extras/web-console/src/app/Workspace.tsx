@@ -22,7 +22,7 @@ import { stopRow, stopAcknowledgment } from './task-stop-api';
 import { canContinueRow, requestRowContinue, type ContinueAgent } from './task-continue';
 import { sendJSON, useMe } from "@/shared/api";
 import { useWorkRows } from "./work-rows";
-import { pendingStartRef } from "./task-cancel";
+import { pendingStartRef, retryStartRef } from "./task-cancel";
 
 export function Workspace({ r }: { r: Row }) {
   const [params, setParams] = useSearchParams();
@@ -33,8 +33,10 @@ export function Workspace({ r }: { r: Row }) {
     setParams((p) => { p.delete("view"); return p; }, { replace: true });
     toast.info(tr("已打开网页对话。原生终端操作请在 iTerm2 中继续。", "Opened the conversation. Continue native terminal interactions in iTerm2."));
   }, [params, setParams]);
-  const pendingRecord = !r.live && !!r.board && ["queued", "starting", "not_seen"].includes(r.board.tag);
-  const cancelRef = pendingStartRef(r);
+  const pendingRecord = !r.live && !!r.board && ["queued", "start_failed", "starting", "not_seen"].includes(r.board.tag);
+  const retryRef = retryStartRef(r);
+  const cancelRef = retryRef || pendingStartRef(r);
+  const [retrying, setRetrying] = useState(false);
   const { reload, rows, restoreArchived } = useWorkRows();
   // a session another opened: 来自 <that one> › <this one>, the way back to it
   const opener = useMemo(() => sessionTree(rows || []).up.get(r.id), [rows, r.id]);
@@ -91,8 +93,21 @@ export function Workspace({ r }: { r: Row }) {
     } finally { setStopping(false); }
   };
 
+  const retryStart = async () => {
+    if (!retryRef || retrying || cancelling || readOnly) return;
+    setRetrying(true);
+    setCancelError("");
+    try {
+      const result = await sendJSON("POST", `/v1/fleet/tasks/${encodeURIComponent(retryRef)}/retry-start`,
+        { expected_generation: r.task?.generation ?? r.board?.generation });
+      if (result.ok) toast.info(tr("已提交启动请求。", "Start request submitted."));
+      else setCancelError(result.error || tr("启动失败，请刷新后重试。", "Start failed; refresh and retry."));
+      reload();
+    } finally { setRetrying(false); }
+  };
+
   const cancelStart = async () => {
-    if (!cancelRef || cancelling || !me || me.read_only || me.view_as || viewAs) return;
+    if (!cancelRef || cancelling || retrying || !me || me.read_only || me.view_as || viewAs) return;
     setCancelling(true);
     setCancelError("");
     try {
@@ -130,11 +145,6 @@ export function Workspace({ r }: { r: Row }) {
         </Button> : canStopRow(r) ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8" disabled={stopping || readOnly} onClick={() => void stop()} aria-label={tr("停止", "Stop")}>
           <Square className="size-4" />{tr("停止", "Stop")}
         </Button> : null}
-        {pendingRecord && cancelRef ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8"
-          disabled={cancelling || !me || !!me.read_only || !!me.view_as || !!viewAs}
-          onClick={() => void cancelStart()} aria-label={tr("取消启动", "Cancel start")}>
-          <Square className="size-4" />{tr("取消启动", "Cancel start")}
-        </Button> : null}
         <Button variant="outline" size="sm" className="h-11 min-w-11 shrink-0 md:h-8 md:min-w-0" aria-label={tr("详情", "Details")} onClick={() => setDetails(true)}>
           <Info className="md:hidden" /><span className="hidden md:inline">{tr("详情", "Details")}</span>
         </Button>
@@ -163,6 +173,15 @@ export function Workspace({ r }: { r: Row }) {
         {pendingRecord ? <div className="min-w-0 max-w-full space-y-2 p-4 text-sm [overflow-wrap:anywhere]" role="status">
           <p>{tr(...r.tag)}</p><p>{rowAgent(r)}</p>
           {r.board?.context ? <p>{tr(...r.board.context)}</p> : null}
+          <div className="flex flex-wrap gap-2 pt-2">
+            {retryRef ? <Button variant="outline" size="sm" className="h-11 md:h-8" disabled={retrying || cancelling || readOnly}
+              onClick={() => void retryStart()}>{tr("重试启动", "Retry start")}</Button> : null}
+            {pendingRecord && cancelRef ? <Button variant="outline" size="sm" className="h-11 shrink-0 md:h-8"
+              disabled={cancelling || retrying || !me || !!me.read_only || !!me.view_as || !!viewAs}
+              onClick={() => void cancelStart()} aria-label={retryRef ? tr("删除请求", "Delete request") : tr("取消启动", "Cancel start")}>
+              <Square className="size-4" />{retryRef ? tr("删除请求", "Delete request") : tr("取消启动", "Cancel start")}
+            </Button> : null}
+          </div>
         </div> : null}
         {!pendingRecord ? <div className="h-full">
           <ChatThread source={{ kind: "session", machine: rowMachine(r), key: r.live?.key || r.ended?.key || "", agent, worker: rowWorker(r),

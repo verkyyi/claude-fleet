@@ -61,6 +61,8 @@ export type BoardRow = {
   from?: string; from_title?: string; from_ended?: boolean; tree_at?: number;
   loop?: boolean; // explicit recurring plan, never inferred from looping observation
   running?: boolean; // native execution/background activity observation
+  generation?: number;
+  start_retry?: boolean; start_failure?: string;
   pending_start?: boolean; // accepted execution request with no confirmed native start
   execution_endpoint?: string; // existing Task binding, independent of node visibility
   // why it is still open (E101): the card's third line, 中文 / English, and its tone

@@ -263,6 +263,9 @@ if [ -n "$DRAFT" ] && [ -n "$PROMPT$SEED_FILE$RESUME_SID$TASK_REF$AS_ARG" ]; the
 fi
 case "$ORIGIN_WID" in ''|*[!A-Za-z0-9/:._-]*) ORIGIN_WID='' ;; esac
 case "$TASK_REF" in T[1-9]*) case "${TASK_REF#T}" in *[!0-9]*) TASK_REF='' ;; esac ;; *) TASK_REF='' ;; esac
+if [ -n "$TASK_REF" ] && [ -z "$PROMPT" ]; then
+  case "$NAME" in 新会话|'New session'|dispatch_new_title) PLACEHOLDER=1; [ "$NAME" != dispatch_new_title ] || NAME=新会话 ;; esac
+fi
 case "$RESUME_SID" in *[!0-9a-fA-F-]*) RESUME_SID='' ;; esac
 case "$PREV_ID" in *[!0-9a-f-]*) PREV_ID='' ;; esac
 case "$REOPEN_FID" in *[!0-9a-f-]*) REOPEN_FID='' ;; esac
@@ -813,10 +816,11 @@ sys.stdout.write(t)' "$TASK_REF" > "$_body" || exit 1
   # FLEET_PLACE_LOCAL_DISPATCH (T716): an accepted dispatch the hub places HERE
   # is answered LOCAL and opened by this run, not sent back through this
   # machine's node (a second run of this script, a 1 s poll)
+  _place_name=$(printf '%s' "$NAME" | python3 -c 'import sys; print(" ".join(sys.stdin.read().replace("#", "").split())[:64], end="")')
   place_out=$(FLEET_DISPATCH_RESULT="$_dispatch_result" FLEET_EXECUTION_RESULT="$_dispatch_result.execution" FLEET_DISPATCH="$DISPATCH" FLEET_PLACE_NOT_HERE="$CAP_HELD" \
     FLEET_PLACE_LOCAL_DISPATCH="${FLEET_PLACE_LOCAL_DISPATCH:-1}" \
     FLEET_PLACE_AS="$PLACE_AS" FLEET_PLACE_BODY_FILE="$_body" FLEET_PLACE_MODEL="$MODEL_ARG" \
-    fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "" "$AGENT" '' '' "$NAME" "$REAP" 2>"$_place_err"); place_rc=$?
+    fleet_hub_place "$SESS" "$_prepo" scratch "$NODE" "" "$AGENT" '' '' "$_place_name" "$REAP" 2>"$_place_err"); place_rc=$?
   fleet_timing_at placed   # the hub's placement answered (T716; nothing without a ↵)
   [ -n "$_body" ] && rm -f "$_body"
   _place_note=''
