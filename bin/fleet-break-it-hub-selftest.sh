@@ -1517,6 +1517,14 @@ drill_linux_admit_pod_start() {
   WHAT="1 核 pod 一分钟读 1.51 核 / 限流 59%：共享机器照拦；个人 pod 放行并在 admit-advice.log 记一行，心跳 admit:true；个人 pod 内存紧张照拦；FLEET_ADMIT_POD_CPU=hold 回到拦"
 }
 
+drill_load_governance() {
+  CAP=20; local out t0
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-load-governance-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='CPU/load population, failed native turn, bounded test workers and pre-record title validation'
+}
+
 # mac-admit-load-not-busy (issue #4077): macOS counts waiting processes in its
 # load average — a 15-core Mac read load 47.2 on 15 cores (3.1/core) with the CPU
 # 40 % busy, and every login's gate answered admit=false 负载过高, so no new
@@ -1544,16 +1552,16 @@ drill_mac_admit_load_not_busy() {
   mr 3.15 0.920
   out=$(run bash "$BIN/fleet-control-read.sh" capacity 2>&1)
   case "$out" in *'"admit":false'*'"admit_why":"负载过高（CPU 92%）"'*) ;; *) WHY="92 % busy must hold and admit_why name the CPU: $out"; return 1 ;; esac
-  mr 6.40 0.400
+  mr 16.40 0.400
   out=$(adm)
-  case "$out" in *'machine load extreme'*'6.40/core'*'|rc=1') ;; *) WHY="6.4/core is past the 5/core hard cap and must hold: $out"; return 1 ;; esac
+  case "$out" in *'machine load extreme'*'16.40/core'*'|rc=1') ;; *) WHY="16.4/core is past even the maximum population correction and must hold: $out"; return 1 ;; esac
   mr 3.15
   out=$(adm FLEET_CPU_BUSY_PROBE_CMD=true)
   case "$out" in *'machine load high'*'3.15/core'*'no CPU-busy reading'*'|rc=1') ;; *) WHY="with no busy reading the old load rule must hold: $out"; return 1 ;; esac
   out=$(env -u FLEET_MACHINE_TASKS python3 "$BIN/fleet-machine-tasks.py" probe 2>&1)
   case "$out" in *'"cpu_busy": "'[01].[0-9][0-9][0-9]'"'*) ;; *) WHY="the machine-reading task must publish a cpu_busy share: $out"; return 1 ;; esac
   SECS=$(since "$t0")
-  WHAT="15 核 Mac 3.1/核、CPU 40%：经机器读数放行、心跳 admit:true；CPU 92% 挡且 admit_why 写「负载过高（CPU 92%）」；过 5/核硬上限仍挡；没有 cpu_busy 读数回到老负载规则；守护的读数任务发布 cpu_busy"
+  WHAT="15 核 Mac 3.1/核、CPU 40%：经机器读数放行、心跳 admit:true；CPU 92% 挡且 admit_why 写「负载过高（CPU 92%）」；过人口修正后的极端硬上限仍挡；没有 cpu_busy 读数回到老负载规则；守护的读数任务发布 cpu_busy"
 }
 
 # pod-disk-node-tmp (issue #3974): a Linux pod has no TMPDIR, and its /tmp is the

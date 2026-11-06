@@ -443,3 +443,27 @@ mac-b p50 180 / max 1596。**结论**：不是哪边都更好——家在 mac-a 
 | 审计 | 入口 `fleet_audit` 表：`node_maintenance`（ENTER/LEAVE/ALREADY/NOT_FLAGGED）、`lease_*`、`place`、`move` |
 
 相关：`docs/FLEET-HUB.md`（入口、失联、租约）· `docs/SHARED-MACHINE.md`（给一台机器加登录）· `docs/HOST.md`（无人值守 Mac）· `tokenledger/README.md`「Fleet nodes」。
+
+
+### 负载拒绝与空闲驻留诊断
+
+准入优先使用 `cpu_busy`；macOS 本机和 Hub 都使用系统 CPU 采样，不再相加进程百分比。面板的「暂停开新」同时显示 CPU 或触发拒绝的负载读数。
+macOS 有可靠 CPU 读数时，load average 只作紧急上限：基础值
+`FLEET_ADMIT_LOAD_HARD_PER_CORE` 乘以
+`min(3, 1 + (进程数 + 线程数) / (200 × 核数))`；人口采样缺失时保留基础上限。
+Linux 和缺少 CPU 读数时沿用原规则。CPU 真忙、内存不足仍会拒接。
+
+新会话中的 vitest/jest 通过 node 入口限制为最多 2 个 worker，并使用现有
+`FLEET_HEAVY` 机器共享槽位；npm exec、npx、包内 test 脚本都经过该入口。
+已有的更低 worker 数和 Jest `--runInBand` 保留。直接调用绝对路径 node 或改写 PATH
+的命令需要显式使用 `fleet-heavy.sh -- <测试命令>` 并传 `--maxWorkers=2`。
+新会话继承入口；现有 Claude 会话的 Bash 守卫也覆盖 vitest/jest 命令。
+
+Codex 停放复用启动时缓存的身份，实时复检进程归属、原生回合、目标、子任务和输入框。
+错误结束的回合可停放，但错误提示文字本身不作为空闲证明。探测超时会重试，
+超时与未知证据分别显示 `bg_probe_timeout`、`bg_probe_unknown`，下一轮仍会再试。
+`fleet doctor` 的 reap 行会列出 done 超过 24 小时仍未停放的会话，包括 keep 和无仓库会话，
+显示最近的拒停原因；运行 `python3 bin/fleet-reap-overdue.py` 可看完整列表。
+这份诊断不改变 keep 的保留策略，也不越过草稿、观看者和后台工作的保护。
+
+派发标题最多 64 个可打印 Unicode 字符；超长或含控制字符会在创建任务记录之前拒绝。

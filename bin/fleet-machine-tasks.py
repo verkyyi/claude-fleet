@@ -39,7 +39,7 @@ import time
 
 BIN = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(BIN)
-KEYS = ("mem_probe", "mem_total_mb", "load_per_core", "cpu_busy")
+KEYS = ("mem_probe", "mem_total_mb", "load_per_core", "cpu_busy", "load_population")
 
 
 def table_path(root=ROOT):
@@ -122,7 +122,7 @@ def probe():
     env["FLEET_SKIP_GLOBAL_CONF"] = "1"
     script = ('. "$1" >/dev/null 2>&1 || exit 1; FLEET_MACHINE_TASKS=; '
               'printf "%s\\n" "$(fleet_mem_probe 2>/dev/null)" "$(fleet_mem_total_mb 2>/dev/null)" '
-              '"$(_fleet_load_per_core 2>/dev/null)" "$(_fleet_cpu_busy 2>/dev/null)"')
+              '"$(_fleet_load_per_core 2>/dev/null)" "$(_fleet_cpu_busy 2>/dev/null)" "$(_fleet_load_population 2>/dev/null)"')
     try:
         p = subprocess.run(["/bin/bash", "-c", script, "_", os.path.join(BIN, "fleet-lib.sh")],
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
