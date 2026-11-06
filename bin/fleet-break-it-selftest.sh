@@ -473,6 +473,13 @@ exit_drill() {
 # session-exit — every way an agent leaves or stops, one table: /exit (rc 0), Ctrl+C
 # (rc 130) and a kill (137) end on the recovery page (exit_drill, ≤5s each); Ctrl+Z
 # (ctrl_z_leg) is resumed within 1s.
+drill_tmux_background_domain() {
+  local started; started=$(now); CAP=15
+  python3 "$BIN/fleet-launchd-tmux-selftest.py" >"$WORK/tmux-domain.log" 2>&1 \
+    || { cat "$WORK/tmux-domain.log"; WHY='GUI launch routing or non-destructive domain detection failed'; return 1; }
+  SECS=$(since "$started"); WHAT='GUI-only server launch; existing servers untouched; Background warning'
+}
+
 drill_transfer_target_runtime() {
   local started; started=$(now); CAP=12
   bash "$BIN/fleet-codex-runtime-selftest.sh" TargetPreflightTests >"$WORK/transfer-target-runtime.log" 2>&1 \
@@ -1397,6 +1404,8 @@ drill_personal_tmux_conf() {
     printf 'set -g @personal_after 1\n'; } > "$h/.tmux.conf"
   t0=$(now)
   ( PATH="$WORK/tbin:$PATH" HOME="$h" FLEET_CONF_DIR="$WORK/pcconf"; export PATH HOME FLEET_CONF_DIR BREAK_SOCK
+    # Domain routing has its own drill; this one tests the config on an isolated socket.
+    uname() { printf 'Linux\n'; }
     . "$BIN/fleet-lib.sh"; fleet_server_new_session pc -d -s pc -n home -x 100 -y 30 'exec sleep 600' ) >/dev/null 2>&1 \
     || { WHY="the fleet server did not start beside a broken ~/.tmux.conf"; return 1; }
   nt show-hooks -g window-unlinked 2>/dev/null | grep -q 'fleet-window-reap.sh' || { WHY="the reap hook (window-unlinked → fleet-window-reap.sh) is not on the server"; return 1; }

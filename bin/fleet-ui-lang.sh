@@ -1382,6 +1382,8 @@ quit	z	quit fleet — in the client only: every process of the client on this co
     zh:topbar_no_record)        printf '顶行无记录' ;;
     en:topbar_no_record)        printf 'no top-line record' ;;
     # the top line's own words (fleet-topbar.py reads `dump topbar_`, issue #3324)
+    zh:topbar_launchd_migrate)  printf '需迁移到 Aqua' ;;
+    en:topbar_launchd_migrate)  printf 'migration to Aqua required' ;;
     zh:topbar_ctx_reset)        printf '已清空' ;;
     en:topbar_ctx_reset)        printf 'Cleared' ;;
     zh:topbar_left_fmt)         printf '剩余 %s' "${1:-}" ;;

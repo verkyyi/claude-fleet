@@ -2720,6 +2720,12 @@ fleet_server_conf() { printf '%s\n' "${_FLEET_LIB_DIR%/}/../conf/tmux-fleet-serv
 fleet_server_new_session() {
   local sock="$1" cf; shift
   cf=$(fleet_server_conf)
+  if [ "$(uname -s)" = Darwin ]; then
+    python3 "${_FLEET_LIB_DIR}/fleet-launchd-tmux.py" "$sock" "$cf" || return 1
+    # -N forbids a client-side Background fallback if the server exits here.
+    tmux -L "$sock" -N new-session "$@"
+    return $?
+  fi
   if [ -f "$cf" ]; then tmux -L "$sock" -f "$cf" new-session "$@"
   else tmux -L "$sock" new-session "$@"; fi
 }
