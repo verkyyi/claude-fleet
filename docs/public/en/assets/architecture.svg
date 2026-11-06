@@ -81,6 +81,7 @@ text{font-family:var(--fleet-font-ui,system-ui,sans-serif);fill:var(--foreground
 <text x="320" y="981" class="heading" text-anchor="middle">Claude Code / Codex</text>
 <text x="320" y="1008" class="small muted" text-anchor="middle">Sessions: native agents, unmodified</text>
 <text x="320" y="1058" class="muted" text-anchor="middle">Node agent · Task timer · Working files</text>
+<text x="320" y="1084" class="small muted" text-anchor="middle">macOS sessions: GUI login domain (Aqua)</text>
 <text x="32" y="1125" class="heading">Model requests</text>
 <text x="608" y="1125" class="small muted" text-anchor="end">Model keys never enter sessions</text>
 <rect class="card" x="32" y="1146" width="176" height="86" rx="14"/>

@@ -64,6 +64,8 @@ for d in ${FLEET_TOOL_DIRS:-$HOME/.local/bin /opt/homebrew/bin /usr/local/bin}; 
   case ":$PATH:" in *":$d:"*) ;; *) PATH="${PATH:+$PATH:}$d" ;; esac
 done
 export PATH
+# Check the pane's actual launchd domain; no restart or credential workaround.
+python3 "$BIN/fleet-launchd-tmux.py" --stamp 2>/dev/null || true
 # The install is read-only (issue #4668): Python's bytecode for the fleet's own
 # modules goes to this login's CACHE dir, never beside them in bin/ and never in
 # the conf dir, which is snapshotted, moved and backed up (issue #4692) — for every

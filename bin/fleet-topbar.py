@@ -501,6 +501,13 @@ def render_node(kv, cols):
     vl = kv.get("vl", "")
     if vl.startswith("1:"):
         os.environ["FLEET_VIEW_LANG"] = vl[2:]
+    # Server-stamped launchd health, measured in its own domain (T1332).
+    if kv.get("sock"):
+        warning = subprocess.run(["tmux", "-S", kv["sock"], "show-options", "-gqv", "@launchd_warning"],
+                                 capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
+        if warning:
+            print("#[fg=%s,bold]%s#[default]" % (WARN, tmux_text(clip(warning + " · 需迁移到 Aqua", cols))))
+            return 0
     upload = render_upload(kv, cols)
     if upload is not None:
         print(upload)

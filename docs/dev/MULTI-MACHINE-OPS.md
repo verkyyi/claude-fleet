@@ -467,3 +467,43 @@ Codex 停放复用启动时缓存的身份，实时复检进程归属、原生�
 这份诊断不改变 keep 的保留策略，也不越过草稿、观看者和后台工作的保护。
 
 派发标题最多 64 个可打印 Unicode 字符；超长或含控制字符会在创建任务记录之前拒绝。
+
+
+### macOS 会话提示 `launchd: Background`
+
+这是 tmux **服务器**所处的 launchd 域异常。后台 supervisor 只切换 UID/GID、
+HOME、TMPDIR，并不会进入图形登录的 bootstrap namespace；恢复链路
+`fleet-restore --auto → fleet-up → fleet_server_new_session` 以前直接继承这个域。
+更新本身不改变存活服务器的域，重开窗口也不会改变；后台恢复首次创建服务器时才会带入。
+`ProcessType=Standard` 是进程调度策略，并不代表 Aqua。
+
+新服务器在 `gui/<uid>` 中注册 `com.claude-fleet.tmux.<hash>` LaunchAgent，
+以 `tmux -D` 前台运行，客户端使用 `-N`，避免服务器退出后又从后台偷偷补起。
+没有 GUI 登录域时启动明确失败，不退回 Background。仅 SSH 登录的账户需先建立该
+账户的图形登录会话；不能把 `sudo -u` 或设置 HOME 当作图形登录。
+LaunchAgent 的 plist、日志仅写入 `$FLEET_CONF_DIR/launchd-tmux/`，不存凭据。
+它不设置 KeepAlive；有意停止仍走 fleet 原来的停机/恢复规则。
+
+配置重载及会话启动会从 tmux 内部读取 `launchctl managername`；不是 Aqua 或读取
+失败时，看台状态行和直接 attach 的节点状态行显示 `launchd: <域>`。
+检查不停止服务器、不自动重开任何会话，也不修改证书或登录态。
+
+**旧服务器迁移（需发起人确认维护窗口后，由执行者操作）：**
+
+1. 先确认该账户 `launchctl print gui/$(id -u)` 成功，并在隔离 socket 上验证新启动路径。
+   若 GUI 域不存在，先安排图形登录；保留旧服务器，不尝试关停后碰运气。
+2. 确认后保存 `fleet-restore.sh --snapshot`，核对恢复记录中的会话 ID、工作树和未提交工作。
+   等待活跃工具结束，记录不能靠对话恢复的后台进程；它们不会随会话恢复而复活。
+3. 在维护执行者的独立连接中执行 `fleet-down.sh <fleet名>`（不加 `--purge`），
+   核对其列出的会话并确认。保存它输出的 `restore.map.down-<UTC>` 路径。
+   使用 `fleet-restore.sh --undo` 恢复；新服务器由 GUI LaunchAgent 承载。
+   不能从将被停止的执行会话中串行执行这一组操作。
+4. 在恢复后的窗格核对 `launchctl managername` 为 Aqua、原会话和工作树绑定未变，
+   再验证 GitHub TLS、钥匙串登录、进程查询及 Chromium 连续两次启动。
+   GUI 域正确不等于钥匙串已经解锁；分别验证，不以证书环境变量绕过代替验收。
+
+tmux 不能跨服务器搬运存活进程；本流程采用确认后统一恢复，不承诺无中断迁移。
+Git 的 `user.name` / `user.email` 缺失另行按操作者身份配置，Aqua 不会补出提交身份。
+临时文件丢失也须单独取证：更新/恢复链路清理的是版本目录、锁和自己创建的临时文件，
+并无清空 `/tmp` 的步骤。仅靠发生时间接近不能认定删除者；发生时应保留清理日志和
+文件事件证据，勿把别的会话目录纳入清理范围。

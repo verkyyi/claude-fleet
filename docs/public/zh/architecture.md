@@ -46,6 +46,8 @@ Tokenman 是原生 AI 编程 agent 的运行时：Claude Code、Codex 等由模�
 - **个人节点** — 由个人拥有并加入 fleet 的机器。[深入了解](self-host/quickstart.md)。
 - **节点代理** — 在节点上运行，维持向外连接，管理会话并应用更新。[深入了解](self-host/install.md)。
 
+新建 macOS 会话服务器需要该账户的图形登录域（Aqua），由 GUI LaunchAgent 前台运行 tmux；后台恢复在 GUI 域不可用时拒绝新建服务器。已有服务器保留运行并显示域异常提示，迁移需操作者确认。
+
 <!-- blueprint:external -->
 ## 外部服务 External services
 

@@ -46,6 +46,8 @@ Nodes initiate an encrypted connection to the hub; they do not access the data l
 - **Personal nodes** — A person's own machine joined to the fleet. [Learn more](self-host/quickstart.md).
 - **Node agent** — Runs on a node, maintains its outward connection, manages sessions and applies updates. [Learn more](self-host/install.md).
 
+New macOS session servers require the account’s graphical login domain (Aqua). A GUI LaunchAgent runs tmux in the foreground; background recovery refuses to create a server when that domain is unavailable. Existing servers stay running and show a domain warning until an operator-approved migration.
+
 <!-- blueprint:external -->
 ## External services
 
