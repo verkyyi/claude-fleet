@@ -231,15 +231,17 @@ fi
 
 # ── one read of what is on the bus now; queue only what differs ─────────────
 # The quota writer + time lead as two space-separated words (`-` = unset): an
-# older tmux prints a control character as `_` to a client it does not take for
-# UTF-8, so the proxy-wins rule below must not hang on the \x1f split.
+# older tmux escapes control characters even for UTF-8 clients. Use printable
+# separators and q-escaped model/effort; the stdin JSON split above stays local.
 CUR=$(tmux -u display-message -p -t "$TMUX_PANE" \
-        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}${US}#{@ctx_limit}${US}#{@ctx_band}${US}#{@model}${US}#{@effort}${US}#{@ctx_src}${US}#{@ctx_left}${US}#{@ctx_ts}${US}#{@ctx_est}${US}#{@ctx_sample}${US}#{@mod_alive}" 2>/dev/null)
+        "#{?@rl_src,#{@rl_src},-} #{?@rl_ts,#{@rl_ts},-} #{@ctx_pct}|#{@ctx_limit}|#{@ctx_band}|#{q:@model}|#{q:@effort}|#{@ctx_src}|#{@ctx_left}|#{@ctx_ts}|#{@ctx_est}|#{@ctx_sample}|#{@mod_alive}" 2>/dev/null)
 cur_rlsrc='' cur_rlts=''
 if [[ "$CUR" =~ ^([^ ]+)\ ([^ ]+)\ (.*)$ ]]; then
   cur_rlsrc=${BASH_REMATCH[1]}; cur_rlts=${BASH_REMATCH[2]}; CUR=${BASH_REMATCH[3]}
 fi
-IFS=$US read -r cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_left cur_ts cur_est cur_sample cur_mod_alive <<< "$CUR"
+# tmux q: backslash escapes protect literal pipes/spaces in model names.
+# shellcheck disable=SC2162
+IFS='|' read cur_pct cur_limit cur_band cur_model cur_effort cur_src cur_left cur_ts cur_est cur_sample cur_mod_alive <<< "$CUR"
 
 # The proxy's quota reading wins while it is fresh (issue #1978): a status-line
 # render or a mod measure then leaves the @rl* set as the proxy stamped it.

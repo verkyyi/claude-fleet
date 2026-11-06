@@ -28,15 +28,15 @@ class Reset(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='ctx-reset-')
         self.addCleanup(self.tmp.cleanup)
         self.env = dict(os.environ, HOME=self.tmp.name, TMPDIR=self.tmp.name, FLEET_CONF_DIR=self.tmp.name, FLEET_SKIP_GLOBAL_CONF='1', FLEET_UI_LANG='zh')
-        # Older tmux clients replace control separators without -u. Model that
+        # Older tmux clients escape control separators even with -u. Model that
         # behavior even on newer local tmux, so Linux's bus read is covered here.
         real_tmux = shutil.which('tmux')
         shim = Path(self.tmp.name) / 'bin'
         shim.mkdir()
         wrapper = shim / 'tmux'
-        wrapper.write_text("#!/bin/sh\nif [ \"${1:-}\" = display-message ]; then\n  "
-                           + shlex.quote(real_tmux) + " \"$@\" | tr '\\037' '_'\nelse\n  exec "
-                           + shlex.quote(real_tmux) + " \"$@\"\nfi\n")
+        wrapper.write_text("#!/bin/sh\nfor arg in \"$@\"; do\nif [ \"$arg\" = display-message ]; then\n  "
+                           + shlex.quote(real_tmux) + " \"$@\" | tr '\\037' '_'\n  exit $?\nfi\ndone\nexec "
+                           + shlex.quote(real_tmux) + " \"$@\"\n")
         wrapper.chmod(0o755)
         self.env['PATH'] = str(shim) + os.pathsep + self.env['PATH']
         self.sock = str(Path(self.tmp.name) / 'tmux')
@@ -128,6 +128,15 @@ class Reset(unittest.TestCase):
                 self.feed('ctx_pct=100', 'ctx_measure=1')
         self.feed('ctx_reset=clear')
         self.assertEqual(self.opt('ctx_left'), '70')
+
+    def test_model_name_separator_is_not_a_field_boundary(self):
+        self.feed('model=custom|alias')
+        self.feed('ctx_reset=startup')
+        self.feed('ctx_pct=31', 'ctx_measure=1')
+        self.feed('ctx_reset=clear')
+        self.assertEqual(self.opt('ctx_left'), '69')
+        self.feed('model=custom')
+        self.assertEqual(self.opt('ctx_left'), '')
 
     def test_local_and_remote_display(self):
         tb = module('ctx_topbar', 'fleet-topbar.py')

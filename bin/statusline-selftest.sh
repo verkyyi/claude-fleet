@@ -76,7 +76,7 @@ STUB
 printf '#!/bin/sh\necho "git \$*" >> "%s"\nexit 99\n' "$GITLOG" > "$WORK/stub/git"
 chmod +x "$WORK/stub/tmux" "$WORK/stub/git"
 
-US=$(printf '\037')
+US='|'
 PANE='TMUX=/private/tmp/tmux-501/fleet-x,123,0 TMUX_PANE=%1'
 # render [VAR=val …] — the sandboxed status line in a fleet-x pane, payload on stdin.
 render() {
