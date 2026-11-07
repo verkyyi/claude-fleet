@@ -22,6 +22,7 @@ from pathlib import Path
 import re
 import runpy
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -452,12 +453,15 @@ def background_stale(source, pids, activity, now=None):
             else:
                 out = subprocess.run(['lsof', '-a', '-p', str(pid), '-d', '1,2', '-Fn'],
                                      capture_output=True, text=True, timeout=3)
-                if out.returncode not in (0, 1):
-                    return False
+                if out.returncode != 0:
+                    from fleet_native_proc import process_gone
+                    if out.returncode != 1 or not process_gone(pid):
+                        return False
                 paths = [Path(line[1:]) for line in out.stdout.splitlines() if line.startswith('n/')]
             for path in paths:
-                if path.is_file():
-                    progress = max(progress, path.stat().st_mtime)
+                info = path.stat()
+                if stat.S_ISREG(info.st_mode):
+                    progress = max(progress, info.st_mtime)
         return 0 < progress <= now - seconds
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
         return False
