@@ -1743,6 +1743,14 @@ class WebPark(Rig):
 
     def test_parks_after_its_idle_never_closes(self):
         log = self.gate()
+        # A configured timeout must survive the shell -> Python -> park gate
+        # boundary; a shell-local assignment otherwise silently uses six hours.
+        self.env.pop("FLEET_BG_STALE_SECS", None)
+        with self.conf.open("a") as f:
+            f.write("FLEET_BG_STALE_SECS=17\n")
+        stub = Path(self.env["FLEET_SESSION_GATE_CMD"])
+        timeout_log = self.root / "bg-timeout"
+        stub.write_text(stub.read_text() + 'printf "%s" "$FLEET_BG_STALE_SECS" > ' + shlex.quote(str(timeout_log)) + '\n')
         idle, fid = self.web(400)
         young, yfid = self.web(30)
         parked, pfid = self.web(4000, **{"@parked": "1"})
@@ -1752,6 +1760,7 @@ class WebPark(Rig):
         self.assertIn("park --fid " + fid + " --why idle", text)
         self.assertNotIn(yfid, text)
         self.assertNotIn(pfid, text)
+        self.assertEqual(timeout_log.read_text(), "17")
         for win in (idle, young, parked):
             self.assertIn(win, self.tm("list-windows", "-t", self.label, "-F", "#{window_id}").split(),
                           win + " was closed: " + out)
