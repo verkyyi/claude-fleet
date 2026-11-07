@@ -320,7 +320,7 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 
 # --- Sessions park when idle (HHV0 / C1) ---------------------------
 # A session the web chat opened (@session_origin web) is never closed on its own;
-# idle this long (no turn running, no question open, no background job, nobody
+# idle this long (no turn running, no progressing background job, nobody
 # looking at its window in a terminal) its agent's process ends IN ITS OWN WINDOW
 # — the window, its ID, its conversation and its session credential stay, every
 # list reads it idle — and the next sentence resumes the same conversation there
@@ -331,6 +331,9 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # idle session immediately; watched / drafts / tools / jobs always hold.
 # @label=Park an idle session with human presence after @group=janitor @tier=advanced @scope=fleet @edit=str
 #FLEET_SESSION_PARK_IDLE=300
+# Background work without transcript/output/activity progress stops holding parking after 6h; 0 disables.
+# @label=Background inactivity timeout before parking @group=janitor @tier=advanced @scope=fleet @edit=str
+#FLEET_BG_STALE_SECS=21600
 # Unattended can opt into 60s. C1 measured partial cache-prefix loss after resume,
 # so the default stays 300s. A recent keyboard input / open page keeps the 5m tier.
 # @label=Park an unattended session after @group=janitor @tier=advanced @scope=fleet @edit=str

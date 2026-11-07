@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # selftest-parts: 4
 # selftest-part: 4 DispatchedSession.test_over_closes_after_its_grace_keeping_the_worktree DoneNoPr.test_codex_worker_closes_like_a_claude_one DoneNoPr.test_native_owned_worktree_keeps_window_and_data DoneNoPr.test_unpushed_commit_keeps_the_worktree
-# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_past_old_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_no_policy_and_keep_hold_but_pin_is_only_order TestIdentity.test_closes_a_test_session_past_its_policy_and_nothing_else
-# selftest-part: 6 ParkTable.test_finished_probe_keeps_its_one_minute_policy PolicyGrammar.test_origin_table_and_the_policy_in_force RoundTrip.test_real_close_and_restore
-# selftest-part: 7 PinIsOrder.test_first_pass_does_not_migrate_pin_to_keep ReapPolicy.test_keep_and_merged_are_never_this_pass StuckReaps.test_the_agents_finished_word_outranks_a_looping_stamp
-# selftest-part: 8 ParkTable.test_activity_and_keep_hold_expiration RoundTrip.test_codex_unknown_or_active_native_turn_is_kept TaskSession.test_now_watcher_closes_about_its_grace_after_the_turn
+# selftest-part: 5 HoldsAndWhy.test_a_background_job_holds_a_done_task_past_old_grace HoldsAndWhy.test_waiting_on_its_person_parks_after_its_hours HomeReap.test_no_policy_and_keep_hold_but_pin_is_only_order TaskSession.test_open_or_unknown_record_keeps_the_session
+# selftest-part: 6 ParkTable.test_finished_probe_keeps_its_one_minute_policy PinIsOrder.test_pin_does_not_override_existing_done_policy RoundTrip.test_dirty_active_loop_recent_unknown_and_unmerged_are_kept TestIdentity.test_probe_origin_closes_after_a_saved_result
+# selftest-part: 7 ParkTable.test_unanswered_record_and_native_blocked_keep_waiting_marker PolicyGrammar.test_restore_map_carries_policy_by_identity RoundTrip.test_shared_git_gate_protects_bound_live_worktree
+# selftest-part: 8 ParkTable.test_activity_and_keep_hold_expiration ReapPolicy.test_loop_end_waits_for_the_loop TaskSession.test_a_final_id_result_is_done_while_the_record_still_reads_open
 # selftest-entry  (run-selftests.sh runs this file by its shebang; T525)
 """Policy tests and a real isolated tmux -> history -> restore round trip."""
 import time
@@ -1362,7 +1362,7 @@ class HoldsAndWhy(TaskSession):
         self.assertEqual(self.why(), "")
 
     def test_waiting_on_its_person_parks_after_its_hours(self):
-        """C6/E101: same window when parked; 3d later history proves resume first."""
+        """A parked question stays visible; answered parks retain the history gate."""
         self.answer.write_text("1\n")
         self.result("waiting")
         self.set("@park_wrap_ver", "1")
@@ -1383,6 +1383,7 @@ class HoldsAndWhy(TaskSession):
         out = self.clean()
         self.assertIn("parked-web:" + self.win, out)
         self.assertTrue(self.exists())
+        self.assertEqual(self.tm("show-option", "-wqv", "-t", self.win, "@claude_state").strip(), "needs")
         self.clean()
         self.assertRegex(self.why(), r"^timer:\d+$")
         old = str(int(time.time()) - 3 * 86400 - 600)
@@ -1393,6 +1394,15 @@ class HoldsAndWhy(TaskSession):
         self.assertNotIn("reaped-parked", self.clean())
         self.assertTrue(self.exists())
         self.set("@park_wake", "")
+        # Expiry does not discard an unanswered question. An answered session
+        # with the ordinary retention policy still proves history before close.
+        self.assertNotIn("reaped-parked", self.clean())
+        self.assertTrue(self.exists())
+        self.set("@claude_state", "done")
+        self.set("@claude_needs", "")
+        self.set("@park_waiting", "0")
+        self.set("@reap_policy", "idle:2h")
+        self.result("succeeded")
         out = self.clean()
         self.assertIn("reaped-parked:" + self.win + " scratch-7", out)
         self.assertFalse(self.exists())
@@ -2114,6 +2124,53 @@ class ParkTable(unittest.TestCase):
     """C6: drive fleet-cleanup-idle.py and fleet_reap_policy.py for every origin.
     The E101 real tmux/history round trip below proves the close is resumable.
     """
+    def setUp(self):
+        # These are policy fixtures; never query a real fleet socket for cold retention.
+        p = patch.object(idle.Cleaner, 'cold_due', return_value=set())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_unanswered_record_and_native_blocked_keep_waiting_marker(self):
+        c = idle.Cleaner(argparse.Namespace(socket_name='test'))
+        with patch.object(c, 'id_status', return_value={'state': 'done'}), \
+                patch.object(c, 'record', return_value=(1, True, False)):
+            self.assertTrue(c.is_waiting({'@task': 'T1', '@claude_state': 'done'}))
+        with patch.object(c, 'record', return_value=(0, False, False)):
+            self.assertTrue(c.is_waiting({'@agent_status': '{"state":"blocked"}', '@claude_state': 'done'}))
+
+    def test_waiting_states_have_same_park_timer(self):
+        args = argparse.Namespace(socket_name='test', session='test', main='/missing', repo='o/r',
+                                  base='master', window_repo=False, dry_run=False)
+        c = idle.Cleaner(args)
+        c.now, c._mem, c._park_watched = 1000, (False, ''), set()
+        with patch.object(c, 'tm', return_value=''):
+            snap = c.snapshot('@9')
+        snap.update({'@park_wrap_ver': '1', '@claude_state_ts': '100', '@norepo': '1',
+                     '@fleet_id': '11111111-1111-4111-8111-111111111111', '@reap_policy': 'keep'})
+        for state in ('done', 'needs', 'blocked', 'asking'):
+            snap['@claude_state'] = state
+            with self.subTest(state=state), patch.object(c, 'tm', return_value=''), \
+                    patch.object(c, 'is_waiting', return_value=state != 'done'), \
+                    patch.object(idle, 'run', return_value='{"ok":true}') as gate:
+                self.assertTrue(c.web_park('@9', snap))
+                gate.assert_called_once()
+                self.assertIn('next=park@', idle.fleet_reap_policy.explain(snap, now=c.now))
+        self.assertNotIn('asking', idle.fleet_reap_policy.PARK_HOLDS)
+
+    def test_legacy_merged_waiting_session_still_parks(self):
+        c = idle.Cleaner(argparse.Namespace(socket_name='test', session='test', main='/missing', repo='o/r',
+                                           base='master', window_repo=False, dry_run=True))
+        c.now, c._mem, c._park_watched = 1000, (False, ''), set()
+        with patch.object(c, 'tm', return_value=''):
+            snap = c.snapshot('@9')
+        snap.update({'@park_wrap_ver': '1', '@claude_state': 'needs', '@claude_state_ts': '100',
+                     '@norepo': '1', '@task': 'T1', '@reap_policy': 'merged',
+                     '@fleet_id': '11111111-1111-4111-8111-111111111111'})
+        with patch.object(c, 'automatic_close_held', return_value=False), \
+                patch.object(c, 'work_over', return_value=True), patch('builtins.print') as output:
+            self.assertFalse(c.web_park('@9', snap))
+            output.assert_called_once_with('would-park-web:@9')
+
     def test_finished_probe_keeps_its_one_minute_policy(self):
         args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
                                   base="master", window_repo=False, dry_run=False)
@@ -2169,7 +2226,7 @@ class ParkTable(unittest.TestCase):
         snap.update({"@reap_origin": "person", "@park_wrap_ver": "1", "@claude_state": "done",
                      "@claude_state_ts": "100", "@fleet_id": "00000009-0000-4000-8000-0000000000aa"})
         for reason, code in (("watched", "watched"), ("draft", "draft"), ("bg", "park-bg"),
-                             ("asking", "asking"), ("old_wrapper", "old-wrapper"),
+                             ("asking", "park-gate"), ("old_wrapper", "old-wrapper"),
                              ("probe_failed", "park-gate")):
             with self.subTest(reason=reason), patch.object(c, "tm", return_value=""), \
                     patch.object(idle, "run", return_value=json.dumps({"ok": False, "why": reason})):

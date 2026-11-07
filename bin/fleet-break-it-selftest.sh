@@ -5925,6 +5925,39 @@ drill_codex_interrupt_idle() {
   SECS=$(since "$t0"); WHAT='原生中断后清除运行提示；停放仍核对工具、goal、身份和原生子线程，不把中断当成功'
 }
 
+drill_site_font_subset() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/site-build-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0"); WHAT='网站字形全部覆盖，新增缺字仍拒绝构建'
+}
+
+drill_park_waiting_idle() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cleanup-idle-selftest.py" "$BIN" ParkTable.test_waiting_states_have_same_park_timer 2>&1) \
+    || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_waiting_session_parks_keeps_question_and_reply_wakes 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0"); WHAT='等待态到时停放，保留问题和 keep，回复恢复原会话'
+}
+
+drill_park_stale_background() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" CodexBusy.test_stale_background_progress 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0"); WHAT='停滞后台不再占 busy，新转录或活动重置时钟，未知仍保留'
+}
+
+drill_park_vanished_process() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" CodexBusy.test_vanished_descendant_does_not_veto_idle CodexBusy.test_live_unreadable_descendant_still_vetoes 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0"); WHAT='消失的进程不再阻止停放，存活但不可读仍保留'
+}
+
 drill_codex_mcp_busy() {
   CAP=30; local t0 out
   t0=$(now)

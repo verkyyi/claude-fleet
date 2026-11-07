@@ -750,7 +750,10 @@ class Cleaner:
     def stamp_why(self, window, snap):
         if self.args.dry_run or self.theirs(snap):
             return
-        fin = (self.finished(snap) in ("done", "exited") or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1")
+        # A held park may retain `needs` so its unanswered question stays visible.
+        # Its retention reason still belongs on the parked row.
+        fin = (self.finished(snap) in ("done", "exited") or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1"
+               or bool(snap.get("@parked") and snap.get("@park_held")))
         why = self.why if fin and re.fullmatch(r"[a-z-]{1,16}(?::\d{1,11})?", self.why or "") else ""
         if why == snap.get("@reap_why", ""):
             return
@@ -800,13 +803,25 @@ class Cleaner:
         return got if isinstance(got, dict) else {}
 
     def is_waiting(self, snap):
+        try:
+            status = json.loads(snap.get('@agent_status') or '{}')
+        except ValueError:
+            status = {}
+        if (isinstance(status, dict) and status.get('state') == 'blocked'):
+            return True
+        if (snap.get("@claude_state") in ("needs", "blocked", "asking")
+                or snap.get("@claude_needs") in ("blocked", "ask", "question", "perm", "permission")
+                or (snap.get("@parked") and snap.get("@park_waiting") == "1")):
+            return True
+        task = snap.get("@task", "")
+        rc, asked, _ = self.record(task) if task else (3, False, False)
+        if rc != 0 and asked:
+            return True
         st = self.id_status(snap.get("@fleet_id", ""))
         if st.get("state") in ("done", "failed"):
             return False
         result = st.get("result") or {}
-        task = snap.get("@task", "")
-        rc, asked, _ = self.record(task) if task else (3, False, False)
-        return rc != 0 and ((isinstance(result, dict) and result.get("state") in WAIT_RESULTS) or asked)
+        return rc != 0 and isinstance(result, dict) and result.get("state") in WAIT_RESULTS
 
     def waiting(self, window, snap):
         """E101 no longer closes a window to park it. Legacy wrappers wait for
@@ -1026,12 +1041,12 @@ class Cleaner:
         if snap.get("@parked"):
             self.why = "parked"
             return False
-        if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) != "done":
+        if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) not in ("done", "needs", "blocked", "asking", "looping"):
             return None if snap.get("@session_origin") != "web" else False
         controlled = self.automatic_close_held(snap)
         # Only legacy work may bypass safe parking for its old completion policy.
         if (not controlled and not fleet_reap_policy.uses_park_retention(snap)
-                and "@task" in snap and self.work_over(snap)):
+                and "@task" in snap and self.work_over(snap) and not self.is_waiting(snap)):
             return None
         stamp = snap.get("@claude_state_ts", "")
         if not stamp.isdigit():
@@ -1082,9 +1097,13 @@ class Cleaner:
                 self._park_memory_done = True
             waiting = self.is_waiting(snap)
             self.tm("set-option", "-w", "-t", window, "@park_waiting", "1" if waiting else "0")
+            if waiting:
+                self.tm("set-option", "-w", "-t", window, "@claude_needs", snap.get("@claude_needs") or "blocked")
+                self.tm("set-option", "-w", "-t", window, "@claude_state", "needs")
             if snap.get("@reap_unreported"):
                 self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
-            print("parked-web:%s %s" % (window, why))
+            self.why = "bg-stale" if got.get("why") == "bg-stale" else "parked"
+            print("parked-web:%s %s" % (window, got.get("why") or why))
             return True
         self.why = fleet_reap_policy.PARK_HOLDS.get(got.get("why"), "park-gate")
         return False

@@ -29,6 +29,13 @@ class CurrentView(unittest.TestCase):
         view.id_conflicts(rows)
         self.assertTrue(all(r.get('conflict') for r in rows))
         self.assertEqual([view.task_status(r) for r in rows],['quiet','work'])
+    def test_parked_question_is_visible_but_not_active(self):
+        row = dict(kind='sess', target='fid:waiting', state='parked', group='ask',
+                   active=False, ask='Which option?', fid='waiting')
+        self.assertFalse(view.active_row(row))
+        self.assertIn('0', view.session_count([row]))
+        self.assertEqual(row['group'], 'ask')
+
     def test_native_wait_still_shows(self):
         for state in ('needs','blocked'):
             self.assertEqual(view.task_status(dict(state=state)),'needs')

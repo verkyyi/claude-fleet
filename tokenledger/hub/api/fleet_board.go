@@ -579,6 +579,8 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.Group, r.Tag, r.At = "gone", "lost", fs.ObservedAt.Unix()
 		case w["pin"] == true:
 			r.Group, r.Tag = "pin", boardStateTag(st)
+		case st == "parked" && wstr(w, "needs") != "":
+			r.Group, r.Tag = "ask", "parked"
 		case st == "needs" || st == "blocked":
 			r.Group, r.Tag = "ask", "asking"
 		case st == "failed" || st == "error":

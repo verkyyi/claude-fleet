@@ -55,7 +55,7 @@ again is the slow part of a start) and its row in every list stay; the window sa
 `done` (idle), so nobody can tell. bin/fleet-session-wrap.sh holds the parked
 window; `wake` (or a person submitting a sentence with ↵ in it) resumes the SAME
 conversation there, the first sentence riding the start (no inbox round). Never
-while it answers, asks, holds a background job or while a person looks at it
+while it answers, has a native choice dialog or progressing background job, or while a person looks at it
 (`watched`: a terminal client showing the window).
 
 Seams (selftest): FLEET_GATE_DIR (the records' root), FLEET_GATE_WIN_CMD (argv
@@ -114,11 +114,11 @@ WIN_FMT = "\t".join(["#{pane_id}", "#{@cc_agent}", "#{@mod_accept}", "#{@parked}
                      "#{@claude_state_ts}", "#{@loop}", "#{socket_path}",
                      "#{@park_wrap_ver}", "#{@park_relay}", "#{pane_pid}",
                      "#{@park_presence}", "#{@park_watched_at}", "#{@park_start}", "#{@task}", "#{@task_execution}",
-                     "#{@born}", "#{window_created}", "#{@park_held}"])
+                     "#{@born}", "#{window_created}", "#{@park_held}", "#{@bg_stale}"])
 WIN_KEYS = ["pane", "agent", "mod_accept", "parked", "state", "needs", "agent_status", "cc_sid", "codex_sid",
             "mod_alive", "origin", "activity", "park_wake", "state_ts", "loop", "socket_path",
             "wrap_ver", "relay", "pane_pid", "presence", "watched_at", "park_start", "task", "task_execution",
-            "born", "created", "park_held"]
+            "born", "created", "park_held", "bg_stale"]
 
 
 def now():
@@ -1027,8 +1027,7 @@ def park_dialog(w):
     stamp or a loop. Claude treats it as a choice submission (C4), not an exit.
     Reuse the answerer's pending-question reader so the original words stay put.
     """
-    if (w["state"] == "needs" or w["word"] == "blocked"
-            or w["needs"] in ("ask", "question", "perm", "permission")):
+    if w["needs"] in ("ask", "question", "perm", "permission"):
         return True
     transcript = claude_transcript(w["sid"]) if w["agent"] == "claude" else None
     if transcript is None:
@@ -1158,13 +1157,14 @@ def park_locked(fid, why, force):
         return dict(ok=False, why="not_resumable")
     if park_dialog(w):
         return dict(ok=False, why="asking")
-    if w["state"] not in ("done", "looping"):
+    waiting = w["state"] in ("needs", "blocked", "asking") or w["word"] == "blocked"
+    if w["state"] not in ("done", "looping", "needs", "blocked", "asking"):
         return dict(ok=False, why=busy_of(w) or "not_idle")
     # A native Fleet loop has no Claude mod status/mark. Its looping label
     # alone says nothing about the current turn; the native proof below does.
     native_loop = (w["state"] == "looping" and not w["word"]
                    and adapter.get("park_probe") == "native-input")
-    if busy_of(w) and not w["loop"] and not native_loop:
+    if busy_of(w) and not w["loop"] and not native_loop and not waiting:
         return dict(ok=False, why=busy_of(w))
     if watched(w):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_watched_at", str(int(now())))
@@ -1210,20 +1210,29 @@ def park_locked(fid, why, force):
     # of them, before marking parked or sending exit: a question/turn may have
     # appeared since the native proof. Export alone has not handed off timers.
     current = window(fid)
-    if (current is None or current["sid"] != w["sid"] or current["word"] in ("working", "blocked")
-            or current["state"] in ("working", "needs", "exited") or watched(current)):
+    if current is not None and park_dialog(current):
+        fleet_park_wake.abort(fid)
+        return dict(ok=False, why="asking")
+    waiting_changed = (current is not None
+                       and (waiting or current["state"] in ("needs", "blocked", "asking") or current["word"] == "blocked")
+                       and (current["state"], current["word"], current["needs"]) != (w["state"], w["word"], w["needs"]))
+    if (current is None or current["sid"] != w["sid"] or current["word"] == "working"
+            or current["state"] in ("working", "exited")
+            or waiting_changed or watched(current)):
         # Export has already paused the original dispatcher. A normal refusal
         # rolls back now, under the fid lock, not at a later due-timer sweep.
         fleet_park_wake.abort(fid)
         return dict(ok=False, why="changed")
-    if park_dialog(current):
-        fleet_park_wake.abort(fid)
-        return dict(ok=False, why="asking")
+    if current.get("bg_stale"):
+        why = "bg-stale"
     # Do not retain the previous park's RSS when this sample is unavailable.
     if saved_mb is None:
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], "@park_saved_mb")
     else:
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_saved_mb", str(saved_mb))
+    tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@park_waiting", "1" if waiting else "0")
+    if waiting and not w["needs"]:
+        tmux(w["sock"], "set-option", "-w", "-t", w["win"], "@claude_needs", "blocked")
     for option, value in (("@parked", since), ("@park_since", since), ("@park_why", why)):
         tmux(w["sock"], "set-option", "-w", "-t", w["win"], option, value)
     if seam:
@@ -1242,6 +1251,12 @@ def park_locked(fid, why, force):
                 except (OSError, ValueError, KeyError, TypeError) as error:
                     park_log(fid, "fail", why, time.monotonic() - started, "wake_contract:" + str(error))
                     return dict(ok=False, why="wake_contract", parked=True)
+                if waiting:
+                    # Wrappers launched before this release clear needs on entry
+                    # to their holding page. Restore the saved question marker
+                    # after their acknowledgement as well as in the new wrapper.
+                    tmux(w['sock'], 'set-option', '-w', '-t', w['win'], '@claude_needs', w['needs'] or 'blocked')
+                    tmux(w['sock'], 'set-option', '-w', '-t', w['win'], '@claude_state', 'needs')
                 park_log(fid, "park", why, time.monotonic() - started, rss_mb=saved_mb)
                 return dict(ok=True, why=why)
             if w['loop'] and not confirmed:

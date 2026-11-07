@@ -391,9 +391,13 @@ park_hold() {
   # Keep HANDOFF_MANIFEST / LOOP_RECORD so the same owner can still defer/stop.
   unset FLEET_LOOP_SPEC FLEET_LOOP_AGENT
   park_act=wake; park_seed=''
-  wset @claude_needs ''
   wset @claude_state_src wrapper
-  wset @claude_state "done"
+  if [ "$(opt @park_waiting)" = 1 ]; then
+    wset @claude_state needs
+  else
+    wset @claude_needs ''
+    wset @claude_state "done"
+  fi
   local w page_rc fid draft screen reply
   local page_args=()
   fid=$(opt @fleet_id)

@@ -692,6 +692,21 @@ func TestBoardActiveLeavesParkedOut(t *testing.T) {
 	}
 }
 
+func TestBoardParkedQuestionStaysWaitingWithoutActiveCapacity(t *testing.T) {
+	st := storetest.OpenFleet(t)
+	s := &Server{Store: st}
+	b, err := s.buildBoard("gh:1", []FleetSession{{Availability: "online", Worker: map[string]any{
+		"identity": "0b7e8c1a-1111-4222-8333-444455556605", "state": "parked", "needs": "blocked",
+		"name": "Waiting for a decision", "reap_why": "parked",
+	}}}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Active != 0 || len(b.Rows) != 1 || b.Rows[0].Group != "ask" || b.Rows[0].Tag != "parked" {
+		t.Fatalf("parked question lost or counted as active: %+v", b)
+	}
+}
+
 // Entry addresses must survive a recycled scratch key. The visible identity,
 // including a cold inventory row, is the identity every client will enter.
 func TestBoardEntryPinsIdentity(t *testing.T) {
