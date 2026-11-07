@@ -74,12 +74,17 @@ class Processes:
             if not row or 'Z' in row['state']: continue
             base = Path(row['comm']).name
             if base == 'claude': return pid
-            if base == 'bun' or re.fullmatch(r'node[0-9]*', base):
-                cmd = self.argv(pid)
-                if 'claude-code/cli.js' in cmd or '/claude ' in cmd: return pid
-            elif base in ('bash', 'sh', 'zsh', 'dash'):
-                fake = os.environ.get('FLEET_CLAUDE_COMM', '')
-                if fake and fake in self.argv(pid): return pid
+            try:
+                if base == 'bun' or re.fullmatch(r'node[0-9]*', base):
+                    cmd = self.argv(pid)
+                    if 'claude-code/cli.js' in cmd or '/claude ' in cmd: return pid
+                elif base in ('bash', 'sh', 'zsh', 'dash'):
+                    fake = os.environ.get('FLEET_CLAUDE_COMM', '')
+                    if fake and fake in self.argv(pid): return pid
+            except OSError:
+                if proc.process_gone(pid):
+                    continue  # Discard this dead snapshot branch, not a live veto.
+                raise
             queue.extend(self.kids[pid])
         return None
 

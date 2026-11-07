@@ -5955,6 +5955,8 @@ drill_park_vanished_process() {
   t0=$(now)
   out=$(python3 "$BIN/fleet-codex-busy-selftest.py" "$BIN" CodexBusy.test_vanished_descendant_does_not_veto_idle CodexBusy.test_live_unreadable_descendant_still_vetoes 2>&1) \
     || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-pending-tool-selftest.py" Walk.test_vanished_argv_is_skipped_but_live_unreadable_keeps_veto 2>&1) \
+    || { WHY="$out"; return 1; }
   SECS=$(since "$t0"); WHAT='消失的进程不再阻止停放，存活但不可读仍保留'
 }
 

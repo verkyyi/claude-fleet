@@ -212,6 +212,23 @@ class PathCompatibility(Fixture):
 
 
 class Walk(unittest.TestCase):
+    def test_vanished_argv_is_skipped_but_live_unreadable_keeps_veto(self):
+        rows = '\n'.join('%d %d S Fri Oct 16 02:00:00 2026 %s' % row for row in
+                         [(900, 1, 'zsh'), (901, 900, 'node'), (902, 900, 'node')])
+        def argv(pid):
+            if pid == 901:
+                raise OSError(22, 'cannot read native argv')
+            return ['node', 'claude-code/cli.js']
+        for gone in (True, False):
+            with self.subTest(gone=gone), patch.dict(os.environ, FLEET_CLAUDE_COMM=''), \
+                    patch.object(oracle, 'process_argv', side_effect=argv), \
+                    patch.object(oracle.proc, 'process_gone', return_value=gone) as check:
+                if gone:
+                    self.assertEqual(oracle.Processes(rows).claude(900), 902)
+                else:
+                    with self.assertRaises(OSError): oracle.Processes(rows).claude(900)
+                check.assert_called_once_with(901)
+
     def test_canonical_walk_zombies_npm_bun_shells_and_invalid_bytes(self):
         rows = '\n'.join('%d %d %s Fri Oct 16 02:00:00 2026 %s' % row for row in [
             (900, 1, 'Ss', 'zsh'), (901, 900, 'Z', 'claude'),
