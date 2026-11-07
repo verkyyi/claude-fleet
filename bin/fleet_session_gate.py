@@ -1210,16 +1210,19 @@ def park_locked(fid, why, force):
     # of them, before marking parked or sending exit: a question/turn may have
     # appeared since the native proof. Export alone has not handed off timers.
     current = window(fid)
+    if current is not None and park_dialog(current):
+        fleet_park_wake.abort(fid)
+        return dict(ok=False, why="asking")
+    waiting_changed = (current is not None
+                       and (waiting or current["state"] in ("needs", "blocked", "asking") or current["word"] == "blocked")
+                       and (current["state"], current["word"], current["needs"]) != (w["state"], w["word"], w["needs"]))
     if (current is None or current["sid"] != w["sid"] or current["word"] == "working"
             or current["state"] in ("working", "exited")
-            or (current["state"], current["word"], current["needs"]) != (w["state"], w["word"], w["needs"]) or watched(current)):
+            or waiting_changed or watched(current)):
         # Export has already paused the original dispatcher. A normal refusal
         # rolls back now, under the fid lock, not at a later due-timer sweep.
         fleet_park_wake.abort(fid)
         return dict(ok=False, why="changed")
-    if park_dialog(current):
-        fleet_park_wake.abort(fid)
-        return dict(ok=False, why="asking")
     if current.get("bg_stale"):
         why = "bg-stale"
     # Do not retain the previous park's RSS when this sample is unavailable.

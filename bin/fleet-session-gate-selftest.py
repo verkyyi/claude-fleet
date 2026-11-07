@@ -371,8 +371,8 @@ class Gate(unittest.TestCase):
         r = self.gate("park", "--fid", FID, env=env)
         self.assertTrue(r["ok"], r)
         self.assertTrue(self.opt("@parked"))
-        # answering or asking: never parked
-        self.window({"@claude_state": "needs"})
+        # A native choice dialog still cannot consume the park exit command.
+        self.window({"@claude_state": "needs", "@claude_needs": "question"})
         self.assertEqual(self.gate("park", "--fid", FID)["why"], "asking")
 
     def test_Q_heal_dead_park(self):
