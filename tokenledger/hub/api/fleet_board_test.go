@@ -33,6 +33,23 @@ func TestBoardConversationActivity(t *testing.T) {
 	}
 }
 
+func TestBoardEveryGroupUsesCompletedTurns(t *testing.T) {
+	for _, group := range []string{"pin", "ask", "work", "queue", "gone"} {
+		rows := []BoardRow{
+			{ID: "local", Group: group, Tag: "failed", At: 900, ActivityAt: 100},
+			{ID: "pod", Group: group, Tag: "working", At: 10, ActivityAt: 300},
+			{ID: "parked", Group: group, Tag: "parked", At: 999, ActivityAt: 200},
+			{ID: "unknown", Group: group, At: 1000},
+		}
+		got := finishBoard(rows).Rows
+		for i, want := range []string{"pod", "parked", "local", "unknown"} {
+			if got[i].ID != want {
+				t.Fatalf("%s: row %d = %s, want %s", group, i, got[i].ID, want)
+			}
+		}
+	}
+}
+
 // A4G2: the one session list. A record and the session doing it are one row
 // (joined by the session's identity, the record's own ID — the record never
 // learned a worker_id); groups, order and the count are the hub's.
@@ -266,8 +283,8 @@ func TestBoardLiveAskedIsAsk(t *testing.T) {
 	if r := got[parked.FID]; r.WhyTone != "orange" || r.Words != [2]string{"已停放 · 等你", "Parked · waiting on you"} {
 		t.Fatalf("the parked row = %+v", r)
 	}
-	// 等你: the waiting rows (newest first) and the parked one, then the stopped one
-	if len(order) < 2 || order[1] != "ask:stopped" || order[0][:4] != "ask:" {
+	// Both waiting rows lead; with no completed turn their identity breaks ties.
+	if len(order) < 2 || order[0][:4] != "ask:" || order[1][:4] != "ask:" || b.Rows[0].ID > b.Rows[1].ID {
 		t.Fatalf("order = %v", order)
 	}
 }

@@ -116,11 +116,11 @@ hook "$PROMPT" $'{\n "hook_event_name" \t : \n "UserPromptSubmit"\n}'
 same 'a new prompt clears blocked regardless of JSON whitespace' "$(state)" working/
 hook "$POST" '{"hook_event_name":"PostToolUse"}'
 same 'normal tool traffic resumes after a prompt' "$(state)" working/
-TURN_AT=$(tf display-message -p -t "$TEST_PANE" '#{@turn_activity_at}')
-case "$TURN_AT" in ''|*[!0-9]*) printf 'missing native turn activity\n' >&2; exit 1 ;; esac
 # Per-tool traffic inside one turn is not new activity (task NFVN): only a
-# change of state moves the row in the list.
+# completed turn moves the row in the list.
 tf set-window-option -t "$TEST_PANE" @turn_activity_at 1700000000
+hook "$PROMPT" '{"hook_event_name":"UserPromptSubmit"}'
+same 'new prompt preserves the last completed turn' "$(tf display-message -p -t "$TEST_PANE" '#{@turn_activity_at}')" 1700000000
 hook "$POST" '{"hook_event_name":"PostToolUse"}'
 same 'a working re-stamp keeps the turn timestamp' "$(tf display-message -p -t "$TEST_PANE" '#{@turn_activity_at}')" 1700000000
 hook "done"

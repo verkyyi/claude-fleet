@@ -369,7 +369,7 @@ class Monitor:
                         return
                 values = {'@claude_state': native_state, '@claude_state_ts': str(int(time.time()))}
             else: return
-            if '@claude_state_ts' in values:
+            if values.get('@claude_state') == 'done' and '@claude_state_ts' in values:
                 values['@turn_activity_at'] = values['@claude_state_ts']
             for name, value in values.items(): cmds.append(['set-option','-w','-t',self.pane,name,value])
             test = '#{&&:#{==:#{@cc_launcher_pid},' + self.owner + '},#{==:#{@codex_session_id},' + data['session_id'] + '}}'
