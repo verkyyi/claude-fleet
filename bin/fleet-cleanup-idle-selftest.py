@@ -2147,6 +2147,20 @@ class ParkTable(unittest.TestCase):
                 self.assertIn('next=park@', idle.fleet_reap_policy.explain(snap, now=c.now))
         self.assertNotIn('asking', idle.fleet_reap_policy.PARK_HOLDS)
 
+    def test_legacy_merged_waiting_session_still_parks(self):
+        c = idle.Cleaner(argparse.Namespace(socket_name='test', session='test', main='/missing', repo='o/r',
+                                           base='master', window_repo=False, dry_run=True))
+        c.now, c._mem, c._park_watched = 1000, (False, ''), set()
+        with patch.object(c, 'tm', return_value=''):
+            snap = c.snapshot('@9')
+        snap.update({'@park_wrap_ver': '1', '@claude_state': 'needs', '@claude_state_ts': '100',
+                     '@norepo': '1', '@task': 'T1', '@reap_policy': 'merged',
+                     '@fleet_id': '11111111-1111-4111-8111-111111111111'})
+        with patch.object(c, 'automatic_close_held', return_value=False), \
+                patch.object(c, 'work_over', return_value=True), patch('builtins.print') as output:
+            self.assertFalse(c.web_park('@9', snap))
+            output.assert_called_once_with('would-park-web:@9')
+
     def test_finished_probe_keeps_its_one_minute_policy(self):
         args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
                                   base="master", window_repo=False, dry_run=False)

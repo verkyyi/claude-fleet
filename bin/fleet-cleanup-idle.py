@@ -1043,7 +1043,7 @@ class Cleaner:
         controlled = self.automatic_close_held(snap)
         # Only legacy work may bypass safe parking for its old completion policy.
         if (not controlled and not fleet_reap_policy.uses_park_retention(snap)
-                and "@task" in snap and self.work_over(snap)):
+                and "@task" in snap and self.work_over(snap) and not self.is_waiting(snap)):
             return None
         stamp = snap.get("@claude_state_ts", "")
         if not stamp.isdigit():
