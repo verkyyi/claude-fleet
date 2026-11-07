@@ -2114,6 +2114,31 @@ class ParkTable(unittest.TestCase):
     """C6: drive fleet-cleanup-idle.py and fleet_reap_policy.py for every origin.
     The E101 real tmux/history round trip below proves the close is resumable.
     """
+    def setUp(self):
+        # These are policy fixtures; never query a real fleet socket for cold retention.
+        p = patch.object(idle.Cleaner, 'cold_due', return_value=set())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_waiting_states_have_same_park_timer(self):
+        args = argparse.Namespace(socket_name='test', session='test', main='/missing', repo='o/r',
+                                  base='master', window_repo=False, dry_run=False)
+        c = idle.Cleaner(args)
+        c.now, c._mem, c._park_watched = 1000, (False, ''), set()
+        with patch.object(c, 'tm', return_value=''):
+            snap = c.snapshot('@9')
+        snap.update({'@park_wrap_ver': '1', '@claude_state_ts': '100', '@norepo': '1',
+                     '@fleet_id': '11111111-1111-4111-8111-111111111111', '@reap_policy': 'keep'})
+        for state in ('done', 'needs', 'blocked', 'asking'):
+            snap['@claude_state'] = state
+            with self.subTest(state=state), patch.object(c, 'tm', return_value=''), \
+                    patch.object(c, 'is_waiting', return_value=state != 'done'), \
+                    patch.object(idle, 'run', return_value='{"ok":true}') as gate:
+                self.assertTrue(c.web_park('@9', snap))
+                gate.assert_called_once()
+                self.assertIn('next=park@', idle.fleet_reap_policy.explain(snap, now=c.now))
+        self.assertNotIn('asking', idle.fleet_reap_policy.PARK_HOLDS)
+
     def test_finished_probe_keeps_its_one_minute_policy(self):
         args = argparse.Namespace(socket_name="test", session="test", main="/missing", repo="o/r",
                                   base="master", window_repo=False, dry_run=False)
@@ -2169,7 +2194,7 @@ class ParkTable(unittest.TestCase):
         snap.update({"@reap_origin": "person", "@park_wrap_ver": "1", "@claude_state": "done",
                      "@claude_state_ts": "100", "@fleet_id": "00000009-0000-4000-8000-0000000000aa"})
         for reason, code in (("watched", "watched"), ("draft", "draft"), ("bg", "park-bg"),
-                             ("asking", "asking"), ("old_wrapper", "old-wrapper"),
+                             ("asking", "park-gate"), ("old_wrapper", "old-wrapper"),
                              ("probe_failed", "park-gate")):
             with self.subTest(reason=reason), patch.object(c, "tm", return_value=""), \
                     patch.object(idle, "run", return_value=json.dumps({"ok": False, "why": reason})):

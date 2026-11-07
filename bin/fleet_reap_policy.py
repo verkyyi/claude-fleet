@@ -71,7 +71,7 @@ PARK_IDLE_MIN = 60
 # same explanation line. In particular, a background PARK hold has no close
 # countdown (`bg:<epoch>` is still readable for notices from older installs).
 PARK_HOLDS = {"watched": "watched", "draft": "draft", "typing": "draft",
-              "bg": "park-bg", "asking": "asking", "old_wrapper": "old-wrapper"}
+              "bg": "park-bg", "old_wrapper": "old-wrapper"}
 
 
 def park_idle_secs():
@@ -154,6 +154,8 @@ def explain(snap, now=None):
     reap = row["reap"] if uses_park_retention(snap) or not snap.get("@reap_policy") else snap["@reap_policy"]
     prefix = "origin=%s park=%s reap=%s" % (origin, row["park"], reap)
     why = report_hold(snap.get("@fleet_id", ""), snap.get("@reap_report_pending", "")) or snap.get("@reap_why") or "pending-check"
+    if snap.get("@bg_stale") and why in ("pending-check", "parked", "park-bg", "keep"):
+        why = "bg-stale"
     if why in ("report-pending", "report-unknown"):
         return prefix + " next=after-report-saved why=" + why
     if snap.get("@parked") and snap.get("@park_held"):
@@ -171,7 +173,7 @@ def explain(snap, now=None):
     stamp = snap.get("@claude_state_ts", "")
     from fleet_reap_notice import reap_state
     state = reap_state(snap.get("@claude_state", ""), snap.get("@agent_status", ""), snap.get("@claude_needs", ""))
-    if state == "done" and stamp.isdigit():
+    if state in ("done", "needs", "blocked", "asking") and stamp.isdigit():
         delay = park_after(snap, now)
         watched = snap.get("@park_watched_at", "")
         due = max(int(stamp), int(watched) if watched.isdigit() else 0) + delay

@@ -350,57 +350,64 @@ def quiet_processes(source,config_home=None,background=None,strict=True,remounte
                 try:name=ARGV['process_executable'](pid).name
                 except OSError:name='unknown'
                 raise ValueError('Claude owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
-            argv=ARGV['process_argv'](pid)
-            remote=source['codex_identity'].get('remote','')
-            native=comm in ('codex','codex-real')
-            npm=(comm=='node' and len(argv)>1 and
-                 str(Path(argv[1]).resolve()).endswith('/@openai/codex/bin/codex.js'))
-            if native or npm:
-                # Only this worker's TUI/server are infrastructure. A separately
-                # spawned Codex command is background work, regardless of name.
-                for flag in ('--remote','--listen'):
-                    if flag in argv and argv[argv.index(flag)+1:argv.index(flag)+2]==[remote]:break
-                else:raise ValueError('another Codex process owns a different endpoint')
-                if native and 'app-server' in argv:
-                    children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
-                    if children:
-                        client=RPC(remote,timeout=rpc_timeout)
-                        try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
-                        finally:client.close()
-                continue
-            if pid in mcp_pids:continue
-            runtime=len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py'
-            bridge=len(argv)>2 and Path(argv[1]).name=='fleet-loop.py' and argv[2]=='bridge'
-            if runtime or bridge:
-                if strict: continue  # sleep's existing restartability contract
-                if (helper_dir and Path(argv[1]).resolve()==helper_dir/Path(argv[1]).name
-                        and (parent==source['pid'] or (runtime and '--guard' in argv and parent in helpers))):
-                    helpers.add(pid)
-                    continue
-            # The park pty and its forked guardian belong to this runtime, from
-            # this install and targeting this exact private endpoint. Their
-            # descendants are still walked: a same-named script or a job is work.
-            relay=(helper_dir and len(argv)>6 and Path(argv[1]).resolve()==helper_dir/'fleet-status-7501.py'
-                   and argv[2:4]==['relay','--'] and argv[5:7]==['--remote',remote])
-            if relay and (parent in helpers or
-                          (parent in relays and argv==ARGV['process_argv'](parent))):
-                relays.add(pid)
-                continue
-            if comm in ('codex-code-mode-host','codex-code-mode'):
-                parent_args=ARGV['process_argv'](parent)
+            try:
+                argv=ARGV['process_argv'](pid)
                 remote=source['codex_identity'].get('remote','')
-                # The bundled persistent JS host is infrastructure only when
-                # directly owned by this exact app-server and from its release.
-                # Its descendants are still visited and may veto sleep.
-                if ('app-server' in parent_args and '--listen' in parent_args
-                        and parent_args[parent_args.index('--listen')+1:parent_args.index('--listen')+2]==[remote]
-                        and ARGV['process_executable'](pid)==
-                            ARGV['process_executable'](parent).with_name('codex-code-mode-host')):
+                native=comm in ('codex','codex-real')
+                npm=(comm=='node' and len(argv)>1 and
+                     str(Path(argv[1]).resolve()).endswith('/@openai/codex/bin/codex.js'))
+                if native or npm:
+                    # Only this worker's TUI/server are infrastructure. A separately
+                    # spawned Codex command is background work, regardless of name.
+                    for flag in ('--remote','--listen'):
+                        if flag in argv and argv[argv.index(flag)+1:argv.index(flag)+2]==[remote]:break
+                    else:raise ValueError('another Codex process owns a different endpoint')
+                    if native and 'app-server' in argv:
+                        children=[p for p,(pp,c) in rows.items() if pp==pid and c!='codex-code-mode-host']
+                        if children:
+                            client=RPC(remote,timeout=rpc_timeout)
+                            try:mcp_pids.update(MCP['classify'](source,MCP['inventory'](client),rows,pid,ARGV['process_argv'],ARGV['process_executable'],env_reader=MCP['shell_exec_reader'](client,ARGV['process_env']),**lenient))
+                            finally:client.close()
                     continue
-            if background is not None: background.append(pid); continue
-            try:name=ARGV['process_executable'](pid).name
-            except OSError:name='unknown'
-            raise ValueError('Codex owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
+                if pid in mcp_pids:continue
+                runtime=len(argv)>1 and Path(argv[1]).name=='fleet-codex-runtime.py'
+                bridge=len(argv)>2 and Path(argv[1]).name=='fleet-loop.py' and argv[2]=='bridge'
+                if runtime or bridge:
+                    if strict: continue  # sleep's existing restartability contract
+                    if (helper_dir and Path(argv[1]).resolve()==helper_dir/Path(argv[1]).name
+                            and (parent==source['pid'] or (runtime and '--guard' in argv and parent in helpers))):
+                        helpers.add(pid)
+                        continue
+                # The park pty and its forked guardian belong to this runtime, from
+                # this install and targeting this exact private endpoint. Their
+                # descendants are still walked: a same-named script or a job is work.
+                relay=(helper_dir and len(argv)>6 and Path(argv[1]).resolve()==helper_dir/'fleet-status-7501.py'
+                       and argv[2:4]==['relay','--'] and argv[5:7]==['--remote',remote])
+                if relay and (parent in helpers or
+                              (parent in relays and argv==ARGV['process_argv'](parent))):
+                    relays.add(pid)
+                    continue
+                if comm in ('codex-code-mode-host','codex-code-mode'):
+                    parent_args=ARGV['process_argv'](parent)
+                    remote=source['codex_identity'].get('remote','')
+                    # The bundled persistent JS host is infrastructure only when
+                    # directly owned by this exact app-server and from its release.
+                    # Its descendants are still visited and may veto sleep.
+                    if ('app-server' in parent_args and '--listen' in parent_args
+                            and parent_args[parent_args.index('--listen')+1:parent_args.index('--listen')+2]==[remote]
+                            and ARGV['process_executable'](pid)==
+                                ARGV['process_executable'](parent).with_name('codex-code-mode-host')):
+                        continue
+                if background is not None: background.append(pid); continue
+                try:name=ARGV['process_executable'](pid).name
+                except OSError:name='unknown'
+                raise ValueError('Codex owns unverified background/tool process: pid=%s executable=%s' % (pid,name))
+            except OSError:
+                from fleet_native_proc import process_gone
+                if not process_gone(pid):
+                    raise
+                pending.remove(pid)
+
 
 
 def tool_shell(pid):
@@ -408,7 +415,52 @@ def tool_shell(pid):
     # command as `<shell> -c source <config>/shell-snapshots/snapshot-…`; no hook,
     # MCP server or helper Claude starts on its own sources one.
     try:return any('/shell-snapshots/snapshot-' in arg for arg in ARGV['process_argv'](pid))
-    except OSError:return False
+    except OSError:
+        from fleet_native_proc import process_gone
+        if process_gone(pid):
+            return False
+        raise
+
+
+def background_stale(source, pids, activity, now=None):
+    """No background progress for the configured interval; unknown stays busy.
+
+    Use the bound transcript, native activity and regular stdout/stderr files.
+    Pipes are reflected by the agent's transcript when their output is consumed.
+    This only removes a background hold, never the native turn/queue/input gate.
+    """
+    now = time.time() if now is None else now
+    value = os.environ.get('FLEET_BG_STALE_SECS', '21600')
+    seconds = int(value) if value.isdigit() else 21600
+    if seconds <= 0 or not str(activity).isdigit() or int(activity) <= 0:
+        return False
+    try:
+        progress = max(int(activity), Path(source['transcript']).stat().st_mtime)
+        for pid in pids:
+            if sys.platform.startswith('linux'):
+                paths = []
+                for fd in ('1', '2'):
+                    try:
+                        name = os.readlink('/proc/%s/fd/%s' % (pid, fd))
+                    except FileNotFoundError:
+                        from fleet_native_proc import process_gone
+                        if process_gone(pid):
+                            continue
+                        return False
+                    if name.startswith('/'):
+                        paths.append(Path(name))
+            else:
+                out = subprocess.run(['lsof', '-a', '-p', str(pid), '-d', '1,2', '-Fn'],
+                                     capture_output=True, text=True, timeout=3)
+                if out.returncode not in (0, 1):
+                    return False
+                paths = [Path(line[1:]) for line in out.stdout.splitlines() if line.startswith('n/')]
+            for path in paths:
+                if path.is_file():
+                    progress = max(progress, path.stat().st_mtime)
+        return 0 < progress <= now - seconds
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        return False
 
 
 def child_busy(session, target, pid=0, reap=False):
@@ -456,6 +508,11 @@ def _child_busy(session,target,pid=0,reap=False,rpc_timeout=5):
         finally:client.close()
     else:
         quiet_processes(source,config_home or os.environ.get('CLAUDE_CONFIG_DIR'),background=background,strict=False)
+    if source['agent'] == 'codex':
+        if background and background_stale(source, background, w.opt('@claude_state_ts')):
+            w.stamp('@bg_stale', str(int(time.time())))
+            return []
+        w.stamp('@bg_stale', '')
     return background
 
 

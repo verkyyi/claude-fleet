@@ -162,6 +162,26 @@ def kernel_identity(pid):
     return dict(pid=pid, ppid=int(fields[1]), birth_token=str(int(fields[19])), state=fields[0])
 
 
+def process_gone(pid):
+    """Recheck a failed snapshot read; permission/unknown is never absence."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    try:
+        return kernel_identity(pid)['state'] == 'Z'
+    except (OSError, ValueError):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            pass
+        return False
+
+
 def process(pid, *, ps_row=None):
     """Kernel executable + birth. ps_row reuses one observation's ppid/lstart.
 

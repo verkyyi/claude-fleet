@@ -42,7 +42,7 @@ import fleet_reap_policy  # noqa: E402
 FIELDS = ("window_id", "@issue", "@repo", "@reap_policy", "@claude_state", "@claude_state_ts",
           "@reap_skip", "@reap_due", "@reap_key", "@raw", "@norepo", "@fleet_role", "@cc_agent", "@worktree", "window_name", "@reap_origin", "@origin", "@origin_fid", "@origin_wid",
           "@agent_def", "@test_identity", "@session_origin", "@park_wrap_ver", "@parked", "@park_held",
-          "@agent_status", "@claude_needs", "@park_since", "@park_waiting", "@park_presence", "@park_watched_at", "@pin", "@reap_keep_by", "@reap_why", "@park_refusal")
+          "@agent_status", "@claude_needs", "@park_since", "@park_waiting", "@park_presence", "@park_watched_at", "@pin", "@reap_keep_by", "@reap_why", "@park_refusal", "@bg_stale")
 FINISHED = ("done", "exited")
 
 

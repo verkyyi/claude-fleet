@@ -800,6 +800,10 @@ class Cleaner:
         return got if isinstance(got, dict) else {}
 
     def is_waiting(self, snap):
+        if (snap.get("@claude_state") in ("needs", "blocked", "asking")
+                or snap.get("@claude_needs") in ("blocked", "ask", "question", "perm", "permission")
+                or (snap.get("@parked") and snap.get("@park_waiting") == "1")):
+            return True
         st = self.id_status(snap.get("@fleet_id", ""))
         if st.get("state") in ("done", "failed"):
             return False
@@ -1026,7 +1030,7 @@ class Cleaner:
         if snap.get("@parked"):
             self.why = "parked"
             return False
-        if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) != "done":
+        if snap.get("@wrap_gone") == "1" or snap.get("pane_dead") == "1" or self.finished(snap) not in ("done", "needs", "blocked", "asking", "looping"):
             return None if snap.get("@session_origin") != "web" else False
         controlled = self.automatic_close_held(snap)
         # Only legacy work may bypass safe parking for its old completion policy.
@@ -1084,7 +1088,8 @@ class Cleaner:
             self.tm("set-option", "-w", "-t", window, "@park_waiting", "1" if waiting else "0")
             if snap.get("@reap_unreported"):
                 self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
-            print("parked-web:%s %s" % (window, why))
+            self.why = "bg-stale" if got.get("why") == "bg-stale" else "parked"
+            print("parked-web:%s %s" % (window, got.get("why") or why))
             return True
         self.why = fleet_reap_policy.PARK_HOLDS.get(got.get("why"), "park-gate")
         return False

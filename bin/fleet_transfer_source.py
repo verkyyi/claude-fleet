@@ -497,8 +497,15 @@ def native_hook_flags(source):
     pending, children, flags = [source['pid']], [], []
     while pending:
         pid = pending.pop()
+        try:
+            argv = life['ARGV']['process_argv'](pid)
+        except (OSError, ValueError):
+            from fleet_native_proc import process_gone
+            if process_gone(pid):
+                continue
+            raise
         children.append(pid)
-        flags.extend(a for a in life['ARGV']['process_argv'](pid) if a.startswith('hooks.'))
+        flags.extend(a for a in argv if a.startswith('hooks.'))
         pending.extend(p for p, row in rows.items() if row[0] == pid and p not in children)
     return flags, children
 
@@ -829,11 +836,21 @@ def background_inventory(source):
     argv = runpy.run_path(str(BIN / 'fleet_agent_argv.py'))['process_argv']
     entries = []
     for pid in pids:
-        state, start = process_start(pid)
-        if not start or state.startswith('Z'): continue
-        try: args = [str(x) for x in argv(pid)]
-        except OSError: args = []
-        entries.append(dict(pid=pid, argv=args, cwd=process_cwd(pid), start=start))
+        try:
+            state, start = process_start(pid)
+            if state.startswith('Z'): continue
+            if not start:
+                raise ValueError('background process birth unavailable')
+            args = [str(x) for x in argv(pid)]
+            cwd = process_cwd(pid)
+            if not cwd:
+                raise ValueError('background process cwd unavailable')
+        except (OSError, ValueError):
+            from fleet_native_proc import process_gone
+            if process_gone(pid):
+                continue
+            raise
+        entries.append(dict(pid=pid, argv=args, cwd=cwd, start=start))
     return entries
 
 def claude_background(pid, worktree='', session=''):

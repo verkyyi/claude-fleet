@@ -66,6 +66,92 @@ class CodexBusy(unittest.TestCase):
     def test_idle_persistent_mcp_is_not_work(self):
         self.assertEqual(self.busy(), [])
 
+    def test_vanished_descendant_does_not_veto_idle(self):
+        import errno
+        self.rows[104] = (101, 'short-lived-helper')
+        self.rows[105] = (104, 'gone-child')
+        def argv(pid):
+            if pid == 104:
+                raise OSError(errno.EINVAL, 'cannot read native argv')
+            return self.argv[pid]
+        with patch.dict(LIB['ARGV'], process_argv=argv), \
+                patch('fleet_native_proc.os.kill', side_effect=ProcessLookupError):
+            self.assertEqual(self.busy(), [])
+
+    def test_live_unreadable_descendant_still_vetoes(self):
+        import errno
+        self.rows[104] = (101, 'helper')
+        def argv(pid):
+            if pid == 104:
+                raise OSError(errno.EINVAL, 'cannot read native argv')
+            return self.argv[pid]
+        with patch.dict(LIB['ARGV'], process_argv=argv), \
+                patch('fleet_native_proc.os.kill'), \
+                patch('fleet_native_proc.kernel_identity', return_value={'state': 'S'}):
+            with self.assertRaises(OSError):
+                self.busy()
+
+    def test_stale_background_progress(self):
+        transcript = Path(self.source['transcript'])
+        transcript.write_text('old output')
+        os.utime(transcript, (100, 100))
+        stale = LIB['background_stale']
+        with patch.dict(os.environ, FLEET_BG_STALE_SECS='60'):
+            self.assertTrue(stale(self.source, [], '100', now=160))
+            self.assertFalse(stale(self.source, [], '101', now=160))
+            os.utime(transcript, (159, 159))
+            self.assertFalse(stale(self.source, [], '100', now=160))
+            self.assertFalse(stale(self.source, [], '', now=1000))
+            transcript.unlink()
+            self.assertFalse(stale(self.source, [], '100', now=1000))
+        with patch.dict(os.environ, FLEET_BG_STALE_SECS='0'):
+            self.assertFalse(stale(self.source, [], '100', now=1000))
+
+    def test_background_output_resets_stale_timer(self):
+        from types import SimpleNamespace
+        transcript = Path(self.source['transcript'])
+        transcript.write_text('old transcript')
+        output = self.root / 'job-output'
+        output.write_text('new output')
+        os.utime(transcript, (100, 100))
+        os.utime(output, (159, 159))
+        stale = LIB['background_stale']
+        with patch.dict(os.environ, FLEET_BG_STALE_SECS='60'), \
+                patch('os.readlink', return_value=str(output)), \
+                patch('subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='n'+str(output))):
+            self.assertFalse(stale(self.source, [104], '100', now=160))
+            os.utime(output, (100, 100))
+            self.assertTrue(stale(self.source, [104], '100', now=160))
+
+    def test_zombie_descendant_is_gone(self):
+        self.rows[104] = (101, 'zombie')
+        def argv(pid):
+            if pid == 104:
+                raise OSError(22, 'cannot read native argv')
+            return self.argv[pid]
+        with patch.dict(LIB['ARGV'], process_argv=argv), \
+                patch('fleet_native_proc.os.kill'), \
+                patch('fleet_native_proc.kernel_identity', return_value={'state': 'Z'}):
+            self.assertEqual(self.busy(), [])
+
+    def test_native_hook_walk_skips_vanished_descendant(self):
+        from types import SimpleNamespace
+        source = runpy.run_path(str(BIN / 'fleet_transfer_source.py'))
+        walk = source['native_hook_flags']
+        self.rows[104] = (101, 'gone-helper')
+        self.rows[105] = (104, 'gone-child')
+        def argv(pid):
+            if pid == 104:
+                raise OSError(22, 'cannot read native argv')
+            return self.argv[pid]
+        with patch.dict(walk.__globals__, TRANSFER={'process_rows': lambda: self.rows},
+                        runpy=SimpleNamespace(run_path=lambda path: LIB)), \
+                patch.dict(LIB['ARGV'], process_argv=argv), \
+                patch('fleet_native_proc.os.kill', side_effect=ProcessLookupError):
+            flags, children = walk(self.source)
+        self.assertEqual(flags, [])
+        self.assertEqual(set(children), {101, 102, 103})
+
     def managed_github(self):
         self.config['service'] = dict(command='bash', args=[
             '-lc', 'exec "$HOME/.claude/fleet/bin/mcp-github.sh"'])
@@ -252,6 +338,17 @@ class NativeBusy(CodexBusy):
 
     def native_busy(self):
         return LIB['child_busy']('isolated', '@1', reap=True)
+
+    def test_stale_background_still_requires_native_idle(self):
+        self.rows[104] = (101, 'python')
+        self.argv[104] = [sys.executable, '-c', 'stalled background job']
+        self.exes[104] = Path(sys.executable).resolve()
+        with patch.dict(LIB['child_busy'].__globals__, background_stale=lambda *a: True):
+            self.assertEqual(self.native_busy(), [])
+            self.worker.stamp.assert_called_with('@bg_stale', unittest.mock.ANY)
+            self.thread['status']['type'] = 'active'
+            with self.assertRaisesRegex(ValueError, 'natively idle'):
+                self.native_busy()
 
     def test_native_idle_is_rechecked(self):
         self.assertEqual(self.native_busy(), [])

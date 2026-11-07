@@ -339,6 +339,28 @@ class client:
         }]}}) + '\n')
         return path
 
+    def test_waiting_session_parks_keeps_question_and_reply_wakes(self):
+        self.fake()
+        self.wait(lambda: self.opt('@claude_state_src') == '7501')
+        self.set('@claude_state', 'needs')
+        self.set('@claude_needs', 'blocked')
+        self.set('@claude_needs_detail', 'Which colour should we use?')
+        self.set('@agent_status', json.dumps({'state': 'blocked'}))
+        self.set('@reap_policy', 'keep')
+        with patch.dict(os.environ, self.env):
+            result = gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertTrue(self.opt('@park_held'))
+        self.assertEqual(self.opt('@park_waiting'), '1')
+        self.assertEqual(self.opt('@claude_needs_detail'), 'Which colour should we use?')
+        self.assertEqual(self.opt('@reap_policy'), 'keep')
+        self.assertEqual(self.opt('@claude_state'), 'needs')
+        self.tm('send-keys', '-t', self.win, '-l', 'Use blue')
+        self.tm('send-keys', '-t', self.win, 'Enter')
+        self.wait(lambda: self.opt('@park_relay') and not self.opt('@park_held'))
+        self.assertEqual(self.opt('@cc_session_id'), self.sid)
+        self.assertIn('Use blue', (self.root / 'launch-args').read_text())
+
     def test_dialog_guard_all_park_routes(self):
         # A native question can outlive a stale done stamp. Both the timer and
         # memory-pressure driver must reach the same refusal, even after 30m.
@@ -351,8 +373,7 @@ class client:
         transcript = self.dialog_transcript()
         original = transcript.read_bytes()
         cases = [('needs', 'ask', '', ''), ('done', 'ask', '', ''),
-                 ('done', 'permission', '', ''), ('done', '', 'blocked', ''),
-                 ('done', '', 'blocked', 'timer'), ('native', '', '', '')]
+                 ('done', 'permission', '', ''), ('native', '', '', '')]
         for state, needs, word, loop in cases:
             for via in ('idle', 'memory', 'driver-idle', 'driver-memory'):
                 with self.subTest(state=state, needs=needs, word=word, loop=loop, via=via):

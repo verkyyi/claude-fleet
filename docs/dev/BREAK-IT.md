@@ -804,3 +804,7 @@
 | macOS 等待进程抬高 load、Codex 错误回合常驻、测试按整机开 worker、长标题建记录后派发失败（T1327） | 拒接新会话且空闲进程不能释放，并发测试继续放大负载，派发遗留记录 | CPU 优先、人口修正极端负载门；原生终态与身份快速复检；测试 worker 上限；派发前校验标题 | `load-governance` |
 
 | macOS 后台恢复从 Background 域启动 tmux | 子会话无法访问用户信任服务、钥匙串或图形服务 | 新服务器由 gui/<uid> 的 LaunchAgent 前台承载；无 GUI 域拒绝启动，旧服务器只报警、不停止；迁移需人确认 | `tmux-background-domain` |
+
+| Codex 空闲探测的进程快照含刚退出的 helper，macOS argv 返回 EINVAL | 空闲会话永久被当作后台工作，不能停放 | 读取失败后重查内核存活与僵尸状态；只有已消失的进程退出遍历，活着但不可读仍拒绝 | `park-vanished-process` |
+| 等待用户回复的闲置会话一直等 after-turn；停放后问题标记被清除 | 等你会话永远占运行容量，停放后又找不到问题 | 等待态共用停放计时，保留问题标记与 keep；回复恢复原会话 | `park-waiting-idle` |
+| Codex 常驻后台进程长期无输出仍占 busy | 会话一直 looping，不能停放 | FLEET_BG_STALE_SECS 后解除后台持有；转录、输出文件或活动更新重新计时，原生回合门仍核验 | `park-stale-background` |

@@ -655,6 +655,24 @@ def contract_hint(source, approved, name, conf=None):
 
 def classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True, env_reader=None,
              remounted=frozenset(), settled=False):
+    while True:
+        try:
+            return _classify(source, inventory, rows, server_pid, argv_reader, exe_reader,
+                             strict, env_reader, remounted, settled)
+        except OSError:
+            # argv/executable/environment may disappear after the ps snapshot,
+            # including a package entrypoint below an MCP launcher. Retry only
+            # after removing positively absent/zombie descendants; never waive
+            # an unreadable live process or the native server's own identity.
+            from fleet_native_proc import process_gone
+            gone = {pid for pid in rows if pid != server_pid and process_gone(pid)}
+            if not gone:
+                raise
+            rows = {pid: row for pid, row in rows.items() if pid not in gone}
+
+
+def _classify(source, inventory, rows, server_pid, argv_reader, exe_reader, strict=True, env_reader=None,
+             remounted=frozenset(), settled=False):
     # strict=False answers a narrower question (issue #864): not "may this worker
     # hibernate?" but "is this configured MCP service, or something the agent is
     # still running?". An uncontracted, unready or job-owning service is still an
