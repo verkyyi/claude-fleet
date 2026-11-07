@@ -8573,6 +8573,15 @@ drill_session_title_placeholder() {
   SECS=$(since "$t0")
 }
 
+drill_session_footer_unnamed() {
+  local t0; t0=$(now); CAP=30
+  bash "$BIN/fleet-session-name-selftest.sh" >"$WORK/session-name.log" 2>&1 || {
+    WHY="Claude display name regression: $(tail -5 "$WORK/session-name.log")"; return 1;
+  }
+  WHAT='新建、恢复、fork 把窗口名传给 Claude；显式名字优先，Codex 不带参数'
+  SECS=$(since "$t0")
+}
+
 drill_session_title_lost() {
   local t0; t0=$(now); CAP=30
   python3 "$BIN/session-title-ledger-selftest.py" >"$WORK/title-ledger.log" 2>&1 || {
