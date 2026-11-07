@@ -469,6 +469,25 @@ case "$_fc_ty" in 0|off|none) case "${CLAUDE_CODE_SHELL_PREFIX:-}" in */fleet-to
   esac ;;
 esac
 unset _fc_ty
+# Claude's prompt-box title is not reliably saved in the transcript (T1334 /
+# D7QD). Every wrapper launch, including resume and fork, reads its OWN window
+# afresh here, after provider dispatch and argument rewriting. Codex never gets
+# this flag. Keep a caller's name and stop scanning at the CLI's `--` boundary.
+_fc_named=0
+for _fc_a in "$@"; do
+  case "$_fc_a" in
+    --) break ;;
+    --name|--name=*|-n|-n?*) _fc_named=1; break ;;
+  esac
+done
+if [ "$_fc_named" = 0 ]; then
+  _fc_name=$(fleet_pane_fmt '#{window_name}') || _fc_name=''
+  case "$_fc_name" in
+    ''|resume-*) ;;   # restore has not given this window its real name yet
+    *) set -- --name "$_fc_name" "$@" ;;
+  esac
+fi
+unset _fc_named _fc_name _fc_a
 # The new session's clock (T716): the agent runs now — `exec`, then the ↵ stays
 # out of its environment (a dispatch it makes starts a clock of its own).
 fleet_timing_at exec

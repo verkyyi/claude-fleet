@@ -107,9 +107,11 @@ printf '%s\n' "\$*" >> "$WORK/close"
 EOS
 
 # fake tmux: display-message names the session ($SESS_FILE); set-option is logged.
+# No window title in this fixture (fleet-session-name-selftest.sh covers names).
 SESS_FILE="$WORK/sess"; printf 'f1' > "$SESS_FILE"
 cat > "$WORK/fakebin/tmux" <<EOS
 #!/bin/sh
+case "\$*" in *'#{window_name}'*) exit 0 ;; esac
 case "\$*" in *'#{@repo}|'*) printf '%s|%s|' "\${TEST_REPO:-}" "\${TEST_NOREPO:-}"; exit 0 ;; esac
 case "\$*" in *'#{@norepo}'*) printf '%s' "\${TEST_NOREPO:-}"; exit 0 ;; esac
 case "\$1" in display-message) cat "$SESS_FILE" ;; set-option|set-window-option) printf '%s\n' "\$*" >> "$WORK/tmuxlog" ;; *) : ;; esac

@@ -262,7 +262,11 @@ one-off drill / audit records do not go in the repo (issue #3576).
   stays down** (issue #1784). Spawners, restore, migrate, move, transfer and a
   sleeper's wake all launch the wrapper (never `fleet-claude.sh`
   directly — `session-wrap-selftest.sh` A lints it; `# wrap-ok: <why>` excepts a
-  line). When the agent exits the window stays on a recovery page
+  line). Claude's display name is the window name, passed as `--name` by
+  `fleet-claude.sh` on every launch, including restore and fork, so the prompt-box
+  footer keeps its name after a restart. An explicit `--name` / `-n` wins;
+  empty or `resume-*` placeholder names are skipped, and Codex gets no name flag.
+  When the agent exits the window stays on a recovery page
   (`@claude_state=exited`: ↵ resume the same id · r new · q recycle); a fleet-made
   exit stamps `@wrap_quiet` before its `/exit`. A node server runs `exit-empty off`
   with a resident `home` window, and the diskguard tick's `fleet-restore.sh --auto`
