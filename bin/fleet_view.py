@@ -3313,6 +3313,9 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
         at = tat[id(e)]
         expired = prefs["idle_hours"] and at and now - at >= prefs["idle_hours"] * 3600 and \
             not any(task_status(x) in ("work", "pending") for x in whole(e))
+        # Legacy closed rows have no turn clock. Keep their history membership
+        # without using the close date as if it were a completed agent turn.
+        expired = expired or (not at and e.get("sec") == "gone")
         if id(e) in protected or (not expired and room > 0):
             ordinary.append(e)
             if id(e) not in protected:

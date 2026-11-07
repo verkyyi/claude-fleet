@@ -75,6 +75,15 @@ class TaskList(unittest.TestCase):
             self.assertIn("@turn_activity_at", tm.call_args.args[-1])
             self.assertNotIn("window_activity", tm.call_args.args[-1])
 
+    def test_unknown_history_stays_folded_without_faking_activity(self):
+        old = row("old", sec="gone", gone=True)
+        fresh = row("fresh", sec="gone", gone=True, activity_at=int(time.time()))
+        shown = v.compact_task_list([old, fresh])
+        by = {e["target"]: e for e in shown if e["kind"] == "sess"}
+        self.assertEqual(by["old"].get("sec"), "gone")
+        self.assertFalse(v.activity_time(by["old"]))
+        self.assertIsNone(by["fresh"].get("sec"))
+
     def test_refresh_keeps_cursor_on_identity_after_resort(self):
         now = int(time.time())
         items = [row("a", activity_at=now-200), row("b", activity_at=now-300)]

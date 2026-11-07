@@ -186,6 +186,15 @@ assert.deepEqual(listRows([...histories].reverse()).gone.map(r=>r.id), ['history
 assert.deepEqual(listRows(histories.map(r=>({...r, board:{...r.board, activity_at:30}}))).gone.map(r=>r.id), ['history-0', 'history-1'], 'equal timestamps use identity');
 assert.deepEqual(listRows([{...rows[0],id:'pin1',group:'pin',at:1,board:{activity_at:1}},{...rows[0],id:'pin2',group:'pin',at:999,board:{activity_at:999}}]).pin.map(r=>r.id),['pin2','pin1'], 'PIN stays on top and sorts by last turn too');
 
+// Unknown history remains in More sessions without borrowing a close date.
+{
+  const old = {...gone[0], id:'unknown-history', at:Date.now(), board:{...gone[0].board, activity_at:0}};
+  const fresh = {...old, id:'fresh-history', board:{...old.board, activity_at:Math.floor(Date.now()/1000)}};
+  const result = compactRows([old, fresh]);
+  assert.deepEqual(result.gone.map(r=>r.id), ['unknown-history']);
+  assert.deepEqual(result.open.map(r=>r.id), ['fresh-history']);
+}
+
 // All machines and parked rows interleave on completed turns; lifecycle dates
 // and absent activity cannot promote a row. Refresh retains fresh facts.
 {
@@ -249,7 +258,7 @@ assert.deepEqual(archivedRows(archives).map(r => r.id), ['a', 'c', 'b'], 'reused
 archives[1].board.tree_at = 400;
 assert.deepEqual(archivedRows(archives).map(r => r.id), ['a', 'b', 'c'], 'equal archive activity uses identity');
 const recentEnded = R({ id: 'recent-ended', group: 'gone', tag: ['已结束', 'Ended'], at: now - 1000,
-  board: { tag: 'ended', state: 'exited', history: { id: 'recent-ended' } } });
+  board: { tag: 'ended', state: 'exited', activity_at: Math.floor(now / 1000) - 1, history: { id: 'recent-ended' } } });
 assert.equal(compactRows([recentEnded], { now }).open[0], recentEnded);
 assert.deepEqual(rowState(recentEnded), ['已结束', 'Ended'], 'a main-list ended row keeps its lifecycle state');
 assert.equal(recentEnded.board.history.id, 'recent-ended');

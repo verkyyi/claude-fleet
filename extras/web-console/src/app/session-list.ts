@@ -309,6 +309,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   const isCurrent = (r: Row) => rowRef(r) === current;
   const pin = [...base.pin].sort(byAt);
   const recent = [...base.open, ...base.gone].sort(byAt);
+  const historical = new Set(base.gone.map((r) => r.id));
   const kept = recent.filter((r) => whole(r).some((x) => isCurrent(x) || needsAttention(x)));
   let room = Math.max(0, prefs.max_visible - pin.length);
   const visible = new Set(kept.map((r) => r.id));
@@ -316,6 +317,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
     if (visible.has(r.id) || room <= 0) continue;
     const t = at(r);
     const busy = whole(r).some((x) => { const k = listStatus(x).kind; return k === "work" || k === "pending"; });
+    if (!t && historical.has(r.id)) continue; // unknown turn clock does not revive old history
     if (!prefs.idle_hours || !t || busy || now - t < prefs.idle_hours * 3600000) {
       visible.add(r.id); room--;
     }
