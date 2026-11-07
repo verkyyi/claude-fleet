@@ -7,20 +7,14 @@ import type { Glyph, Row, Tone } from "./work.ts";
 // What a list row draws — exactly this, the test holds it to these keys.
 export type ListItem = { ref: string; glyph: Glyph; tone: Tone; title: string; bold: boolean };
 
-// PIN is the only group heading. Old board group ordering must not move a
-// task solely because its status changes. New turn activity reorders ordinary
-// rows; older parent/member records are flat too.
+// Pinned rows stay first; each section uses the last completed native turn.
+// Status and inventory changes never advance conversation order.
 export type ListGroups = { pin: Row[]; open: Row[]; gone: Row[] };
-export function listRows(rows: Row[], previous?: ListGroups): ListGroups {
-  const activity = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+export function listRows(rows: Row[], _previous?: ListGroups): ListGroups {
+  const activity = (r: Row) => r.board ? (r.board.activity_at || 0) * 1000 : r.at;
   const recent = [...rows].sort((a, b) => activity(b) - activity(a) || a.id.localeCompare(b.id));
   const older = (r: Row) => r.group === "gone" && !r.live && !listStatus(r).kind && !listStatus(r).unknown;
-  const keep = (next: Row[], before: Row[] = []) => {
-    const byID = new Map(next.map((r) => [r.id, r]));
-    const known = new Set(before.map((r) => r.id));
-    return [...next.filter((r) => !known.has(r.id)), ...before.flatMap((r) => byID.has(r.id) ? [byID.get(r.id)!] : [])];
-  };
-  return { pin: keep(rows.filter((r) => r.group === "pin"), previous?.pin),
+  return { pin: recent.filter((r) => r.group === "pin"),
     open: recent.filter((r) => r.group !== "pin" && !older(r)),
     gone: recent.filter(older) };
 }
@@ -37,7 +31,7 @@ export const needsAttention = (r: Row) => listStatus(r).kind === "ask" ||
 // Who opened a session (task DDBQ, the hub's board.source): a person's and a
 // session's (agent — it hangs under the session that opened it, the tree below)
 // are the main list; one a schedule or an API caller opened has its own folded
-// group, newest first, whatever its state. PIN keeps whatever was pinned.
+// group, newest completed turn first, whatever its state. PIN stays on top.
 export type RowSource = "agent" | "schedule" | "api";
 export type GroupSource = "schedule" | "api";
 export const ROW_SOURCES: GroupSource[] = ["schedule", "api"];
@@ -63,7 +57,7 @@ export const sourceLabel = (s: GroupSource) => s === "schedule" ? tr("定时任�
 // that has sessions of its own under it. `dupes`: each shown row's cluster,
 // newest first; `dupOf`: every clustered row → the one shown.
 export type Tree = { up: Map<string, Row>; kids: Map<string, Row[]>; dupes: Map<string, Row[]>; dupOf: Map<string, string> };
-const activityOf = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+const activityOf = (r: Row) => r.board ? (r.board.activity_at || 0) * 1000 : r.at;
 const ownAt = (r: Row) => r.board?.tree_at ? Math.max(r.board.tree_at * 1000, activityOf(r)) : activityOf(r);
 const sameTitle = (t: string) => t.trim().replace(/\s+/g, " ").toLowerCase();
 export function sessionTree(rows: Row[]): Tree {
@@ -275,7 +269,7 @@ export function scheduleResult(s: ScheduleSpecLike, now = Date.now()): string {
 const urgentRun = (runs: Row[]) => runs.find(needsAttention)
   || runs.find((r) => listStatus(r).kind === "work") || runs.find((r) => listStatus(r).kind === "pending");
 export function scheduleLines(schedules: ScheduleSpecLike[], rows: Row[], now = Date.now()): ScheduleLines {
-  const at = (r: Row) => r.board?.activity_at ? r.board.activity_at * 1000 : r.at;
+  const at = (r: Row) => r.board ? (r.board.activity_at || 0) * 1000 : r.at;
   const runs = rows.filter((r) => !r.board?.archived && r.group !== "pin" && rowSource(r) === "schedule")
     .sort((a, b) => at(b) - at(a) || a.id.localeCompare(b.id));
   const by = new Map<string, Row[]>();
@@ -313,7 +307,7 @@ export function compactRows(rows: Row[], options: { current?: string; preference
   const sources = { schedule: grouped("schedule"), api: grouped("api") };
   const base = listRows(roots.filter((r) => r.group === "pin" || !groupSource(r)), previous);
   const isCurrent = (r: Row) => rowRef(r) === current;
-  const pin = base.pin;
+  const pin = [...base.pin].sort(byAt);
   const recent = [...base.open, ...base.gone].sort(byAt);
   const kept = recent.filter((r) => whole(r).some((x) => isCurrent(x) || needsAttention(x)));
   let room = Math.max(0, prefs.max_visible - pin.length);

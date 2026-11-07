@@ -934,26 +934,10 @@ func finishBoard(rows []BoardRow) *Board {
 		if ga != gb {
 			return ga < gb
 		}
-		if rows[a].Group == "ask" {
-			if ra, rb := boardAskRank(rows[a].Tag), boardAskRank(rows[b].Tag); ra != rb {
-				return ra < rb
-			}
-		}
-		// Cap history by conversation recency too, before either client sorts it.
-		if rows[a].Group == "gone" {
-			activity := func(r BoardRow) int64 {
-				if r.ActivityAt > 0 {
-					return r.ActivityAt
-				}
-				return r.At
-			}
-			if aa, ab := activity(rows[a]), activity(rows[b]); aa != ab {
-				return aa > ab
-			}
-			return rows[a].ID < rows[b].ID
-		}
-		if rows[a].At != rows[b].At {
-			return rows[a].At > rows[b].At
+		// Every group uses the same completed-turn clock across machines and
+		// parked records. Lifecycle and inventory timestamps never affect order.
+		if rows[a].ActivityAt != rows[b].ActivityAt {
+			return rows[a].ActivityAt > rows[b].ActivityAt
 		}
 		return rows[a].ID < rows[b].ID
 	})
@@ -1016,10 +1000,8 @@ func finishBoard(rows []BoardRow) *Board {
 			rows[i].Parent = rows[p].ID
 		}
 	}
-	// a tree's activity (task PV5W): its root's own, and of each row nested under
-	// it only what the person would want to see move — its start, and its latest
-	// activity once it asks or has ended — never its every turn, so a busy child
-	// does not shuffle the list. Siblings sort by the same signal.
+	// A tree uses the latest completed turn of itself and its descendants.
+	// A child starting, asking or closing does not change this timestamp.
 	treeAt, signal := make([]int64, len(rows)), make([]int64, len(rows))
 	var tree func(i int) int64
 	tree = func(i int) int64 {
@@ -1027,13 +1009,7 @@ func finishBoard(rows []BoardRow) *Board {
 			return treeAt[i]
 		}
 		own := rows[i].ActivityAt
-		if own <= 0 {
-			own = rows[i].At
-		}
-		sig := rows[i].At
-		if (rows[i].Group == "ask" || rows[i].Group == "gone") && rows[i].ActivityAt > sig {
-			sig = rows[i].ActivityAt
-		}
+		sig := own
 		treeAt[i], signal[i] = own, sig
 		for _, k := range kids[i] {
 			tree(k)
@@ -1086,10 +1062,24 @@ func finishBoard(rows []BoardRow) *Board {
 			put(k, depth+1)
 		}
 	}
+	roots := make([]int, 0, len(rows))
 	for i := range rows {
 		if !nested[i] {
-			put(i, 0)
+			roots = append(roots, i)
 		}
+	}
+	sort.SliceStable(roots, func(a, b int) bool {
+		i, j := roots[a], roots[b]
+		if ga, gb := boardGroupOrder[rows[i].Group], boardGroupOrder[rows[j].Group]; ga != gb {
+			return ga < gb
+		}
+		if treeAt[i] != treeAt[j] {
+			return treeAt[i] > treeAt[j]
+		}
+		return rows[i].ID < rows[j].ID
+	})
+	for _, i := range roots {
+		put(i, 0)
 	}
 	b := &Board{Groups: map[string]int{}, GoneDays: boardGoneDays}
 	gone := 0

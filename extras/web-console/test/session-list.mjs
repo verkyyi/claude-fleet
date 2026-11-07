@@ -50,6 +50,7 @@ const board = { count: 5, groups: {}, gone_days: 7, digest: 'x', rows: [
   { id: 'idle', title: 'idle one', group: 'queue', ...W('idle', ['空闲', 'Idle']), at: 40 },
   { id: 'g1', title: 'old', group: 'gone', ...W('ended', ['已结束', 'Ended']), at: 10 },
 ] };
+board.rows.forEach((r) => { r.activity_at = r.at; });
 const rows = boardRows(board, tasks, live);
 
 // ⌘P's top-level entries, in ⌘P's order: an EPIC's members only inside it (in
@@ -183,7 +184,21 @@ const histories = [10, 20].map((at, i) => ({...gone[0], id:`history-${i}`, at:at
 assert.deepEqual(listRows(histories).gone.map(r=>r.id), ['history-0', 'history-1'], 'history uses turn activity, not window closure');
 assert.deepEqual(listRows([...histories].reverse()).gone.map(r=>r.id), ['history-0', 'history-1']);
 assert.deepEqual(listRows(histories.map(r=>({...r, board:{...r.board, activity_at:30}}))).gone.map(r=>r.id), ['history-0', 'history-1'], 'equal timestamps use identity');
-assert.deepEqual(listRows([{...rows[0],id:'pin1',group:'pin',at:1},{...rows[0],id:'pin2',group:'pin',at:999}]).pin.map(r=>r.id),['pin1','pin2'], 'PIN keeps its explicit order');
+assert.deepEqual(listRows([{...rows[0],id:'pin1',group:'pin',at:1,board:{activity_at:1}},{...rows[0],id:'pin2',group:'pin',at:999,board:{activity_at:999}}]).pin.map(r=>r.id),['pin2','pin1'], 'PIN stays on top and sorts by last turn too');
+
+// All machines and parked rows interleave on completed turns; lifecycle dates
+// and absent activity cannot promote a row. Refresh retains fresh facts.
+{
+  const mixed = [
+    R({id:'local', at:999000, board:{activity_at:100}}),
+    R({id:'pod', at:1000, board:{activity_at:300}}),
+    R({id:'parked', at:999999000, board:{activity_at:200, state:'parked'}}),
+    R({id:'unknown', at:999999999000, board:{activity_at:0}}),
+  ];
+  assert.deepEqual(listRows(mixed).open.map(r=>r.id), ['pod','parked','local','unknown']);
+  mixed[0].board.activity_at = 400;
+  assert.deepEqual(listRows(mixed).open.map(r=>r.id), ['local','pod','parked','unknown']);
+}
 
 assert.equal(listStatus(R({board:{pending_start:true}})).kind,'pending', 'hub request observation is authoritative');
 assert.equal(listStatus(R({task:v1({task_state:'starting'}),board:{pending_start:false}})).kind,null, 'explicit false disables old-hub inference');

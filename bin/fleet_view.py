@@ -702,7 +702,7 @@ def windows(fleet):
     from_fid the @fleet_id of the session that opened it (its spawn / task tool;
     the session tree's local half, no hub needed)."""
     rc, out = tm("list-windows", "-t", "=" + fleet, "-F",
-                 "#{window_id}|#{@fleet_id}|#{@fleet_role}|#{window_activity}|#{@from_fid}")
+                 "#{window_id}|#{@fleet_id}|#{@fleet_role}|#{@turn_activity_at}|#{@from_fid}")
     res = {}
     for line in out.splitlines() if rc == 0 else []:
         w, fid, role, act, frm = (line.split("|") + ["", "", "", ""])[:5]
@@ -2100,12 +2100,13 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
              "detail": detail,
              "group": grp, "sym": sym_of(state, lost), "lost": lost, "lost_secs": lost_secs, "ask": ask, "tags": tags, "repo": repo,
              "word": state_words(state, detail if state == "needs" else ""),
-             "today": today, "ctx": f[18], "act": act, "list_scope": fleet, "source_order": len(seen),
+             "today": today, "ctx": f[18], "act": act,
+             "activity_at": int(f[27]) if len(f) > 27 and f[27].isdigit() else 0, "list_scope": fleet, "source_order": len(seen),
              "foot": " · ".join(x for x in (title or name, reap_words(f[14]),
                                             detail if detail and detail != state else "", today,
                                             " · ".join(x for x in (machine, login) if x)) if x)}
         if local:
-            e["window_activity"] = wins.get(target, ("", "", 0))[2]
+            e["activity_at"] = max(e.get("activity_at", 0), wins.get(target, ("", "", 0))[2])
         # Column 21 carried a launch-proof session's status proof; nothing writes
         # it since EPIC T497 C8, an older producer's is ignored.
         e["deploy"] = f[19].strip()
@@ -2183,12 +2184,12 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
             continue
         ages[target] = age
         grepo = target.rpartition("@")[2] if "@" in target else ""
-        # Legacy history has no turn activity; use its known close time until
-        # board_apply supplies the hub's conversation activity.
+        # Legacy history has no turn activity; leave it unknown until
+        # board_apply supplies the persisted completed-turn timestamp.
         word = say("view_ended_gone_merged") if glyph == "✓" else say("view_ended_gone")
         gone.append({"kind": "sess", "target": target, "far": False, "gone": True, "machine": here, "login": me,
                      "state": "landed", "text": title or name, "name": name, "reap": "", "issue": label,
-                     "depth": 0, "detail": "", "group": "folded", "sec": "gone", "activity_at": int(now - age),
+                     "depth": 0, "detail": "", "group": "folded", "sec": "gone", "activity_at": 0,
                      "sym": "done" if glyph == "✓" else "fail", "lost": False, "lost_secs": None, "ask": "",
                      "tags": [], "repo": grepo.rpartition("/")[2], "word": word, "right": act,
                      "foot": " · ".join(x for x in (title or name, label, say("view_pr_fmt", pr) if pr.startswith("#") else "",
@@ -2213,7 +2214,7 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
                      "foot": " · ".join(x for x in (title, o.get("task") or "", say("view_ended_gone")) if x)})
         row_cols(gone[-1], o.get("task") or "", "", title, title)
         id_apply(gone[-1], fid, known, live=False)
-        gone[-1]["activity_at"] = rec["closed"]["ts"]
+        gone[-1]["activity_at"] = 0
         ages["id:" + fid] = now - rec["closed"]["ts"]
     repo_fill([e for e in gone if e.get("ledger")], repos)
     gone.sort(key=lambda e: ages.get(e["target"], 0))
@@ -2475,7 +2476,7 @@ def board_apply(board, groups, shut, gone, here, me):
             e["agent"] = r.get("agent") or ""
             e["agent_basis"] = r.get("agent_basis") or ""
             e["agent_words"] = r.get("agent_words")
-        e["activity_at"] = max(r.get("activity_at") or r.get("at") or 0, held[2] if held and held[1] > time.monotonic() else 0)
+        e["activity_at"] = max(r.get("activity_at") or 0, e.get("activity_at") or 0)
         e["source"] = r.get("source") if r.get("source") in SOURCES else ""
         # the session tree (hub board rows; every field optional — an older hub
         # sends none and the list is flat): the row it nests under, who opened it
@@ -2741,9 +2742,9 @@ def match_why(e, query):
 
 
 def activity_time(e, derived=True):
-    """The tree's conversation activity; local window output is an old-node fallback."""
+    """Completed native turns only; terminal output and lifecycle dates never count."""
     keys = ("last_active_at", "tree_at", "activity_at") if derived else ("tree_at", "activity_at")
-    return max(int(e.get(k) or 0) for k in keys) or int(e.get("window_activity") or 0)
+    return max(int(e.get(k) or 0) for k in keys)
 
 
 def activity_label(at, now=None, detail=False):
@@ -2887,7 +2888,8 @@ def task_list(items):
     # Never use window output or inventory freshness as conversation recency.
     # Old nodes without activity keep their source order.
     recent = lambda e: (-int(e.get("activity_at") or 0), e.get("fid") or e["target"])
-    if any(e.get("activity_at") for e in regular + history):
+    if any(e.get("activity_at") for e in pin + regular + history):
+        pin.sort(key=recent)
         regular.sort(key=recent)
         history.sort(key=recent)
     result = pin + regular     # no PIN heading: a pinned row says ⇡ itself (row_segs)
@@ -3302,9 +3304,8 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
     newest = lambda e: (-tat[id(e)], e.get("fid") or e["target"])
     if any(tat[id(e)] for e in recent):
         recent.sort(key=newest)
-    # One order (task DDBQ): no group lifts a row that needs the person —
-    # entering needs is itself activity — but such a row (or a tree holding
-    # one) is never folded.
+    # Completed turns decide order; a row asking for attention (or a tree
+    # holding one) is never folded.
     protected = {id(e) for e in recent if any(x["target"] in keep or needs_attention(x) for x in whole(e))}
     room = max(0, prefs["max_visible"] - len(pin))  # protected trees are extra, never crowd out ordinary rows
     ordinary, history = [], []
@@ -3336,8 +3337,8 @@ def compact_task_list(items, current="", preferences=None, now=None, selected=""
                 x["sec"] = sec
                 x.update(extra)
             out.append(x)
-    # pinned first, in pin order, with their trees — no heading: ⇡ after the title
-    for e in pin:
+    # pinned first, newest turn first, with their trees — no heading: ⇡ after the title
+    for e in sorted(pin, key=newest):
         put(e)
     for e in ordinary:
         put(e)
@@ -3642,6 +3643,13 @@ def nav_step(shown, at, d):
     if d > 0:
         return next((i for i in sel if i > at), sel[0])
     return next((i for i in reversed(sel) if i < at), sel[-1])
+
+
+def refreshed_selection(shown, selected, previous):
+    """A refresh may reorder rows; the cursor follows the same session identity."""
+    from fleet_panel import key_of
+    return next((i for i, e in enumerate(shown) if pickable(e) and selected[1]
+                 and key_of(e) == selected), row_gone_at(shown, previous))
 
 
 def row_gone_at(shown, at):
@@ -5693,8 +5701,7 @@ def restore_archived(r, fleet):
         return 1
     if p.returncode == 0:
         r["archived"] = False
-        r["activity_at"] = max(r.get("activity_at") or 0, int(time.time()))
-        _ARCHIVE_HOLD[r["board"]] = (False, time.monotonic() + 30, r["activity_at"])
+        _ARCHIVE_HOLD[r["board"]] = (False, time.monotonic() + 30, r.get("activity_at") or 0)
         hub_reread(fleet)
     return p.returncode
 
@@ -7111,8 +7118,8 @@ def _popup(screen, qo, vid, client, forward="", land_at="", pre=None):
             items, items_at = pending_items, time.time()
             pending_items = None
             shown = listing()
-            at = next((i for i, e in enumerate(shown) if pickable(e) and lit[1] and key_of(e) == lit),
-                      row_gone_at(shown, at))
+            at = refreshed_selection(shown, lit, at)
+            follow_list = True
         if msg and not msg_until:
             msg_until = time.time() + 3
         heal.tick(screen)

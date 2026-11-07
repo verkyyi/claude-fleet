@@ -47,6 +47,11 @@ func TestSessionArchiveRealActivity(t *testing.T) {
 					t.Fatalf("preferences=%v err=%v", got, err)
 				}
 			}
+			rows, err := s.BoardIDs("operator", 0)
+			if err != nil || len(rows) != 1 || rows[0].ActivityAt != 0 {
+				t.Fatalf("lifecycle must not advance completed-turn activity: %+v %v", rows, err)
+			}
+
 			var archived int
 			if err := s.DB().QueryRow(`SELECT archived FROM fleet_session_archives WHERE id=?`, idA).Scan(&archived); err != nil || (archived == 0) != tc.active {
 				t.Fatalf("not persisted: %d %v", archived, err)

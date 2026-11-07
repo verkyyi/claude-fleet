@@ -954,7 +954,7 @@ for s in sessions:
                      state=w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or ""),
                      agent=w.get("agent") or "", name=w.get("name") or w.get("key") or wid.split("/", 1)[1],
                      owid=by_ident.get(w.get("origin_wid") or "", w.get("origin_wid") or ""), needs=w.get("needs") or "", busy=w.get("busy") or "", born=born_of(w), cfg=w.get("cfg") if w.get("cfg") in ("stale", "renew", "ok") else "", title=w.get("title") if isinstance(w.get("title"), str) else "", detail=w.get("detail") if isinstance(w.get("detail"), str) else "", epic=w.get("epic") if isinstance(w.get("epic"), str) and re.fullmatch(r"(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#(?:[1-9][0-9]{0,9}|T[1-9][0-9]{0,9}|[A-HJKMNP-TV-Z][0-9A-HJKMNP-TV-Z]{3,25})(?::[0-9]{1,4}/[0-9]{1,4})?", w.get("epic")) else "", reap=w.get("reap") if isinstance(w.get("reap"), str) and re.fullmatch(r"[A-Za-z0-9:.+-]{1,48}", w.get("reap")) else "", backfill="failed" if w.get("backfill") == "failed" else "", test=w.get("test") is True, ctx=ctx_of(w), ask=ask_of(w, w.get("lifecycle") if w.get("lifecycle") not in (None, "", "awake") else (w.get("state") or "")), stale=stale_of(w), orphans=orphans_of(w), notices=notices_of(w), seen=epoch(s.get("observed_at")), seenf=fepoch(s.get("observed_at")),
-                     tok=tok_of(s), pin=w.get("pin") is True, local=here["sess"] if here else None,
+                     activity=w.get("activity_at") if isinstance(w.get("activity_at"), (int, float)) and 0 < w["activity_at"] <= int(now) else "", tok=tok_of(s), pin=w.get("pin") is True, local=here["sess"] if here else None,
                      lwid=windows.get((here["sess"], wid.split("/", 1)[1]), "") if here else ""))
 
 # The other machines (issue #1475): the hub's `nodes` list when it has one
@@ -1054,23 +1054,25 @@ for f in local:
                                               # 17 title, 18 reap (#1902), 19 epic (#1958), 20 backfill
                                               # (#2235): each only when there is one, the empty ones
                                               # before it kept
-                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
-                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
-                                              + ((r["epic"],) if r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
-                                              + ((r["backfill"],) if r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
+                                              + ((r["title"],) if r["title"] or r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] or r["activity"] else ())
+                                              + ((r["reap"],) if r["reap"] or r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] or r["activity"] else ())
+                                              + ((r["epic"],) if r["epic"] or r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] or r["activity"] else ())
+                                              + ((r["backfill"],) if r["backfill"] or r["ctx"] or r["test"] or r["ask"] or r["tok"] or r["pin"] or r["activity"] else ())
                                               # 21-25 (#2431): ctx_left · ctx_band · ctx_ts · model ·
                                               # effort — all five, only when the node measured any
-                                              + (r["ctx"] or (("",) * 5 if r["test"] or r["ask"] or r["tok"] or r["pin"] else ()))
+                                              + (r["ctx"] or (("",) * 5 if r["test"] or r["ask"] or r["tok"] or r["pin"] or r["activity"] else ()))
                                               # 26 (#2505): `1` on a test identity's session
-                                              + (("1" if r["test"] else "",) if r["test"] or r["ask"] or r["tok"] or r["pin"] else ())
+                                              + (("1" if r["test"] else "",) if r["test"] or r["ask"] or r["tok"] or r["pin"] or r["activity"] else ())
                                               # 27-28 (#2538): what a needs session asks — its
                                               # kind (permission · question · auth) and its words
-                                              + (r["ask"] or (("", "") if r["tok"] or r["pin"] else ()))
+                                              + (r["ask"] or (("", "") if r["tok"] or r["pin"] or r["activity"] else ()))
                                               # 29 (#3377): the session's pool tokens today,
                                               # only when the hub recorded any
-                                              + ((r["tok"],) if r["tok"] or r["pin"] else ())
+                                              + ((r["tok"],) if r["tok"] or r["pin"] or r["activity"] else ())
                                               # 30 (#3517): `1` on a pinned session
-                                              + (("1",) if r["pin"] else ())) + "\n")
+                                              + (("1" if r["pin"] else "",) if r["pin"] or r["activity"] else ())
+                                              # 31: last completed native turn, epoch seconds
+                                              + ((str(int(r["activity"])),) if r["activity"] else ())) + "\n")
     path = os.path.join(gdir, "remote_" + f["sess"])
     unk = {lb for lb, n in nodes.items() if n.get("unk")}
     if via == "hub" and unk:

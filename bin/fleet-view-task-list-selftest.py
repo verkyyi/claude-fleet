@@ -46,18 +46,45 @@ class TaskList(unittest.TestCase):
     def tearDown(self):
         self.env.stop()
 
-    def test_turn_activity_reorders_live_and_history_but_not_pin(self):
+    def test_turn_activity_reorders_each_section_with_pins_first(self):
         items = [row("pin-a", group="pin", activity_at=1), row("pin-b", group="pin", activity_at=99),
                  row("a", activity_at=10, list_scope="turns"), row("b", activity_at=20, list_scope="turns"),
                  row("old-a", sec="gone", activity_at=30), row("old-b", sec="gone", activity_at=5)]
         targets = lambda rows: [e["target"] for e in v.task_list(rows) if e["kind"] == "sess"]
-        self.assertEqual(targets(items), ["pin-a", "pin-b", "b", "a", "old-a", "old-b"])
+        self.assertEqual(targets(items), ["pin-b", "pin-a", "b", "a", "old-a", "old-b"])
         items[2]["activity_at"] = 40
-        self.assertEqual(targets(items), ["pin-a", "pin-b", "a", "b", "old-a", "old-b"])
+        self.assertEqual(targets(items), ["pin-b", "pin-a", "a", "b", "old-a", "old-b"])
         items[3]["state"] = "needs"
-        self.assertEqual(targets(items), ["pin-a", "pin-b", "a", "b", "old-a", "old-b"])
+        self.assertEqual(targets(items), ["pin-b", "pin-a", "a", "b", "old-a", "old-b"])
         items[2]["activity_at"] = 20
-        self.assertEqual(targets(items), ["pin-a", "pin-b", "a", "b", "old-a", "old-b"])
+        self.assertEqual(targets(items), ["pin-b", "pin-a", "a", "b", "old-a", "old-b"])
+
+    def test_completed_turn_order_mixes_local_far_and_parked(self):
+        items = [row("local", activity_at=100, window_activity=900),
+                 row("remote", activity_at=300, far=True),
+                 row("parked", activity_at=200, state="parked", far=True),
+                 row("unknown", window_activity=1000)]
+        targets = lambda: [e["target"] for e in v.compact_task_list(items, now=400) if e["kind"] == "sess"]
+        self.assertEqual(targets(), ["remote", "parked", "local", "unknown"])
+        items[0].update(state="working", window_activity=2000)
+        self.assertEqual(targets(), ["remote", "parked", "local", "unknown"])
+        items[0]["activity_at"] = 350
+        self.assertEqual(targets(), ["local", "remote", "parked", "unknown"])
+        with patch.object(v, "tm", return_value=(0, "@1|fid|worker|350|")) as tm:
+            self.assertEqual(v.windows("fleet")["@1"][2], 350)
+            self.assertIn("@turn_activity_at", tm.call_args.args[-1])
+            self.assertNotIn("window_activity", tm.call_args.args[-1])
+
+    def test_refresh_keeps_cursor_on_identity_after_resort(self):
+        now = int(time.time())
+        items = [row("a", activity_at=now-200), row("b", activity_at=now-300)]
+        before = v.visible(items, "", set())
+        selected = ("sess", before[1]["target"])
+        items[1]["activity_at"] = now
+        after = v.visible(items, "", set(), selected="b")
+        cursor = v.refreshed_selection(after, selected, 1)
+        self.assertEqual(cursor, 0)
+        self.assertEqual(after[cursor]["target"], "b")
 
     def test_one_slot_priority_and_quiet_states(self):
         examples = [
@@ -238,14 +265,14 @@ class TaskList(unittest.TestCase):
                 self.assertIn("分钟前", v.note_of(e)[0])
         v.caches_words_reset()
 
-    def test_activity_tree_and_local_fallback_are_shared_with_display(self):
+    def test_activity_tree_ignores_window_output(self):
         parent = row("p", board="p", fid="p", activity_at=100, window_activity=999)
         kid = row("k", board="k", tree_parent="p", activity_at=200)
         local = row("local", window_activity=150)
         out = v.compact_task_list([parent, kid, local], now=300)
         shown = {e["target"]: e for e in out if e["kind"] == "sess"}
         self.assertEqual(v.activity_time(shown["p"]), 200, "conversation activity wins over window output")
-        self.assertEqual(v.activity_time(shown["local"]), 150)
+        self.assertEqual(v.activity_time(shown["local"]), 0)
         self.assertEqual(v.activity_time(v.sched_parent("s", "job", [shown["p"], shown["local"]], 300)), 200)
         kids, _ = v.tree_link([parent, kid])
         v.tree_times([parent, kid], kids)
@@ -274,7 +301,7 @@ class TaskList(unittest.TestCase):
         self.assertEqual(targets([b, a]), ["b", "a"])
         b["group"] = "queue"
         self.assertEqual(targets([b, a]), ["a", "b"])
-        # entering needs is activity (set-claude-state stamps @turn_activity_at): it rises by time
+        # A completed turn advances time; attention state alone does not.
         t = int(time.time())
         a["activity_at"], b["activity_at"] = t - 30, t - 20
         self.assertEqual(targets([b, a]), ["b", "a"])
