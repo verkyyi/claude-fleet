@@ -334,6 +334,7 @@ class MonitorEvents(unittest.TestCase):
         self.tick()
         self.assertEqual(len(self.writes),1)
         self.assertIn('@claude_needs ask',self.writes[-1][-1])
+        self.assertNotIn('@turn_activity_at',self.writes[-1][-1])
         self.options='needs|ask|ask'
         self.native.events.append(self.status('idle'))
         self.tick()
@@ -420,6 +421,7 @@ class MonitorEvents(unittest.TestCase):
         self.assertEqual(self.monitor.reconcile_at,0)
         self.tick()
         self.assertIn('@claude_needs ask',self.writes[-1][-1])
+        self.assertNotIn('@turn_activity_at',self.writes[-1][-1])
         self.assertEqual(len(self.native.calls),2)
 
     def test_resolved_attention_during_snapshot_is_not_reintroduced(self):

@@ -460,6 +460,7 @@ sessions = [
 nodes = [dict(machine_name="mac-d.local", availability="online", sessions=12, observed_at="2026-10-04T10:07:00Z", age_sec=3),
          dict(machine_name="box3", availability="lost", sessions=0, observed_at="2026-10-04T09:00:00Z", age_sec=4000),
          dict(machine_name="box8", availability="maintenance", sessions=2, observed_at="2026-10-04T10:06:00Z", age_sec=60)]
+sessions[0]["worker"]["activity_at"] = 1700000000
 json.dump({"machines": [], "sessions": sessions, "nodes": nodes}, open(path, "w"), ensure_ascii=False)
 json.dump({"machines": [], "sessions": sessions}, open(old, "w"), ensure_ascii=False)   # a hub older than #1475
 unk = [dict(n, sessions=None) if n["machine_name"] == "mac-d.local" else n for n in nodes]   # #1465: a fleet there unread
@@ -504,10 +505,12 @@ st_eq   "E: this fleet's own session is a LOCAL row (#1480): local=1, this machi
 st_eq   "E: a row on another machine says local=0, no wid" "0|" \
      "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" -v w="wid:$F/issue-1423" '$1 == w { print $11 "|" $12 }')"
 # (a needs row that says what it asks runs on to fields 27-28 — #2538)
-st_eq   "E: every row carries the six appended fields (local, wid, via, busy, born, cfg — #1480, #1488, #1607, #1750, #1783)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 16 && !(NF == 28 && $6 == "needs")')"
+st_eq   "E: every row carries the six appended fields (local, wid, via, busy, born, cfg — #1480, #1488, #1607, #1750, #1783)" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && NF != 16 && NF != 31 && !(NF == 28 && $6 == "needs")')"
 st_eq   "E: a hub answer's rows are via=hub" "" "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '/^wid:/ && $13 != "hub"')"
 st_hasnt "E: another login's session is not shown" "$R" "theirs"
 st_hasnt "E: a session with no worker_id is not shown" "$R" "no-id"
+st_eq "E: remote cache preserves completed-turn epoch in field 31" "1700000000" \
+  "$(printf '%s\n' "$R" | LC_ALL=C awk -F"$US" '$31 != "" { print $31 }')"
 st_has  "E: the C1 locator cache is written" "$(cat "$FLEET_CONF_DIR/control/hub-workers.tsv" 2>/dev/null)" "$F/issue-1423	mac-a"
 FLEET_HUB_SESSIONS_CMD="cat '$WORK/sessions-old.json'" PATH="$SHIMPATH" bash "$HUBS" --refresh 2>/dev/null || st_fail "E: --refresh (old hub) failed"
 st_eq   "E: a hub without a nodes list: #node derived from the sessions (newest observation)" \

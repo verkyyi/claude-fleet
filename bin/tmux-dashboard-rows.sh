@@ -84,7 +84,7 @@ R="${E}0m"; US=$'\x1f'
 # cache's field 29 (issue #3377); a window here has none.
 _WTEST='#{?@test_identity,,'; _WTEND='}'
 [ "${FLEET_ROWS_TEST:-0}" = 1 ] && { _WTEST=''; _WTEND=''; }
-WFMT="#{session_name}${US}#{window_index}${US}#{?@solo_shell,,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?#{||:#{!=:#{@ctx_pct},},#{@ctx_est}},#{?#{!=:#{@ctx_left},},#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}|#{?#{&&:#{@ctx_est},#{==:#{@ctx_pct},}},#{?#{!=:#{@ctx_left},},est,reset},#{@ctx_band}}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}${US}#{@task}"
+WFMT="#{session_name}${US}#{window_index}${US}#{?@solo_shell,,${_WTEST}#{window_name}${_WTEND}}${US}#{pane_current_path}${US}#{@claude_state}${US}#{@claude_state_ts}${US}#{window_id}${US}#{@issue}${US}#{@origin}${US}#{@worktree}${US}#{?#{==:#{@cc_agent},codex},codex:#{@cc_launcher_pid}_#{@codex_session_id},#{@cc_agent}}${US}#{@wid}${US}#{?#{==:#{@claude_state},looping},#{@claude_wait},#{@claude_needs}}${US}#{@expand}${US}#{@pin}${US}#{?@degenerate_ts,degen=#{@degenerate_ts}:,}#{?@mem_killed,mem:,}#{?@claude_mem_warn,fat=#{@claude_mem_warn}:,}#{?@ctx_warn,ctxw:,}${US}#{@reap_due}${US}#{@reap_seen}${US}#{@reap_state_ts}${US}#{@repo}${US}#{@norepo}${US}${US}#{@repo_fold}${US}#{@loop}${US}#{@title_info}${US}#{?@born,#{@born},#{window_created}}${US}#{@agent_cfg}#{?@agent_ver,/#{@agent_ver},}${US}#{@task_line}${US}#{@reap_policy}${US}#{@epic}${US}#{?#{==:#{@backfill},failed},failed,}${US}${US}#{?#{==:#{@claude_state},needs},#{@claude_needs_detail},}${US}#{?#{||:#{!=:#{@ctx_pct},},#{@ctx_est}},#{?#{!=:#{@ctx_left},},#{@ctx_left},#{?@ctx_pct,#{e|-:100,#{@ctx_pct}},}}|#{?#{&&:#{@ctx_est},#{==:#{@ctx_pct},}},#{?#{!=:#{@ctx_left},},est,reset},#{@ctx_band}}|#{@ctx_ts}|#{?@model,#{@model},#{?#{==:#{@cc_agent},codex},#{@cc_model},}}|#{@effort},}${US}#{?@name_manual,#{?#{==:#{window_name},#{@name_manual}},#{@name_manual},},}${US}#{@fleet_id}${US}#{@task}${US}#{@turn_activity_at}"
 
 # pad/truncate a plaintext string to N DISPLAY chars (locale-aware ${#}) → $fld_out
 fld() { local w="$1" s="$2" n=${#2}
@@ -133,20 +133,20 @@ state_v() { case "$1" in
   *)       gc=$GY; gl='·';      rk=4;;
 esac; }
 
-# seg_v <rk> <idx> <born> <window id> → $seg, one row's segment of the sort PATH.
-# A row's place is its BIRTH (issue #1750, FLEET_DASH_ORDER=born, the default):
-# `<born>:<stable id>` — the epoch it was spawned (@born, else window_created),
-# ties broken by the window id's number, a remote row's by its worker_id — so a
-# turn going working → done → working, a `needs` coming and going, or a window
-# closing in the middle (renumber-windows) moves no row, and this machine's rows
-# and another machine's are measured with the one ruler, whatever order the hub
-# returned them in. A row with no birth (a remote node older than #1750) sorts
-# after every born sibling, by its id. `status` is the old order, byte for byte:
-# `<rk>:<idx>` — the state rank first, so a row jumps whenever its state does.
-ORDER=${FLEET_DASH_ORDER:-born}; [ "$ORDER" = status ] || ORDER=born
+# seg_v <rank> <index> <birth> <identity> <last completed turn> → $seg.
+# Local and remote rows use the same epoch seconds, newest first by default.
+# Unknown activity sorts last; birth and status retain their legacy ordering.
+ORDER=${FLEET_DASH_ORDER:-active}
+case "$ORDER" in born|status|active) ;; *) ORDER=active ;; esac
+
 seg_v() {
   if [ "$ORDER" = status ]; then printf -v seg '%s:%05d' "$1" "$2"; return; fi
   local b=$3 t=$4
+  if [ "$ORDER" = active ]; then
+    b=${5:-0}
+    case "$b" in ''|*[!0-9]*) b=0 ;; esac
+    b=$((9999999999 - 10#$b))
+  fi
   case "$b" in ''|*[!0-9]*) b=9999999999 ;; esac
   case "$t" in @*[0-9]) t=${t#@}; case "$t" in *[!0-9]*) ;; *) printf -v t '%08d' "$((10#$t))" ;; esac ;;
                wid:*) t=${t#wid:} ;; esac
@@ -404,7 +404,7 @@ WLIST=${WLIST//\\037/$US}
 #              window (jump, menu, reap, rename, pin, fold) finds none: a remote
 #              row is read-only, and its key (below) is the worker_id itself
 #   index      90001+, after this machine's windows of the same rank (the
-#              `status` order; the default born order reads the next one)
+#              `status` order; birth order reads the next one; active reads field 31)
 #   born       the session's birth (cache field 15, issue #1750: @born, else its
 #              window_created, as the node reported it) — the one ruler this
 #              machine's rows and the other machines' are ordered by
@@ -463,7 +463,7 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
   # `local` and `wid` (fields 11/12, #1480) are named so a new cache's needs field
   # stays its own; a cache older than #1480 leaves them empty. `via` (field 13,
   # #1488: hub | node) the same — empty reads as hub.
-  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext r_tok r_pin _; do
+  while IFS=$US read -r r_wid r_node r_av r_iss r_repo r_state r_agent r_name r_orig r_needs r_local r_lwid r_via _r_busy r_born r_cfg r_ttl r_reap r_epic r_bf r_cl r_cb r_ct r_cm r_ce r_test r_akind r_atext r_tok r_pin r_activity _; do
     # field 26 (issue #2505): a test identity's session — after the five
     # measurement fields, so the sixth of the rest; hidden but for `fleet ls`
     [ "$r_test" = 1 ] && { [ "${FLEET_ROWS_TEST:-0}" = 1 ] || continue; }
@@ -503,13 +503,13 @@ if [ -n "${FLEET_SESSION:-}" ] && fleet_hub_on "$FLEET_SESSION" && [ -s "$G/remo
     # field 30 (issue #3517): pinned on its own machine (the node's @pin) — the
     # row's @pin, so it joins the 置顶 group here as a local pinned row does
     [ "$r_pin" = 1 ] || r_pin=''
-    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx$US$r_pin")
+    _rrows+=("$r_wid$US$r_node$US$r_iss$US$r_repo$US$r_state$US$r_agent$US$r_name$US$r_orig$US$r_needs$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx$US$r_pin$US$r_activity")
   done < "$G/remote_$FLEET_SESSION"
   for _rr in ${_rrows[@]+"${_rrows[@]}"}; do
-    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic r_bf r_akind r_atext r_ctx r_pin <<< "$_rr"
+    IFS=$US read -r r_wid r_node r_iss r_repo r_state r_agent r_name r_orig r_needs r_born r_cfg r_ttl r_reap r_epic r_bf r_akind r_atext r_ctx r_pin r_activity <<< "$_rr"
     _rn=$((_rn + 1)); _rno=''; [ -n "$r_repo" ] || _rno=1   # no repo = @norepo
     _rexp=''; case "$_rexpd" in *$'\n'"${r_wid#wid:}"$'\n'*) _rexp=1 ;; esac
-    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US${r_pin:+1}$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx"$'\n'
+    RLIST+="$FLEET_SESSION$US$_rn$US$r_name$US$US$r_state$US$US$r_wid$US$r_iss$US$r_orig$US$US$r_agent$US${r_node:-?}$US$r_needs$US$_rexp$US${r_pin:+1}$US$US$US$US$US$r_repo$US$_rno$US$US$US$US$US$r_born$US$r_cfg$US$r_ttl$US$r_reap$US$r_epic$US$r_bf$US$r_akind$US$r_atext$US$r_ctx$US$US$US$US$r_activity"$'\n'
   done
   unset _rrows _rr _rexpd _rexp
   WLIST="$RLIST$WLIST"
@@ -563,7 +563,7 @@ KEYTAB=''; RFOLD=''; UNFIN=$'\n'
 # The issue titles this frame needs (issue #1921, --rows only): a local row's
 # (repo, #issue) key, looked up once below in its repo's issue cache.
 ITWANT=''; ISLUGS=' '; DRIVEN=' '
-while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _ _ _ wepic _; do
+while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp pin _ _ _ _ wrepo wnorepo _ rfold wloop _ wborn _ _ _ wepic _ _ _ _ _ _ _ wactivity _; do
   [ -z "$name" ] && continue
   [ -n "${FLEET_SESSION:-}" ] && [ "$sess" != "$FLEET_SESSION" ] && continue
   RFOLD=$rfold
@@ -596,7 +596,7 @@ while IFS=$US read -r sess idx name path state _ rwid iss origin wt _ _ nsub exp
   # a `wid:` added to it would match no KEYTAB key and flatten every chain).
   case "$rwid" in wid:*) okey=${rwid#wid:} ;; esac
   [ -z "$okey" ] && continue
-  state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"; seg_v "$rk" "$idx" "$wborn" "$rwid"
+  state_v "$state" "$nsub"; pin_v "$pin"; exp_v "$exp"; seg_v "$rk" "$idx" "$wborn" "$rwid" "$wactivity"
   KEYTAB+="$okey"$'\t'"$rk"$'\t'"$seg"$'\t'"$pin"$'\t'"$exp"$'\t'"$rgrp"$'\t'"$origin"$'\n'
   # rank 1 is "quiet", not "finished" (issue #1331): an exited window and a
   # `done` window whose @loop still holds a pending round sort with done, but only a done window with NO Loop counts toward its parent's k/N.
@@ -812,7 +812,7 @@ buf=""
 # frame — every row below is a compare against it, no fork.
 fleet_cfg_expected_load; fleet_cfg_broken_load
 CFG_STALE_T='' CFG_RENEW_T='' CFG_BROKEN_T=''
-while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo _ _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman _ wtask; do
+while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent hnd nsub exp pin qwait reap_due reap_seen reap_stamp wrepo wnorepo _ _ wloop wtitle wborn wcfg wittl wreap wepic wbf wakind wask wctx wman _ wtask wactivity _; do
   [ -z "$name" ] && continue
   # A local window's title slot is its @task_line (issue #2359): the first
   # sentence of a session bound to no issue, the title's fallback below.
@@ -1068,7 +1068,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   case "$agent" in ''|claude) : ;; *) agentd="${agent//[^A-Za-z0-9_-]/}" ;; esac
   # sort key: the row's PATH (issue #1328) — one segment per live ancestor
   # (seg_v: `<born>:<id>` by default since issue #1750, so siblings keep their
-  # birth order whatever their state; `<rk>:<idx>` under FLEET_DASH_ORDER=status,
+  # newest turn by default; birth order when requested; `<rk>:<idx>` for status,
   # which the rest of this note describes) — one `<rk>:<idx>` segment per live
   # ancestor, root first, then its own, `/`-joined and zero-padded so a plain
   # byte sort puts every subtree contiguously under its parent, siblings in the
@@ -1088,7 +1088,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   #     nested under it. A row that is its own pin root sheds the └ indent: its
   #     parent is no longer the line above, and indenting under an unrelated row is
   #     a lie.
-  seg_v "$rk" "$idx" "$wborn" "$wid"; gpath=$seg
+  seg_v "$rk" "$idx" "$wborn" "$wid" "$wactivity"; gpath=$seg
   depth=0; pinned=1; ANC=0; croot=''; top=0
   if [ "$pin" = 1 ]; then pinned=0
   else
@@ -1451,7 +1451,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
       # The task list reads raw native plan/wait facts, never the overloaded
       # `looping` state as evidence of a repeating plan. Fields 26/27 follow
       # the retained legacy EPIC field, even when its value is empty.
-      cfgf+="$US$wtask$US$_agw$US$_rw$US${wepic:+1}$US$wloop$US$nsub"
+      cfgf+="$US$wtask$US$_agw$US$_rw$US${wepic:+1}$US$wloop$US$nsub$US$wactivity"
     fi
     buf+="$rgrp	$pinned	$gpath	$wid$US$state$US$gl$US$label$US${treed:- }$US$kidd$US$depth$US$ndet$US${rnode:+$hnd}$US$issd$US$ptxt$US$pct$cfgf"$'\n'
     continue
@@ -1725,7 +1725,7 @@ fi
 # never a cursor stop; the sidebar paints it red off its glyph field `!` and
 # knows it by that (is_attn_summary). The `status`
 # order has no line — the rows themselves still rise — so it stays byte for byte.
-if [ "$ORDER" = born ] && [ "$ATTN" -gt 0 ]; then
+if [ "$ORDER" != status ] && [ "$ATTN" -gt 0 ]; then
   if [ "$SIDEBAR" = 1 ]; then
     t=$(fleet_ui_t attn_summary_fmt "$ATTN")
     buf+="-3	-1	0	hdr$US$US!$US$t$US "$'\n'

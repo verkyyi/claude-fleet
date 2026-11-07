@@ -92,12 +92,12 @@ func TestBoardFromNests(t *testing.T) {
 		t.Errorf("record = %+v", r)
 	}
 	// the subtree right under its root, the newest tree first among siblings (the
-	// record was made just now, the child's tree last moved 5 s ago)
-	if at[rec.FID] != at[parent]+1 || at[child] != at[rec.FID]+1 || at[grand] != at[child]+1 {
+	// new record has no completed turn; the child's tree last moved 5 s ago)
+	if at[child] != at[parent]+1 || at[grand] != at[child]+1 || at[rec.FID] != at[grand]+1 {
 		t.Errorf("order: parent %d record %d child %d grand %d", at[parent], at[rec.FID], at[child], at[grand])
 	}
 	// the tree's activity is its newest row's
-	if got[parent].TreeAt != got[rec.FID].TreeAt || got[child].TreeAt != n-5 || got[grand].TreeAt != n-5 || got[parent].ActivityAt != n-400 {
+	if got[parent].TreeAt != n-5 || got[rec.FID].TreeAt != 0 || got[child].TreeAt != n-5 || got[grand].TreeAt != n-5 || got[parent].ActivityAt != n-400 {
 		t.Errorf("tree_at parent %d child %d grand %d record %d", got[parent].TreeAt, got[child].TreeAt, got[grand].TreeAt, got[rec.FID].TreeAt)
 	}
 	// an ended opener: lifted out of 已收起 into its session's group, uncounted,
@@ -143,7 +143,7 @@ func TestBoardFromNothingSaid(t *testing.T) {
 			t.Errorf("row %s = %+v", r.ID, r)
 		}
 	}
-	if b.Rows[0].ID != "a" || b.Rows[0].TreeAt != 300 || b.Rows[1].TreeAt != 100 {
+	if b.Rows[0].ID != "a" || b.Rows[0].TreeAt != 300 || b.Rows[1].TreeAt != 0 {
 		t.Errorf("rows = %+v", b.Rows)
 	}
 }
@@ -236,21 +236,21 @@ func TestBoardTreeAtCalm(t *testing.T) {
 	for _, r := range b.Rows {
 		got[r.ID] = r
 	}
-	if got["root"].TreeAt != 500 {
-		t.Errorf("root tree_at = %d; want 500 (the ask), not the busy child's turn 900", got["root"].TreeAt)
+	if got["root"].TreeAt != 900 {
+		t.Errorf("root tree_at = %d; want the newest completed turn, 900", got["root"].TreeAt)
 	}
 	if got["busy"].TreeAt != 900 || got["quiet"].TreeAt != 300 {
 		t.Errorf("own activity: busy %d quiet %d", got["busy"].TreeAt, got["quiet"].TreeAt)
 	}
-	// siblings by the same signal: the ask before the busy one
+	// Siblings use completed turns, independent of attention state.
 	var kids []string
 	for _, r := range b.Rows {
 		if r.Parent == "root" {
 			kids = append(kids, r.ID)
 		}
 	}
-	if len(kids) != 2 || kids[0] != "asks" {
-		t.Errorf("siblings = %v; want the asking one first", kids)
+	if len(kids) != 2 || kids[0] != "busy" {
+		t.Errorf("siblings = %v; want the newest completed turn first", kids)
 	}
 	// an ended child moves its tree to its end
 	for i := range rows {

@@ -62,8 +62,8 @@ class Board(unittest.TestCase):
         v._ARCHIVE_HOLD[fid] = (False, time.monotonic() + 30, now)
         restored = project()
         self.assertFalse(restored["archived"])
-        self.assertEqual(restored["activity_at"], now)
-        self.assertIn(restored["target"], [r.get("target") for r in v.visible([restored], "", set())])
+        self.assertEqual(restored["activity_at"], now - 864000)
+        self.assertIn(restored["target"], [r.get("target") for r in v.visible([restored], "", set(), selected=restored["target"])])
         board["rows"][0]["archived"] = False
         project()
         self.assertNotIn(fid, v._ARCHIVE_HOLD, "Hub acknowledgment releases the local bridge")

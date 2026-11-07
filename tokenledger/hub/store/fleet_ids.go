@@ -548,13 +548,14 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 		if err := s.applyIDEvent(tx, &r, ev, seq, ts); err != nil {
 			return FleetIDPushed{}, err
 		}
-		// Warm only reconstructs a parked window; migrated segments are history.
-		// Old nodes did not distinguish warm from reopen: wait for their native
-		// or turn activity instead of treating an ambiguous reopen as interaction.
+		// Native binding, reopen and park events are lifecycle only. Completed
+		// turn activity arrives through the inventory and survives closure there.
+		// Preserve automatic unarchive on an intentional reopen/native binding,
+		// without pretending that lifecycle event completed an agent turn.
 		kind := evStr(ev, "ev", 20)
 		if ev["maintenance"] != true && ((kind == "reopened" && ev["maintenance"] == false) ||
 			(kind == "native" && evStr(ev, "trigger", 20) != "migrated")) && ts > 0 && ts <= time.Now().Unix() {
-			if _, err := tx.Exec(`UPDATE fleet_ids SET activity_at=? WHERE id=? AND activity_at<?`, ts, r.ID, ts); err != nil {
+			if _, err := tx.Exec(`UPDATE fleet_session_archives SET archived=0 WHERE owner=? AND id=? AND archived=1 AND archived_at<?`, p.Owner, r.ID, ts); err != nil {
 				return FleetIDPushed{}, err
 			}
 		}

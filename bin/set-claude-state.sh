@@ -559,17 +559,14 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
       if [ -n "$wwait" ]; then set -- "$@" \; set-window-option -t "$TMUX_PANE" @claude_wait "$wwait"
       elif [ -n "$wprev" ]; then set -- "$@" \; set-window-option -qu -t "$TMUX_PANE" @claude_wait; fi
     fi
-  # Conversation recency is separate from lifecycle/classifier stamps: closing
-  # or parking a window must not move it above a more recent conversation. And
-  # only a CHANGE of state is a turn's activity (task NFVN): a per-tool
-  # `working` re-stamp mid-turn bumped it every few seconds, so sessions working
-  # at once kept swapping places at the top of the list. tmux compares against
-  # the state last stamped (@turn_activity_state), in the same call — no fork.
+  # Only a completed native turn advances conversation order. Prompt/tool,
+  # attention, classifier and lifecycle writes never count as a completed turn.
     if [ "$src" != classifier ]; then
       case "$sem" in working|done|needs)
-        _ta=${wstate:-$sem}; _tn=$(date +%s)
-        set -- "$@" \; if-shell -F -t "$TMUX_PANE" "#{!=:#{@turn_activity_state},$_ta}" \
-          "set-window-option -t $TMUX_PANE @turn_activity_at $_tn ; set-window-option -t $TMUX_PANE @turn_activity_state $_ta" ;;
+        set -- "$@" \; set-window-option -t "$TMUX_PANE" @turn_activity_state "${wstate:-$sem}"
+        if [ "$sem" = 'done' ]; then
+          set -- "$@" \; set-window-option -t "$TMUX_PANE" @turn_activity_at "$(date +%s)"
+        fi ;;
       esac
     fi
   # last-activity stamp (drives the dashboard's "Nm ago" column).

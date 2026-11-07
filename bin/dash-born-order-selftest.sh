@@ -91,7 +91,7 @@ withb_s=$s; withb_h=$(hub)
 sed -i.bak "s/${US}[0-9]*\$/${US}/" "$WLIST_FILE"            # every born field emptied
 st_eq "A: status — the born field changes not one byte (sidebar)" "$withb_s" "$(side)"
 st_eq "A: status — the born field changes not one byte (hub)"     "$withb_h" "$(hub)"
-unset FLEET_DASH_ORDER
+export FLEET_DASH_ORDER=born
 
 # ============================================================================
 # B. rotate — born order holds through every state and a close
@@ -104,7 +104,7 @@ for states in 'working working working working working' 'done done done done don
   fixture $states
   st_eq "B: born order through [$states]" "$want" "$(sorder "$(side)")"
 done
-st_eq "B: an unknown order word is the born order" "$want" "$(sorder "$(FLEET_DASH_ORDER=x side)")"
+st_eq "B: born is an explicit option" "$want" "$(sorder "$(FLEET_DASH_ORDER=born side)")"
 fixture working needs done working done C2          # C2 closed: the rest renumber
 st_eq "B: a window closing in the middle moves no other row" "A;P;C1;Z;" "$(sorder "$(side)")"
 fixture working done working done working A
@@ -138,6 +138,44 @@ fixture needs working needs working working
 cache issue-7 R1 $((B + 15))
 st_eq "C: a needs row on either machine stays in place" "A;R1;P;C2;C1;Z;" "$(sorder "$(side)")"
 rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
+
+# Active is the default. Completed turns on local and remote rows share one
+# clock; state_ts (redraw/tool/lifecycle) is deliberately much newer.
+fixture working done working done working
+python3 - "$WLIST_FILE" <<'ACTIVE'
+import sys
+p = sys.argv[1]
+rows = []
+for line in open(p):
+    f = line.rstrip('\n').split('\x1f')
+    f += [''] * (38 - len(f))
+    f[5] = '1999999999'
+    f[37] = {'A':'1700000050', 'P':'1700000020', 'C1':'1700000040', 'C2':'1700000030', 'Z':'1700000010'}[f[2]]
+    rows.append('\x1f'.join(f))
+open(p, 'w').write('\n'.join(rows) + '\n')
+ACTIVE
+export CCQUOTA_FLEET=1
+cache issue-7 R1 1 issue-8 R2 2 issue-9 R0 3
+python3 - "$G/remote_$S" <<'ACTIVE'
+import sys
+p = sys.argv[1]
+rows = []
+for line in open(p):
+    f = line.rstrip('\n').split('\x1f')
+    if f[0].startswith('wid:'):
+        f += [''] * (31 - len(f))
+        f[30] = {'R1':'1700000045', 'R2':'1700000015', 'R0':''}[f[7]]
+    rows.append('\x1f'.join(f))
+open(p, 'w').write('\n'.join(rows) + '\n')
+ACTIVE
+printf '%s\n' "$NOW" > "$G/hub_ok"
+unset FLEET_DASH_ORDER
+st_eq "active: default mixes all machines by last turn, newest first" \
+  "A;R1;P;C1;C2;R2;Z;R0;" "$(sorder "$(side)")"
+st_eq "active: invalid option uses the default" "$(sorder "$(side)")" "$(sorder "$(FLEET_DASH_ORDER=x side)")"
+st_eq "active: explicit option equals default" "$(sorder "$(side)")" "$(sorder "$(FLEET_DASH_ORDER=active side)")"
+rm -f "$G/remote_$S" "$G/hub_ok"; unset CCQUOTA_FLEET
+export FLEET_DASH_ORDER=born
 
 # ============================================================================
 # D. summary — the rows waiting on you, counted on top

@@ -538,17 +538,17 @@ g = ended[1]
 assert g["gone"] and g["text"] == "Mac 新登录租凭据 + 演练认看台" and g["issue"] == "#3276" and g["right"] == "32 mins", g
 assert g["sym"] == "done" and ended[2]["sym"] == "fail" and g["word"] == "已合并 · 窗口已回收", g
 assert "PR #3278" in g["foot"] and "↵ 恢复" in g["foot"], g["foot"]
-# Recent closed rows stay in the main list even with More shut.
+# Undated legacy history stays folded; a close time is not a completed turn.
 v = fv.visible(it, "", set())
-assert [e["target"] for e in v if e.get("gone")] == [e["target"] for e in ended[1:]], v
+assert not [e for e in v if e.get("gone")], v
 v = fv.visible(it, "", {"ended"})
-assert [e["target"] for e in v if e.get("gone")] == [e["target"] for e in ended[1:]], v
+assert not [e for e in v if e.get("gone")], v
 v = fv.visible(it, "", {"gone"})
-assert [e["target"] for e in v if e.get("sec") == "gone" and e["kind"] == "sess"] == ["@9"], v  # old local window activity expires too
+assert [e["target"] for e in v if e.get("sec") == "gone" and e["kind"] == "sess"] == ["@9"] + sorted(e["target"] for e in ended[1:]), v  # known turns first, then undated history
 # a query finds one
 assert [e["target"] for e in fv.visible(it, "演练认看台", set())] == ["landed:3278@o/claude-fleet"]
 # ⌘↓ ⌘↑ never walk onto a reaped one
-assert fv.session_order(it) == ["@1", "@9"], fv.session_order(it)
+assert fv.session_order(it) == ["@9", "@1"], fv.session_order(it)  # dated turn before unknown
 # Tab: 恢复, alone
 r = fv.act_row("fl", g)
 m = [(a["id"], label) for a, label in fv.menu_of(r)]
@@ -680,16 +680,16 @@ assert more["text"] == "更早的 3 个 → /fleet-history" and more["sec"] == "
 ra = next(e for e in it if e.get("cmd") == "reapall")
 assert ra["row"]["targets"] == ["@8", "@9"] and "收起已结束的 2 个" in ra["text"] and "sec" not in ra, ra
 assert "Tab → 回收" in next(e for e in it if e.get("target") == "@8")["foot"]
-# More folds expired rows; the two closed within 24h stay in the main list.
+# More folds undated legacy history, even when its closure was recent.
 v = fv.visible(it, "", set())
 assert [(e["kind"], e.get("sec")) for e in v if e.get("sec")] == [("sec", "gone")], v
 assert all(e.get("closed") for e in v if e["kind"] == "sec")
-assert [e["target"] for e in v if e.get("gone")] == ["landed:901@o/r", "landed:902@o/r"], v
+assert not [e for e in v if e.get("gone")], v
 assert [e.get("target") for e in v if e.get("ended")] == ["@8", "@9"], v
 opened = fv.sec_fold(set(), "gone", True)
 v = fv.visible(it, "", opened)
 assert [e.get("target") or e.get("cmd") for e in v if e.get("sec") == "gone" and e["kind"] != "sec"] == \
-    ["landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
+    ["landed:901@o/r", "landed:902@o/r", "landed:903@o/r", "landed:904@o/r", "landed:905@o/r", "history"], v
 assert fv.visible(it, "", fv.sec_fold(opened, "gone", False)) == fv.visible(it, "", set())
 # the panel (view-panel's rows): ✦ + $ above the same lines, ⇄ ⏏ after them (T762, T923)
 p = fv.panel_rows(it, "", {"ended", "gone"}, cmds=["new", "quit"])

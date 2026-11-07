@@ -72,8 +72,7 @@ export const WorkRowsProvider: FC<{ children: ReactNode }> = ({ children }) => {
   }, [rawRows]);
   const rows = useMemo(() => rawRows?.map(r => {
     const saved = r.board && archives[r.board.id];
-    return r.board && saved ? { ...r, board: { ...r.board, archived: saved.archived,
-      activity_at: Math.max(r.board.activity_at || 0, saved.at), tree_at: Math.max(r.board.tree_at || 0, saved.at) } } : r;
+    return r.board && saved ? { ...r, board: { ...r.board, archived: saved.archived } } : r;
   }) ?? null, [rawRows, archives]);
   const restoreArchived = useCallback(async (r: Row): Promise<string | null> => {
     if (!r.board?.archived) return null;
