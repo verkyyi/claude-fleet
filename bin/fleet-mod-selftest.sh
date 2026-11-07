@@ -71,10 +71,12 @@ cat > "$WORK/fakebin/claude" <<EOF
 for a in "\$@"; do printf '[%s]\n' "\$a"; done > "$WORK/argv"
 EOF
 # fake `tmux`: display-message answers the session (f1) or the @mod_alive file.
+# This fixture has no window title; names are covered by fleet-session-name-selftest.sh.
 cat > "$WORK/fakebin/tmux" <<EOF
 #!/bin/sh
 for a in "\$@"; do
   case "\$a" in
+    '#{window_name}') exit 0 ;;
     '#{@mod_alive}') cat "$WORK/alive" 2>/dev/null; exit 0 ;;
   esac
 done
