@@ -5925,6 +5925,13 @@ drill_codex_interrupt_idle() {
   SECS=$(since "$t0"); WHAT='原生中断后清除运行提示；停放仍核对工具、goal、身份和原生子线程，不把中断当成功'
 }
 
+drill_site_font_subset() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(bash "$BIN/site-build-selftest.sh" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0"); WHAT='网站字形全部覆盖，新增缺字仍拒绝构建'
+}
+
 drill_park_waiting_idle() {
   CAP=60; local t0 out
   t0=$(now)
