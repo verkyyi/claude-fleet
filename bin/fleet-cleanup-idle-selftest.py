@@ -1362,7 +1362,7 @@ class HoldsAndWhy(TaskSession):
         self.assertEqual(self.why(), "")
 
     def test_waiting_on_its_person_parks_after_its_hours(self):
-        """C6/E101: same window when parked; 3d later history proves resume first."""
+        """A parked question stays visible; answered parks retain the history gate."""
         self.answer.write_text("1\n")
         self.result("waiting")
         self.set("@park_wrap_ver", "1")
@@ -1383,6 +1383,7 @@ class HoldsAndWhy(TaskSession):
         out = self.clean()
         self.assertIn("parked-web:" + self.win, out)
         self.assertTrue(self.exists())
+        self.assertEqual(self.tm("show-option", "-wqv", "-t", self.win, "@claude_state").strip(), "needs")
         self.clean()
         self.assertRegex(self.why(), r"^timer:\d+$")
         old = str(int(time.time()) - 3 * 86400 - 600)
@@ -1393,6 +1394,15 @@ class HoldsAndWhy(TaskSession):
         self.assertNotIn("reaped-parked", self.clean())
         self.assertTrue(self.exists())
         self.set("@park_wake", "")
+        # Expiry does not discard an unanswered question. An answered session
+        # with the ordinary retention policy still proves history before close.
+        self.assertNotIn("reaped-parked", self.clean())
+        self.assertTrue(self.exists())
+        self.set("@claude_state", "done")
+        self.set("@claude_needs", "")
+        self.set("@park_waiting", "0")
+        self.set("@reap_policy", "idle:2h")
+        self.result("succeeded")
         out = self.clean()
         self.assertIn("reaped-parked:" + self.win + " scratch-7", out)
         self.assertFalse(self.exists())

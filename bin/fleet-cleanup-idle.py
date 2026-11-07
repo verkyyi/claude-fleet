@@ -750,7 +750,10 @@ class Cleaner:
     def stamp_why(self, window, snap):
         if self.args.dry_run or self.theirs(snap):
             return
-        fin = (self.finished(snap) in ("done", "exited") or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1")
+        # A held park may retain `needs` so its unanswered question stays visible.
+        # Its retention reason still belongs on the parked row.
+        fin = (self.finished(snap) in ("done", "exited") or snap["@wrap_gone"] == "1" or snap["pane_dead"] == "1"
+               or bool(snap.get("@parked") and snap.get("@park_held")))
         why = self.why if fin and re.fullmatch(r"[a-z-]{1,16}(?::\d{1,11})?", self.why or "") else ""
         if why == snap.get("@reap_why", ""):
             return
