@@ -2120,6 +2120,14 @@ class ParkTable(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
+    def test_unanswered_record_and_native_blocked_keep_waiting_marker(self):
+        c = idle.Cleaner(argparse.Namespace(socket_name='test'))
+        with patch.object(c, 'id_status', return_value={'state': 'done'}), \
+                patch.object(c, 'record', return_value=(1, True, False)):
+            self.assertTrue(c.is_waiting({'@task': 'T1', '@claude_state': 'done'}))
+        with patch.object(c, 'record', return_value=(0, False, False)):
+            self.assertTrue(c.is_waiting({'@agent_status': '{"state":"blocked"}', '@claude_state': 'done'}))
+
     def test_waiting_states_have_same_park_timer(self):
         args = argparse.Namespace(socket_name='test', session='test', main='/missing', repo='o/r',
                                   base='master', window_repo=False, dry_run=False)

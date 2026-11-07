@@ -800,17 +800,25 @@ class Cleaner:
         return got if isinstance(got, dict) else {}
 
     def is_waiting(self, snap):
+        try:
+            status = json.loads(snap.get('@agent_status') or '{}')
+        except ValueError:
+            status = {}
+        if (isinstance(status, dict) and status.get('state') == 'blocked'):
+            return True
         if (snap.get("@claude_state") in ("needs", "blocked", "asking")
                 or snap.get("@claude_needs") in ("blocked", "ask", "question", "perm", "permission")
                 or (snap.get("@parked") and snap.get("@park_waiting") == "1")):
+            return True
+        task = snap.get("@task", "")
+        rc, asked, _ = self.record(task) if task else (3, False, False)
+        if rc != 0 and asked:
             return True
         st = self.id_status(snap.get("@fleet_id", ""))
         if st.get("state") in ("done", "failed"):
             return False
         result = st.get("result") or {}
-        task = snap.get("@task", "")
-        rc, asked, _ = self.record(task) if task else (3, False, False)
-        return rc != 0 and ((isinstance(result, dict) and result.get("state") in WAIT_RESULTS) or asked)
+        return rc != 0 and isinstance(result, dict) and result.get("state") in WAIT_RESULTS
 
     def waiting(self, window, snap):
         """E101 no longer closes a window to park it. Legacy wrappers wait for
@@ -1086,6 +1094,9 @@ class Cleaner:
                 self._park_memory_done = True
             waiting = self.is_waiting(snap)
             self.tm("set-option", "-w", "-t", window, "@park_waiting", "1" if waiting else "0")
+            if waiting:
+                self.tm("set-option", "-w", "-t", window, "@claude_needs", snap.get("@claude_needs") or "blocked")
+                self.tm("set-option", "-w", "-t", window, "@claude_state", "needs")
             if snap.get("@reap_unreported"):
                 self.tm("set-option", "-wu", "-t", window, "@reap_unreported")
             self.why = "bg-stale" if got.get("why") == "bg-stale" else "parked"
