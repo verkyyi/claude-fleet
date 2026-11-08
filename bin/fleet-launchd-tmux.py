@@ -92,6 +92,10 @@ def stamp():
     if manager not in ('Aqua', 'Background', 'LoginWindow', 'System', 'StandardIO'):
         manager = 'unknown'
     warning = '' if manager == 'Aqua' else 'launchd: ' + manager
+    # Repeated stamps preserve consent; any observed domain change retires it.
+    ack = run(['tmux', 'show-options', '-gqv', '@launchd_warning_ack']).stdout.strip()
+    if ack and ack != warning:
+        run(['tmux', 'set-option', '-gu', '@launchd_warning_ack'])
     run(['tmux', 'set-option', '-g', '@launchd_warning', warning])
 
 

@@ -183,7 +183,7 @@ def brand_parts():
             (BRAND[2:], ink, "brand"), (" ", None, "")]
 
 
-def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream=""):
+def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", upstream="", launchd=""):
     """The line as a list of (text, colour, range) parts plus its background
     (None / BG_DOWN): tokenman · title …… PR · context (· 今天 N) (· 上游连不上)
     (· machine) (· ⌘P). The left is the brand and the session's name (task
@@ -232,6 +232,12 @@ def layout(rec, cols, down="", route="", now=None, via="", pin="", tries="", ups
         if title:
             parts += [("· ", DIM, ""), (title, FG, "title"), (" ", None, "")]
     pad = cols - sum(cells(t) for t, _, _ in parts) - sum(cells(t) for t, _, _ in rtext)
+    # Lowest priority: use only padding left by the NORMAL layout. Never shorten
+    # a title or displace context, PR, usage, connection trouble or the key hint.
+    tag = launchd + sep if launchd else ""
+    if tag and pad >= cells(tag) + 1:
+        parts += [(" " * (pad - cells(tag)), None, ""), (tag, WARN, "")]
+        return parts + rtext, bg
     parts.append((" " * max(1, pad), None, ""))
     return parts + rtext, bg
 
@@ -494,6 +500,27 @@ def render_upload(kv, cols):
         return None
 
 
+def launchd_tag(kv):
+    """Acknowledge the server's current domain without hiding it from doctor."""
+    if not kv.get("sock"):
+        return ""
+    try:
+        out = subprocess.run(["tmux", "-S", kv["sock"], "show-options", "-gqv", "@launchd_warning",
+                              ";", "show-options", "-gqv", "@launchd_warning_ack"],
+                             capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=2).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    warning, _, ack = out.partition("\n")
+    warning = warning.strip()
+    if not warning or warning == ack.strip():
+        return ""
+    if warning == "launchd: Background":
+        return say("topbar_launchd_bg")
+    domain = {"launchd: LoginWindow": "LW", "launchd: System": "SYS",
+              "launchd: StandardIO": "IO"}.get(warning, "?")
+    return "⚠ launchd:" + domain
+
+
 def render_node(kv, cols):
     # this connection's language (issue #3329): the 看台's `@view_lang`, when the
     # door recorded one (`vl=1:<locale>`) — fleet-ui-lang.sh weighs it after the
@@ -501,13 +528,6 @@ def render_node(kv, cols):
     vl = kv.get("vl", "")
     if vl.startswith("1:"):
         os.environ["FLEET_VIEW_LANG"] = vl[2:]
-    # Server-stamped launchd health, measured in its own domain (T1332).
-    if kv.get("sock"):
-        warning = subprocess.run(["tmux", "-S", kv["sock"], "show-options", "-gqv", "@launchd_warning"],
-                                 capture_output=True, text=True, stdin=subprocess.DEVNULL).stdout.strip()
-        if warning:
-            print("#[fg=%s,bold]%s#[default]" % (WARN, tmux_text(clip(warning + " · " + say("topbar_launchd_migrate"), cols))))
-            return 0
     upload = render_upload(kv, cols)
     if upload is not None:
         print(upload)
@@ -527,7 +547,8 @@ def render_node(kv, cols):
             print(paint(inline_parts(m, n, cols), None))
             return 0
     rec, down, rr, via = node_record(kv)
-    parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "")
+    parts, bg = layout(rec, cols, down, rr, None, via, upstream=upstream_text() if rec.get("here") else "",
+                       launchd=launchd_tag(kv))
     print(own_window(kv.get("w", ""), paint(parts, bg)))
     return 0
 

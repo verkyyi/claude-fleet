@@ -1124,6 +1124,18 @@ if [ -f "$(dirname "$0")/fleet-lib.sh" ] && command -v bash >/dev/null 2>&1; the
   fi
 fi
 
+# --- launchd-domain: acknowledgement hides the tag, never the diagnosis -------
+if [ -f "$(dirname "$0")/fleet-lib.sh" ] && command -v tmux >/dev/null 2>&1; then
+  _ld_out=$(FLEET_CONF_DIR="$conf_dir" bash -c '. "$1" >/dev/null 2>&1
+    for s in $(fleet_sockets); do
+      warning=$(tmux -L "$s" -N show-options -gqv @launchd_warning 2>/dev/null)
+      [ -z "$warning" ] || printf "%s %s\n" "$s" "$warning"
+    done' _ "$(dirname "$0")/fleet-lib.sh" 2>/dev/null)
+  if [ -n "$_ld_out" ]; then
+    warn launchd "$_ld_out — tmux server domain; acknowledgement only hides the status tag. Aqua migration needs a GUI login and a planned server restart (docs/dev/MULTI-MACHINE-OPS.md)."
+  fi
+fi
+
 # --- hub-image (issue #1696): which commit the hub serves, vs the stable tag -----
 # The hub image is deployed by hand, and its commit used to live only in the
 # image tag (cluster access to read). bin/fleet-hub-image.sh reads the hub's
