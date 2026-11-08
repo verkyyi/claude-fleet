@@ -485,8 +485,21 @@ LaunchAgent 的 plist、日志仅写入 `$FLEET_CONF_DIR/launchd-tmux/`，不存
 它不设置 KeepAlive；有意停止仍走 fleet 原来的停机/恢复规则。
 
 配置重载及会话启动会从 tmux 内部读取 `launchctl managername`；不是 Aqua 或读取
-失败时，看台状态行和直接 attach 的节点状态行显示 `launchd: <域>`。
-检查不停止服务器、不自动重开任何会话，也不修改证书或登录态。
+失败时，看台正常状态行的剩余空白里显示短标签：中文 `⚠ 后台域`、英文
+`⚠ launchd:BG`。空间不足先舍弃标签，不挤掉会话名、上下文、用量、PR 或连接状态；
+上传进度和临时消息仍照常显示。直接 attach 的节点状态行仍显示 `launchd: <域>`。
+检查不停止服务器、不自动重开任何会话，也不修改证书或登录态。若暂时接受当前域，
+执行者可在该 fleet 的 tmux 会话内确认（从会话外操作须明确指定对应 socket）：
+
+```sh
+tmux set-option -g @launchd_warning_ack 'launchd: Background'
+```
+
+确认值必须与 `@launchd_warning` 完全一致；它只隐藏该服务器当前域的显示，
+会话启动和配置重载的重复探测不会撤销确认。探测到不同域（包括 Aqua 或 unknown）时
+自动清除确认；服务器重新创建后也需重新确认。`fleet doctor` 仍报告域问题。
+用 `tmux set-option -gu @launchd_warning_ack` 可主动恢复显示。
+接受 Background 不需要先建立 GUI 登录或重启，迁移可留到维护窗口。
 
 **旧服务器迁移（需发起人确认维护窗口后，由执行者操作）：**
 

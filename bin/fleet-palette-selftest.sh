@@ -89,6 +89,10 @@ source-file -F '#{d:current_file}/tmux-bar.conf'" "$(cat "$WORK/conf/main.conf")
   hasnt "C: healthy/unstamped node has no domain warning" 'launchd:' "$(tm display-message -p '#{E:status-right}')"
   tm set-option -g @launchd_warning 'launchd: Background'
   has "C: abnormal domain is visible on a node" 'launchd: Background' "$(tm display-message -p '#{E:status-right}')"
+  tm set-option -g @launchd_warning_ack 'launchd: Background'
+  hasnt "C: acknowledgement hides the node tag" 'launchd:' "$(tm display-message -p '#{E:status-right}')"
+  tm set-option -g @launchd_warning 'launchd: System'
+  has "C: another domain is not acknowledged" 'launchd: System' "$(tm display-message -p '#{E:status-right}')"
   tm set-option -g @launchd_warning ''
   hasnt "C: recovered domain clears the warning" 'launchd:' "$(tm display-message -p '#{E:status-right}')"
   tm kill-server 2>/dev/null
