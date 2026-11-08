@@ -463,8 +463,81 @@ def background_stale(source, pids, activity, now=None):
                 if stat.S_ISREG(info.st_mode):
                     progress = max(progress, info.st_mtime)
         return 0 < progress <= now - seconds
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         return False
+
+
+def preview_background(source, activity, reap=False):
+    """Fleet previews below MCP services are work too; reclaim only owned trees.
+
+    Older supervisors cannot hot-load their new idle watcher. Reap their deleted
+    scripts or stalled output here, after verifying the same process identity.
+    """
+    rows = TRANSFER['process_rows']()
+    owned = {source['pid']}
+    while True:
+        more = {pid for pid, (parent, _) in rows.items() if parent in owned} - owned
+        if not more:
+            break
+        owned.update(more)
+    previews = []
+    preview = None
+    for pid in owned - {source['pid']}:
+        if not re.fullmatch(r'(?i:python[0-9.]*|fleet-preview.py)', rows[pid][1]):
+            continue
+        try:
+            argv = ARGV['process_argv'](pid)
+            index = next((i for i in (0, 1) if len(argv) > i + 1
+                          and Path(argv[i]).name == 'fleet-preview.py'
+                          and argv[i + 1] == 'dev'), None)
+            if index is None:
+                continue
+            # fleet-mcp.py resolves its install at launch. A server from the
+            # previous release launches its sibling preview there, not at BIN.
+            parent_argv = ARGV['process_argv'](rows[pid][0])
+            entries = {(BIN / 'fleet-preview.py').resolve()}
+            for word in parent_argv[:2]:
+                if Path(word).name == 'fleet-mcp.py':
+                    entries.add(Path(word).resolve().with_name('fleet-preview.py'))
+            if Path(argv[index]).resolve() not in entries:
+                continue
+            tree = {pid}
+            while True:
+                more = {p for p, (parent, _) in rows.items() if parent in tree} - tree
+                if not more:
+                    break
+                tree.update(more)
+            previews.extend(tree)
+            if not reap:
+                continue
+            if preview is None:
+                preview = runpy.run_path(str(BIN / 'fleet-preview.py'))
+            cmd = argv[argv.index('--', index + 2) + 1:] if '--' in argv[index + 2:] else []
+            missing = preview['missing_script'](preview['command_scripts'](cmd, source.get('worktree')))
+            # The new supervisor records real requests, including --unix.
+            name = argv[argv.index('--name') + 1] if '--name' in argv else 'dev'
+            request = Path.home() / '.fleet-preview' / (name + '.sock.activity')
+            progress = max(int(activity or 0), request.stat().st_mtime if request.exists() else 0)
+            if not missing and not background_stale(source, tree, str(int(progress))):
+                continue
+            from fleet_native_proc import kernel_identity, process_gone
+            identities = {p: kernel_identity(p) for p in tree}
+            if any(identities[p]['ppid'] != rows[p][0] for p in tree):
+                continue
+            if ARGV['process_argv'](pid) != argv:
+                continue
+            # Children first: old supervisors forwarded TERM only to their shell.
+            for p in sorted(tree - {pid}) + [pid]:
+                if kernel_identity(p)['birth_token'] == identities[p]['birth_token']:
+                    os.kill(p, signal.SIGTERM)
+            end = time.monotonic() + .5
+            while time.monotonic() < end and any(not process_gone(p) for p in tree):
+                time.sleep(.05)
+            previews = [p for p in previews if p not in tree or not process_gone(p)]
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+            # Classification failure must not turn a discovered preview idle.
+            continue
+    return previews
 
 
 def child_busy(session, target, pid=0, reap=False):
@@ -489,8 +562,10 @@ def _child_busy(session,target,pid=0,reap=False,rpc_timeout=5):
     """
     w=Worker(session,target)
     if pid:
+        from fleet_session_gate import claude_transcript
         source=dict(agent='claude',pid=pid,codex_identity={},
-                    worktree=w.opt('@worktree') or w.opt('pane_current_path'))
+                    worktree=w.opt('@worktree') or w.opt('pane_current_path'),
+                    transcript=claude_transcript(w.opt('@cc_sid')))
     else:
         source=w.inspect()
     try:config_home=json.loads(w.opt('@sleep_evidence') or '{}').get('config_home')
@@ -512,12 +587,15 @@ def _child_busy(session,target,pid=0,reap=False,rpc_timeout=5):
         finally:client.close()
     else:
         quiet_processes(source,config_home or os.environ.get('CLAUDE_CONFIG_DIR'),background=background,strict=False)
-    if source['agent'] == 'codex':
+    if source['agent'] in ('codex', 'claude'):
         if background and background_stale(source, background, w.opt('@claude_state_ts')):
             w.stamp('@bg_stale', str(int(time.time())))
-            return []
-        w.stamp('@bg_stale', '')
-    return background
+            background = []
+        else:
+            w.stamp('@bg_stale', '')
+    # Request activity is checked by the preview reader, not the shell-output
+    # timer above. A quiet but actively viewed preview still holds parking.
+    return background + preview_background(source, w.opt('@claude_state_ts'), reap=reap)
 
 
 ACTIONS=('hook','busy','holds-exit','deliver','dispose','restore','hold','release')

@@ -168,6 +168,8 @@ def explain(snap, now=None):
         return prefix + " next=" + ("keep" if snap.get("@reap_policy") == "keep" else "result/policy") + " why=" + why
     if not snap.get("@park_wrap_ver"):
         return prefix + " next=legacy-policy (old wrapper) why=" + why
+    if snap.get("@park_refusal"):
+        return prefix + " next=park-held why=" + snap["@park_refusal"]
     if why in set(PARK_HOLDS.values()) | {"park-gate"}:
         return prefix + " next=park-held why=" + why
     stamp = snap.get("@claude_state_ts", "")
