@@ -1024,9 +1024,9 @@ def park_proof(w):
         return dict(ok=False, why="no_probe")
     for attempt in range(1, 3):
         answer = park_inbox_probe(directory)
-        answer["attempts"] = attempt
         if not str(answer.get("why", "")).startswith("probe_timeout:"):
             return answer
+        answer["attempts"] = attempt
     return answer
 
 
