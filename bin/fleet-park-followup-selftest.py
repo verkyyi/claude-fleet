@@ -46,8 +46,9 @@ class Followup(unittest.TestCase):
             source = dict(agent='claude', pid=40, worktree=d)
             rows = {40: (1, 'claude'), 41: (40, 'Python'), 42: (41, 'Python'),
                     43: (42, 'sh'), 44: (43, 'node'), 99: (1, 'node')}
-            argv = {41: ['python3', str(life.BIN / 'fleet-mcp.py')],
-                    42: ['python3', str(life.BIN / 'fleet-preview.py'), 'dev', '--name', 'test',
+            # The still-running MCP and preview both came from the old install.
+            argv = {40: ['claude'], 41: ['python3', d + '/old/bin/fleet-mcp.py'],
+                    42: ['python3', d + '/old/bin/fleet-preview.py', 'dev', '--name', 'test',
                          '--', '/bin/sh', '-c', 'node ' + d + '/gone.mjs']}
             with patch.dict(life.TRANSFER, process_rows=lambda: rows), \
                     patch.dict(life.ARGV, process_argv=lambda pid: argv[pid]), \

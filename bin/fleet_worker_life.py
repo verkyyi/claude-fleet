@@ -488,9 +488,18 @@ def preview_background(source, activity, reap=False):
         try:
             argv = ARGV['process_argv'](pid)
             index = next((i for i in (0, 1) if len(argv) > i + 1
-                          and Path(argv[i]).resolve() == (BIN / 'fleet-preview.py').resolve()
+                          and Path(argv[i]).name == 'fleet-preview.py'
                           and argv[i + 1] == 'dev'), None)
             if index is None:
+                continue
+            # fleet-mcp.py resolves its install at launch. A server from the
+            # previous release launches its sibling preview there, not at BIN.
+            parent_argv = ARGV['process_argv'](rows[pid][0])
+            entries = {(BIN / 'fleet-preview.py').resolve()}
+            for word in parent_argv[:2]:
+                if Path(word).name == 'fleet-mcp.py':
+                    entries.add(Path(word).resolve().with_name('fleet-preview.py'))
+            if Path(argv[index]).resolve() not in entries:
                 continue
             tree = {pid}
             while True:
