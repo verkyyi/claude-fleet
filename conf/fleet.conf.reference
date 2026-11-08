@@ -331,7 +331,8 @@ FLEET_PROTECTED_RE="^(master|main|develop|test)$"
 # idle session immediately; watched / drafts / tools / jobs always hold.
 # @label=Park an idle session with human presence after @group=janitor @tier=advanced @scope=fleet @edit=str
 #FLEET_SESSION_PARK_IDLE=300
-# Background work without transcript/output/activity progress stops holding parking after 6h; 0 disables.
+# Claude/Codex background work without transcript/output/activity progress stops holding parking after 6h; 0 disables.
+# Preview dev also stops after this interval without requests; deleted command scripts stop immediately.
 # @label=Background inactivity timeout before parking @group=janitor @tier=advanced @scope=fleet @edit=str
 #FLEET_BG_STALE_SECS=21600
 # Unattended can opt into 60s. C1 measured partial cache-prefix loss after resume,

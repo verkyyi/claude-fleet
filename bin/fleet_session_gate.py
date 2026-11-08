@@ -425,11 +425,24 @@ def close_hold(fid):
     from fleet_reap_policy import report_hold
     if report_hold(fid):
         return "report-pending"
-    if any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid)):
-        return "words_waiting"
+    reason = pending_words_reason(fid)
+    if reason:
+        return reason
     draft = fid_dir(fid) / "park-input.txt"
     if draft.exists() and draft.stat().st_size:
         return "draft"
+    return ""
+
+
+def pending_words_reason(fid):
+    for r in records(fid):
+        if r.get("state") not in ("queued", "trying", "native", "waking"):
+            continue
+        # An interrupted legacy send has no receipt. It is neither a proven
+        # queued message nor a composer draft; retain it without blind replay.
+        if r.get("legacy") and r.get("state") == "native":
+            return "delivery_uncertain:" + r["delivery"]
+        return "words_waiting"
     return ""
 
 
@@ -967,9 +980,11 @@ def park_background(w):
         env["TMUX"] = w["socket_path"] + ",0,0"
     try:
         p = subprocess.run(argv, capture_output=True, timeout=15, env=env)
-        return p.returncode != 1            # unknown / failed probes hold too
+        return "" if p.returncode == 1 and not p.stdout and not p.stderr else "bg" if p.returncode == 0 else "bg_probe_unknown"
+    except subprocess.TimeoutExpired:
+        return "probe_timeout:claude_background"
     except (OSError, subprocess.SubprocessError):
-        return True
+        return "bg_probe_unknown"
 
 
 def relay_request(w, request):
@@ -984,6 +999,8 @@ def relay_request(w, request):
             c.sendall((json.dumps(request) + "\n").encode())
             raw = c.recv(4096)
         return json.loads(raw)
+    except (TimeoutError, socket.timeout):
+        return dict(ok=False, why="probe_timeout:relay_" + request.get("op", "unknown"))
     except (OSError, ValueError):
         return dict(ok=False, why="relay_unavailable")
 
@@ -1005,6 +1022,16 @@ def park_proof(w):
     directory = claude_inbox(w)
     if directory is None:
         return dict(ok=False, why="no_probe")
+    for attempt in range(1, 3):
+        answer = park_inbox_probe(directory)
+        answer["attempts"] = attempt
+        if not str(answer.get("why", "")).startswith("probe_timeout:"):
+            return answer
+    return answer
+
+
+def park_inbox_probe(directory):
+    """Bounded read-only probe; distinguish polling failure from a stuck handler."""
     nonce = uuid.uuid4().hex
     base = directory / ("%d-park-%s" % (int(now()), nonce))
     pending = Path(str(base) + ".json")
@@ -1019,7 +1046,8 @@ def park_proof(w):
         time.sleep(.05)
     # Late probes are read-only; cancel when still unclaimed.
     pending.unlink(missing_ok=True)
-    return dict(ok=False, why="probe_timeout")
+    stage = "handler" if Path(str(base) + ".taken").exists() else "unclaimed"
+    return dict(ok=False, why="probe_timeout:claude_inbox_" + stage)
 
 
 def park_dialog(w):
@@ -1172,8 +1200,9 @@ def park_locked(fid, why, force):
     background = park_background(w)
     if background:
         return dict(ok=False, why=background if isinstance(background, str) else "bg")
-    if any(r.get("state") in ("queued", "trying", "native", "waking") for r in records(fid)):
-        return dict(ok=False, why="words_waiting")
+    pending = pending_words_reason(fid)
+    if pending:
+        return dict(ok=False, why=pending)
     generation = relay_request(w, dict(op="status"))
     seam = os.environ.get("FLEET_GATE_EXIT_CMD")
     if not generation.get("ok") and not seam:

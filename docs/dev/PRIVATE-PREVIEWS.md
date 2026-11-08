@@ -73,6 +73,11 @@ Task 注册读取已有的 execution binding（已认领的 session、endpoint�
    `--port` 在命令启动前已被占则拒绝、不登记。字节原样双向转发，WebSocket/SSE 不解析。
 5. 租约到一半时续期；命令退出（或 SIGTERM/SIGHUP 转给它）后关闭预览、删 socket。
 
+预览没有请求超过 `FLEET_BG_STALE_SECS`（默认 6 小时；0 关闭空闲超时），或解释器命令的
+脚本已被删除，下次巡检会停止整个命令进程组并关闭预览。`--keep` 只保留登记，不保活进程。
+`--unix` 的命令监听 `FLEET_PREVIEW_SOCKET` / `{socket}` 指定的内部 socket，公开的
+`<name>.sock` 由预览转发器持有，因此 Unix 与 TCP 预览都按真实请求重置空闲计时。
+
 已在本机验证：Vite 8（零配置 HMR，页面同源地址）与 Next.js 15（Fast Refresh）。
 BREAK-IT `preview-bridge-foreign-port`，`bin/fleet-preview-dev-selftest.py`。
 

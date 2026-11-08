@@ -226,6 +226,9 @@ class Bridge:
         self.path, self.want, self.strict = path, want, strict
         self.target, self.seen, self.lock, self.vlock = None, 0.0, threading.Lock(), threading.Lock()
         self.kick = threading.Event()   # a connection: the watcher looks again at its base pace
+        self.last_request = time.monotonic()
+        self.activity_path = Path(path + '.activity')
+        self.activity_path.touch(mode=0o600)
         self.srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         old = os.umask(0o177)
         try:
@@ -261,11 +264,12 @@ class Bridge:
             return t
 
     def handle(self, c):
+        self.request_progress()
         self.kick.set()
         t, u = self.current(), None
         if t:
             try:
-                u = socket.create_connection((dial_addr(t[0]), t[1]), timeout=5)
+                u = self.connect(t)
                 u.settimeout(None)
             except OSError:
                 u = None
@@ -277,12 +281,25 @@ class Bridge:
             return
         back = threading.Thread(target=pump, args=(u, c), daemon=True)
         back.start()
-        pump(c, u)
+        pump(c, u, self.request_progress)
         back.join()
         u.close()
         c.close()
 
+    def request_progress(self):
+        self.last_request = time.monotonic()
+        # A cleanup tick can inspect an already-running supervisor without
+        # confusing an actively viewed, quiet page with abandoned background work.
+        try:
+            self.activity_path.touch(mode=0o600)
+        except OSError:
+            pass  # the in-process request clock still protects this server
+
+    def connect(self, t):
+        return socket.create_connection((dial_addr(t[0]), t[1]), timeout=5)
+
     def close(self):
+        self.activity_path.unlink(missing_ok=True)
         try:
             self.srv.close()
         finally:
@@ -290,6 +307,40 @@ class Bridge:
                 os.unlink(self.path)
             except OSError:
                 pass
+
+
+class UnixBridge(Bridge):
+    """Keep the public socket observable even for a command using --unix."""
+    def __init__(self, path, command_path):
+        super().__init__(path, None, False)
+        self.command_path = command_path
+
+    def current(self):
+        return (self.command_path, 0, 0) if self.holds(None) else None
+
+    def holds(self, t):
+        try:
+            info = os.lstat(self.command_path)
+            return stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid()
+        except OSError:
+            return False
+
+    def connect(self, t):
+        c = socket.socket(socket.AF_UNIX)
+        try:
+            c.settimeout(5)
+            c.connect(self.command_path)
+            return c
+        except OSError:
+            c.close()
+            raise
+
+    def close(self):
+        super().close()
+        try:
+            os.unlink(self.command_path)
+        except FileNotFoundError:
+            pass
 
 
 def refuse(c):
@@ -307,12 +358,14 @@ def refuse(c):
         c.close()
 
 
-def pump(a, b):
+def pump(a, b, progress=None):
     try:
         while True:
             d = a.recv(65536)
             if not d:
                 break
+            if progress:
+                progress()
             b.sendall(d)
     except OSError:
         pass
@@ -395,9 +448,12 @@ def dev(argv):
 
 def run(a, cmd):
     path = os.path.join(private_dir(), a.name + '.sock')
-    if len(path.encode()) > 103:   # sun_path: 104 on macOS, 108 on Linux
+    command_path = path[:-5] + '.app.sock' if a.unix else path
+    if len(command_path.encode()) > 103:   # sun_path: 104 on macOS, 108 on Linux
         raise Refuse('%s is too long for a Unix socket; use a shorter --name' % path)
     clear_stale(path)
+    if a.unix:
+        clear_stale(command_path)
     port = a.port
     if not a.unix and not port:
         s = socket.socket()
@@ -407,7 +463,7 @@ def run(a, cmd):
     elif port and port_taken(port):
         raise Refuse('port %d is already held by another process, not by your command; '
                      'a preview never forwards to it' % port)
-    bridge = None if a.unix else Bridge(path, port, strict=bool(a.port))
+    bridge = UnixBridge(path, command_path) if a.unix else Bridge(path, port, strict=bool(a.port))
     try:
         pv, reused = register(a.name, a.keep)
     except Refuse:
@@ -419,33 +475,33 @@ def run(a, cmd):
     say('%s %s (%s) · %s' % ('reusing' if reused else 'registered', url or '(no URL from the hub)', pv_id,
                               'starting: ' + ' '.join(cmd)))
     env = dict(os.environ, FLEET_PREVIEW_URL=url, FLEET_PREVIEW_HOST=host, FLEET_PREVIEW_ID=pv_id,
-               FLEET_PREVIEW_SOCKET=path)
+               FLEET_PREVIEW_SOCKET=command_path)
     if host:
         env['__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS'] = host   # Vite's own host check (≥ 6.0.9)
     if port:
         env.update(PORT=str(port), HOST='127.0.0.1')
-    words = [w.replace('{port}', str(port or '')).replace('{host}', host).replace('{socket}', path) for w in cmd]
+    words = [w.replace('{port}', str(port or '')).replace('{host}', host).replace('{socket}', command_path) for w in cmd]
     stop = threading.Event()
     try:
-        child = subprocess.Popen(words, env=env)
+        child = subprocess.Popen(words, env=env, start_new_session=True)
     except OSError as exc:
         finish(bridge, path, pv_id, a.keep, None)
         raise Refuse('cannot start %s: %s' % (words[0], exc))
-    # A terminal's Ctrl+C already reaches the command (same process group); a kill
-    # aimed at this process alone is passed on.
-    tty = sys.stdin.isatty()
+    # A private process group lets shutdown stop shell wrappers AND their server.
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, lambda s, f: None if (s == signal.SIGINT and tty) else forward(child, s))
+        signal.signal(sig, lambda s, f: forward(child, s))
     threading.Thread(target=renewer, args=(pv_id, pv.get('expires') or 0, stop), daemon=True).start()
     if ORPHAN_S > 0:
         threading.Thread(target=orphan_watch, args=(child, os.getppid(), os.environ.get('TMUX_PANE', ''), stop),
                          daemon=True).start()
-    if bridge:
-        threading.Thread(target=bridge.serve, daemon=True).start()
+    threading.Thread(target=idle_watch, args=(child, words, bridge, stop), daemon=True).start()
+    threading.Thread(target=bridge.serve, daemon=True).start()
+    if not a.unix:
         threading.Thread(target=watch, args=(bridge, child, url, stop), daemon=True).start()
     else:
-        threading.Thread(target=watch_unix, args=(path, child, url, stop), daemon=True).start()
+        threading.Thread(target=watch_unix, args=(command_path, child, url, stop), daemon=True).start()
     rc = child.wait()
+    forward(child, signal.SIGKILL)  # no detached descendant survives its command
     stop.set()
     finish(bridge, path, pv_id, a.keep, rc)
     return rc if rc >= 0 else 128 - rc
@@ -453,9 +509,64 @@ def run(a, cmd):
 
 def forward(child, sig):
     try:
-        child.send_signal(sig)
+        os.killpg(child.pid, sig)
     except OSError:
         pass
+
+
+def command_scripts(words, cwd=None):
+    """Only interpreter script operands, never data files or arbitrary shell text."""
+    if not words:
+        return []
+    name = Path(words[0]).name
+    if name in ('sh', 'bash', 'zsh') and len(words) >= 3 and words[1] in ('-c', '-lc'):
+        try:
+            lexer = shlex.shlex(words[2], posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+            # Expansions and pipelines need the shell to interpret them; never
+            # mistake their source text for a missing filesystem path.
+            if any(any(c in word for c in '$`*?[]') for word in tokens):
+                return []
+            return command_scripts(tokens, cwd)
+        except ValueError:
+            return []
+    if name == 'exec':
+        return command_scripts(words[1:], cwd)
+    if not re.fullmatch(r'(?:python[0-9.]*|node|nodejs|bun|deno|sh|bash|zsh)', name):
+        return []
+    # Flags may take operands; never guess where the executable script is.
+    if len(words) < 2 or words[1].startswith('-'):
+        return []
+    p = Path(words[1])
+    return [p if p.is_absolute() else Path(cwd or os.getcwd()) / p]
+
+
+def missing_script(paths):
+    for path in paths:
+        try:
+            path.stat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            pass  # unreadable is not proof it disappeared
+    return False
+
+
+def idle_watch(child, words, bridge, stop):
+    paths = command_scripts(words)
+    value = os.environ.get('FLEET_BG_STALE_SECS', '21600')
+    seconds = int(value) if value.isdigit() else 21600
+    while not stop.wait(min(ORPHAN_S, 15) if ORPHAN_S > 0 else 15):
+        reason = ('command script disappeared' if missing_script(paths) else
+                  'no preview requests for %ss' % seconds
+                  if seconds > 0 and time.monotonic() - bridge.last_request >= seconds else '')
+        if reason:
+            say(reason + '; stopping the command')
+            forward(child, signal.SIGTERM)
+            if not stop.wait(10):
+                forward(child, signal.SIGKILL)
+            return
 
 
 def finish(bridge, path, pv_id, keep, rc):

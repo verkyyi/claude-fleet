@@ -220,8 +220,9 @@ def live_reason(target, minimum, socket_name=None, merged_at=None, waived=None, 
         return "retained:report"
     if len(hold) == 3 and re.fullmatch(r"[0-9a-f-]{36}", hold[2]):
         from fleet_session_gate import close_hold
-        if close_hold(hold[2]):
-            return "retained:message"
+        message_hold = close_hold(hold[2])
+        if message_hold:
+            return "retained:" + message_hold if message_hold.startswith("delivery_uncertain:") else "retained:message"
     if read(*tmux, "display-message", "-p", "-t", target, "#{@reap_work_pending}").strip():
         return "retained:input"
 

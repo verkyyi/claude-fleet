@@ -808,4 +808,5 @@
 | Codex 空闲探测的进程快照含刚退出的 helper，macOS argv 返回 EINVAL | 空闲会话永久被当作后台工作，不能停放 | 读取失败后重查内核存活与僵尸状态；只有已消失的进程退出遍历，活着但不可读仍拒绝 | `park-vanished-process` |
 | 等待用户回复的闲置会话一直等 after-turn；停放后问题标记被清除 | 等你会话永远占运行容量，停放后又找不到问题 | 等待态共用停放计时，保留问题标记与 keep；回复恢复原会话 | `park-waiting-idle` |
 | Codex 常驻后台进程长期无输出仍占 busy | 会话一直 looping，不能停放 | FLEET_BG_STALE_SECS 后解除后台持有；转录、输出文件或活动更新重新计时，原生回合门仍核验 | `park-stale-background` |
+| Claude 后台 shell 或预览服务长期无进展，已删脚本仍占工作；未被领取的原生停放探测只报 timeout，旧投递记录被误称输入框有字 | 空闲会话永远不停放，doctor 无法指出原因 | Claude 共用后台进展时钟；预览脚本消失或无请求超时后停止；原生探测限时重试并标明 inbox 阶段，未确认的旧投递保留并标明 delivery ID | `park-claude-stale-preview` |
 | 网站文案新增字符但已提交的字体子集没有该字形 | hub 构建失败，整列 stable 停住，节点修复不能上线 | site-build 的字形门拒绝缺字；用 --fonts 从原字体重新生成子集，再跑完整网站构建 | `site-font-subset` |

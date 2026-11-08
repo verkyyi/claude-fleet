@@ -5950,6 +5950,14 @@ drill_park_stale_background() {
   SECS=$(since "$t0"); WHAT='停滞后台不再占 busy，新转录或活动重置时钟，未知仍保留'
 }
 
+drill_park_claude_stale_preview() {
+  CAP=60; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-park-followup-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-preview-dev-selftest.py" Forward.test_deleted_script_stops_preview Forward.test_unused_unix_preview_stops_and_requests_reset_clock 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0"); WHAT='Claude 停滞后台、预览失效回收与停放探测分阶段拒绝'
+}
+
 drill_park_vanished_process() {
   CAP=30; local t0 out
   t0=$(now)

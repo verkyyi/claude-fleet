@@ -200,6 +200,26 @@ class Base(unittest.TestCase):
 
 
 class Forward(Base):
+    def test_deleted_script_stops_preview(self):
+        r = self.run_dev('echo', env={'FLEET_PREVIEW_ORPHAN_SECS': '0.1'})
+        r.wait_for('ready:')
+        (self.d / 'echo.py').unlink()
+        r.p.wait(timeout=8)
+        self.assertIn('command script disappeared', r.text())
+        self.assertFalse(r.sock.exists())
+        self.assertIn('close', [c['action'] for c in self.calls()])
+
+    def test_unused_unix_preview_stops_and_requests_reset_clock(self):
+        r = self.run_dev('unix', '--unix', env={'FLEET_BG_STALE_SECS': '2', 'FLEET_PREVIEW_ORPHAN_SECS': '0.1'})
+        r.wait_for('ready:')
+        for _ in range(3):
+            time.sleep(0.8)
+            self.assertEqual(r.ask(b'GET / HTTP/1.0\r\n\r\n'), b'UNIX')
+        self.assertIsNone(r.p.poll())
+        r.p.wait(timeout=8)
+        self.assertIn('no preview requests', r.text())
+        self.assertFalse(r.sock.exists())
+
     def test_bytes_both_ways_env_and_cleanup(self):
         r = self.run_dev('echo')
         r.wait_for('ready:')
@@ -431,14 +451,22 @@ class Idle(unittest.TestCase):
             return self.held
         self.pv.listeners, self.pv.still = walk, still
 
-    def run_watch(self, secs, bridge):
+    def run_watch(self, secs, bridge, kick_at=None):
         stop = threading.Event()
-        th = threading.Thread(target=self.pv.watch, args=(bridge, types_child(), 'u', stop), daemon=True)
-        th.start()
-        time.sleep(secs)
-        stop.set()
-        bridge.kick.set()
-        th.join(2)
+        waits = []
+        class Clock:
+            elapsed = 0
+            def wait(self, delay):
+                waits.append(delay)
+                self.elapsed += delay
+                if self.elapsed >= secs:
+                    stop.set()
+                return len(waits) == kick_at
+            def clear(self):
+                pass
+        bridge.kick = Clock()
+        self.pv.watch(bridge, types_child(), 'u', stop)
+        return waits
 
     def test_next_wait_doubles_to_the_cap_and_resets(self):
         w = self.pv.WATCH_S
@@ -465,17 +493,10 @@ class Idle(unittest.TestCase):
 
     def test_a_connection_brings_the_base_pace_back(self):
         b = FakeBridge()
-        stop = threading.Event()
-        th = threading.Thread(target=self.pv.watch, args=(b, types_child(), 'u', stop), daemon=True)
-        th.start()
-        time.sleep(1.2)          # backed off to the 0.4 s cap
-        n = len(b.got)
-        b.kick.set()             # what Bridge.handle does
-        time.sleep(0.12)
-        self.assertGreaterEqual(len(b.got) - n, 2, 'a connection did not reset the pace')
-        stop.set()
-        b.kick.set()
-        th.join(2)
+        waits = self.run_watch(1.6, b, kick_at=4)
+        self.assertEqual(waits[3], self.pv.WATCH_MAX_S)
+        self.assertEqual(waits[4], self.pv.WATCH_S * 2, 'a connection did not reset the pace')
+        self.assertEqual(self.walks, 3, 'the two startup reads plus a connection must recheck the command tree')
 
 
 def types_child():
@@ -513,7 +534,7 @@ class Orphan(unittest.TestCase):
         pv = self.pv
         pv.ORPHAN_S = 0.05
         pv.orphaned = lambda start_ppid, pane: True
-        child = subprocess.Popen(['sleep', '30'])
+        child = subprocess.Popen(['sleep', '30'], start_new_session=True)
         stop = threading.Event()
         th = threading.Thread(target=pv.orphan_watch, args=(child, 4242, '%7', stop), daemon=True)
         th.start()
@@ -523,6 +544,7 @@ class Orphan(unittest.TestCase):
             stop.set()
             if child.poll() is None:
                 child.kill()
+            child.wait()
             th.join(2)
 
 
