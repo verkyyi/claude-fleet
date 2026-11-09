@@ -38,7 +38,8 @@ export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_
 cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
 # The canonical pane→Claude walk is imported by fleet-lib (#4474). Keep this
 # hand-built install complete; an absent module must not impersonate an exit.
-cp "$BIN/fleet_pending_tool.py" "$IBIN/"
+cp "$BIN/fleet_pending_tool.py" "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$IBIN/"
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
 # state read from a file; no file = no profiles, so every leg that does not set
 # one sees `target auth: unknown` and runs exactly as before.
@@ -794,7 +795,7 @@ PYEXTERNALBOUND
   external_source 88
   touch "$WORK/fail-target"
   FLEET_TRANSFER_EXIT_WAIT=5 transfer "${external_flags[@]}" && fail 'external target failure must hold'
-  ! fleet_pid_alive "$PID" && ! fleet_pane_claude_pid "$PANE" "$LBL" >/dev/null 2>&1 || fail 'failed external target restarted source'
+  ! fleet_pid_alive "$PID" && ! fleet_pane_claude_pid "$PANE" "$LBL" --live >/dev/null 2>&1 || fail 'failed external target restarted source'
   [ ! -e "$(packet)/loop/state.json" ] && [ ! -d "$(packet)/rollback" ] || fail 'failed external target restarted timer'
   printf '%s' "$OUT" | grep -q 'no automatic source/timer restart' || fail 'external failure must state recovery boundary'; ok
   rm "$WORK/fail-target"
@@ -813,7 +814,7 @@ PYEXTERNALBOUND
 import json,sys
 assert json.load(open(sys.argv[1]))['state']=='rolled_back'
 PYBACK
-  BACK=$(fleet_pane_claude_pid "$PANE" "$LBL")
+  BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" --live)
   [ "$(fleet_cc_session_id "$BACK")" = "$SID" ] || fail 'rollback lost source native identity'
   [ "$(field fleet_id)" = 11111111-1111-4111-8111-111111111192 ] || fail 'rollback changed lifelong identity'
   ok
@@ -828,7 +829,7 @@ PYBACK
   transfer && fail 'unbound live process cannot report takeover'
   printf '%s' "$OUT" | grep -q 'refusing a second writer' || fail 'must explicitly refuse unsafe rollback'
   [ "$(field cc_agent)" = codex ] || fail 'live target cannot be relabelled as a resumed source'
-  fleet_pane_claude_pid "$PANE" "$LBL" >/dev/null 2>&1 && fail 'unsafe rollback launched a second writer'
+  fleet_pane_claude_pid "$PANE" "$LBL" --live >/dev/null 2>&1 && fail 'unsafe rollback launched a second writer'
   ok
   fi
   # Full mixed native Cron handover through a real private RPC server/TUI,
@@ -1230,7 +1231,7 @@ transfer && fail 'target startup failure must not report success'; ok
 BUNDLE=$(packet)
 ok; [ $(( SECONDS - T0 )) -lt 60 ] || fail 'rollback must finish within 60 seconds'
 ok; printf '%s' "$OUT" | grep -q '^fleet-transfer: rolled-back: 切换失败，已退回：codex exited at startup (status 37)' || fail "rollback must say so: $OUT"
-BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) || BACK=''
+BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" --live 2>/dev/null) || BACK=''
 ok; [ -n "$BACK" ] && [ "$BACK" != "$PID" ] && [ "$(fleet_cc_session_id "$BACK")" = "$SID" ] \
   || fail "the source must be resumed under the same session id: $(TM capture-pane -p -t "$PANE")"
 ok; [ -z "$(field cc_agent)" ] && [ -z "$(field handoff_manifest)" ] && [ -z "$(field source_session_id)" ] \
@@ -1288,7 +1289,7 @@ RECOVERED=''
 # Wait for the registry too, not just the process: the resumed Claude is visible
 # a moment before it writes its session record (a fast runner read sid= here).
 for ((attempt=0; attempt<50; attempt++)); do
-  RECOVERED=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) && [ -n "$RECOVERED" ] \
+  RECOVERED=$(fleet_pane_claude_pid "$PANE" "$LBL" --live 2>/dev/null) && [ -n "$RECOVERED" ] \
     && [ "$(fleet_cc_session_id "$RECOVERED")" = "$SID" ] && break
   sleep 0.1
 done
@@ -1347,7 +1348,7 @@ assert (d/'pending').exists() and oct(d.stat().st_mode & 0o777) == '0o700'
 PY2
 ok; grep -q $'\ttransfer-rolled-back\t.*登录后自动重试' "$TMPDIR/.claude-dash/global/alerts.events" || fail 'the rollback event must say it will be retried'
 rm "$WORK/auth-dies"
-BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) || fail 'source must be back after the rollback'
+BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" --live 2>/dev/null) || fail 'source must be back after the rollback'
 OUT=$(bash "$IBIN/fleet-relogin.sh" resume 2>&1) || fail "resume: $OUT"
 ok; printf '%s' "$OUT" | grep -q 'still waiting' && [ -e "$R53/pending" ] && kill -0 "$BACK" && [ -z "$(field cc_agent)" ] \
   || fail "a resume while the login is still dead must leave everything as it is: $OUT"
@@ -1383,7 +1384,7 @@ OUT=$(bash "$IBIN/fleet-relogin.sh" resume 2>&1)
 ok; printf '%s' "$OUT" | grep -q '重试失败，不再重试' || fail "a failing retry must say it is final: $OUT"
 ok; grep -q '"state": "failed"' "$R54/request.json" && [ ! -e "$R54/pending" ] \
   && [ -z "$(ls "$FLEET_CONF_DIR"/handoffs/retry/*/pending 2>/dev/null)" ] || fail "a failed retry must not re-record: $(cat "$R54/request.json")"
-BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" 2>/dev/null) || BACK=''
+BACK=$(fleet_pane_claude_pid "$PANE" "$LBL" --live 2>/dev/null) || BACK=''
 ok; [ -n "$BACK" ] && [ "$(fleet_cc_session_id "$BACK")" = source-54 ] || fail 'the failed retry must still roll the source back'
 rm "$WORK/auth-dies"; printf 'valid\n' > "$WORK/login-state"
 PKGS=$(ls "$FLEET_CONF_DIR/handoffs" | wc -l | tr -d ' ')

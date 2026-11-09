@@ -132,7 +132,9 @@ def snapshot(publish_tick=False):
             publish(path, {'at': time.time()})
         # A non-final comm defaults to 16 columns on BSD. Its header sets a
         # portable minimum width; preserve paths/spaces up to PATH_MAX.
-        width = 1024 if sys.platform == 'darwin' else 4096
+        # Linux comm is the kernel's 15-byte task name. procps caps data
+        # padding for huge headers, so PATH_MAX there would mix argv into comm.
+        width = 1024 if sys.platform == 'darwin' else 16
         layout = FIELDS.split(',comm,')[0]
         raw = subprocess.run([os.environ.get('FLEET_PS_COMMAND', 'ps'), '-axww',
                               '-o', layout, '-o', 'comm=' + 'COMM'.ljust(width, '_'),

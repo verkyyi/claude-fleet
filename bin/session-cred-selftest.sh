@@ -49,6 +49,7 @@ cleanup() {
   rm -rf "$SB"
 }
 trap cleanup EXIT
+export FLEET_PS_CACHE_DIR="$SB/ps-cache"
 export HOME="$SB/home" FLEET_CONF_DIR="$SB/conf" XDG_CONFIG_HOME="$SB/xdg"
 mkdir -p "$HOME/.local/bin" "$FLEET_CONF_DIR" "$XDG_CONFIG_HOME" "$SB/out"
 unset FLEET_HUB_URL CCQUOTA_HUB_URL CCQUOTA_TOKEN FLEET_PROBE_FORCE_UNREACHABLE TMUX TMUX_PANE \

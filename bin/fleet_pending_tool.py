@@ -52,9 +52,16 @@ class Processes:
                 self.kids[int(parent)].append(int(p))
 
     @classmethod
-    def collect(cls):
-        from fleet_ps import rows
-        text = rows('pid,ppid,stat,lstart,comm')
+    def collect(cls, live=False):
+        if live:
+            # Administrative handovers must see the exit/start that just happened.
+            # Periodic observations share the census; this is an explicit action read.
+            text = subprocess.run(['ps', '-axo', 'pid=,ppid=,stat=,lstart=,comm='],
+                capture_output=True, text=True, errors='replace', timeout=3, check=True,
+                env=dict(os.environ, LC_ALL='C')).stdout
+        else:
+            from fleet_ps import rows
+            text = rows('pid,ppid,stat,lstart,comm')
         if not text.strip(): raise Unknown('empty_process_table')
         return cls(text)
 
@@ -286,9 +293,11 @@ def observe(reader, expected=None):
 
 def cli(args):
     if args[:1] == ['--pids']:
+        live = args[1:2] == ['--live']
+        if live: args = [args[0], *args[2:]]
         if len(args) == 1: return 0
         try:
-            processes = Processes.collect()
+            processes = Processes.collect(live=live)
             for root in args[1:]:
                 pid = processes.claude(root)
                 if pid: print(root, pid)

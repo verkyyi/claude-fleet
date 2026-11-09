@@ -98,10 +98,6 @@ for line in lines:
     assert len(line.split('\t')) == 37, line
     assert 'park' not in inventory_row(line.split('\t')[:-1])[1]
 ctl = Control()
-# The adapter deliberately drops worker overrides; preserve only this fixture's
-# isolated process cache, so it never reads or publishes the host census.
-environment = ctl.environment
-ctl.environment = lambda: dict(environment(), FLEET_PS_CACHE_DIR=os.environ["FLEET_PS_CACHE_DIR"])
 fleet = {'fleet_id':'test', 'name':'census', 'agent':'claude', 'repo':''}
 snap = ctl.workers(fleet)
 p = snap['park_metrics']

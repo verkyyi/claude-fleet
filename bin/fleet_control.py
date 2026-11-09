@@ -159,7 +159,9 @@ class Control(NativeExitSubmission):
         # (a self-hosted test namespace) is verified through them, and without them
         # every start's hub read died CERTIFICATE_VERIFY_FAILED. They only add trust
         # the login already chose; unset, byte for byte.
-        allowed = ("HOME", "PATH", "TMPDIR", "TMUX_TMPDIR", "LANG", "LC_ALL", "USER", "LOGNAME", "SSH_AUTH_SOCK",
+        # Keep a configured process-census namespace across controller/adapter reads.
+        # Snapshot ownership checks still apply; no producer command is forwarded.
+        allowed = ("FLEET_PS_CACHE_DIR", "HOME", "PATH", "TMPDIR", "TMUX_TMPDIR", "LANG", "LC_ALL", "USER", "LOGNAME", "SSH_AUTH_SOCK",
                    "FLEET_USER_POD", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "FLEET_CA_BUNDLE")
         env = {key: os.environ[key] for key in allowed if key in os.environ}
         # PATH is inherited but never trusted to be whole (issue #1460): a launchd

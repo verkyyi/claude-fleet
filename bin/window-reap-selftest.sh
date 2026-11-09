@@ -67,6 +67,7 @@ wait_gone() {
   return 1
 }
 
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 export FLEET_CONF_DIR="$WORK/conf"
 export FLEET_CLAUDE_TMP_ROOT="$WORK/claude-root"
 export FLEET_WINDOW_REAP_ROOT="$WORK"
@@ -130,7 +131,7 @@ kill_tree "$P_OFF"
 orphan "$WT3"; P_AGED="$ORPHAN"
 FLEET_ORPHAN_TREE_SECS=3600 FLEET_ORPHAN_TREE_EVERY=0 bash "$BIN/fleet-diskguard.sh" --tree-watch
 alive "$P_AGED" || st_fail "AGED: a tree younger than FLEET_ORPHAN_TREE_SECS was reaped"
-sleep 2
+sleep 6  # cross the shared census TTL before the next periodic tick
 FLEET_ORPHAN_TREE_SECS=1 FLEET_ORPHAN_TREE_EVERY=0 bash "$BIN/fleet-diskguard.sh" --tree-watch
 wait_gone 5 "$P_AGED" || st_fail "AGED: the tick did not reap an aged orphan tree" "$(cat "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null)"
 grep -q "reaped $P_AGED " "$FLEET_CONF_DIR/diskguard/tree-reaped.log" 2>/dev/null || st_fail "AGED: no line in tree-reaped.log"
@@ -139,6 +140,7 @@ st_pass "AGED: the diskguard tick reaps a closed window's orphan tree past its a
 # ── CLOSE / NEIGHBOR / SCRATCHPAD (a private tmux server, the real hooks) ───────
 T() { tmux -S "$SOCK" -f /dev/null "$@"; }
 T new-session -d -s wr -n base -c "$PLAIN" || st_fail "could not start a private tmux server"
+T set-environment -g FLEET_PS_CACHE_DIR "$FLEET_PS_CACHE_DIR"
 T set-environment -g FLEET_CONF_DIR "$FLEET_CONF_DIR"
 T set-environment -g FLEET_CLAUDE_TMP_ROOT "$FLEET_CLAUDE_TMP_ROOT"
 T set-environment -g FLEET_WINDOW_REAP_ROOT "$FLEET_WINDOW_REAP_ROOT"

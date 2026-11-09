@@ -72,6 +72,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/nrec.XXXXXX")" || exit 2
 # is what the spinner's fleet_sockets enumerates — so the daemon under test can see
 # this fleet and ONLY this fleet.
 export TMUX_TMPDIR="$WORK/tmt"; mkdir -p "$TMUX_TMPDIR"
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
 printf 'FLEET_REPO="acme/fleetR"\n' > "$FLEET_CONF_DIR/fleetR.conf"
 # The two lookup trees the resolution chain walks, pointed at scratch (both overrides
@@ -143,7 +144,7 @@ mkwin() {
   tf set-window-option -t "$name" @claude_state_ts "$ts" 2>/dev/null
   [ "$hasc" = yes ] || return 0
   # shellcheck source=/dev/null
-  pid=$(. "$BIN/fleet-lib.sh" 2>/dev/null; fleet_pane_claude_pid "$name" fleetR 2>/dev/null)
+  pid=$(. "$BIN/fleet-lib.sh" 2>/dev/null; fleet_pane_claude_pid "$name" fleetR --live 2>/dev/null)
   [ -n "$pid" ] || { st_miss "fixture: no fake claude resolved under window $name"; return 0; }
   [ -n "$tool" ] || return 0                       # registered=no: the "unknown" case
   sid="sid-$name"

@@ -244,7 +244,7 @@ class Walk(unittest.TestCase):
                              [None, 911, 920, 930, 940])
 
     def test_optional_ps_row_rejects_stale_pid_without_forking(self):
-        p = oracle.Processes.collect()
+        p = oracle.Processes.collect(live=True)
         proof = p.proof(os.getpid())
         self.assertEqual(proof, oracle.proc.process(os.getpid()))
         p.rows[os.getpid()]['ppid'] += 1

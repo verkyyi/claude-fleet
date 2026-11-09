@@ -9346,7 +9346,7 @@ fleet_pane_claude_pids() {
   python3 "${BASH_SOURCE[0]%/*}/fleet_pending_tool.py" --pids "$@" 2>/dev/null
 }
 
-# fleet_pane_claude_pid <tmux-target> [socket] — pid of the Claude process running
+# fleet_pane_claude_pid <tmux-target> [socket] [--live] — pid of the Claude process running
 # under the target's pane (any descendant of pane_pid whose command is `claude`, or
 # a node/bun running the npm-installed cli), or nothing (exit 1). THIS is the "is
 # Claude alive here" gate (issue #511): `pane_current_command` reads the `zsh -c`
@@ -9360,7 +9360,8 @@ fleet_pane_claude_pid() {
   if [ -n "$sock" ]; then pp=$(tmux -L "$sock" display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null)
   else                    pp=$(tmux display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null); fi
   [ -n "$pp" ] || return 1
-  out=$(fleet_pane_claude_pids "$pp") || return 1
+  if [ "${3:-}" = --live ]; then out=$(fleet_pane_claude_pids --live "$pp") || return 1
+  else out=$(fleet_pane_claude_pids "$pp") || return 1; fi
   [ -n "$out" ] || return 1
   printf '%s\n' "${out##* }"
 }

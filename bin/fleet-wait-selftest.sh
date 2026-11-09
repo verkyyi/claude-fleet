@@ -45,6 +45,7 @@ trap 'exit 130' INT TERM HUP
 mkdir -p "$WORK/path" "$WORK/conf" "$WORK/proj/-w" "$WORK/sessions"
 st_tmux_socket "$WORK/path" "$SOCK" strip
 PATH="$WORK/path:$PATH"; export PATH
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_REAP_MIN_AGE=0
 export CLAUDE_PROJECTS_DIR="$WORK/proj" FLEET_CC_SESSIONS_DIR="$WORK/sessions"
 export FLEET_CLAUDE_COMM="fakeclaude-fleetwait-$$"

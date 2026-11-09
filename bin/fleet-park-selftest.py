@@ -40,7 +40,8 @@ class Park(unittest.TestCase):
         # kill-server returns before the old listener has fully gone away. Each
         # case needs its own socket so the next start cannot race that shutdown.
         self.label = 'park-' + str(os.getpid()) + '-' + self.root.name[-8:]
-        self.env = dict(os.environ, FLEET_CONF_DIR=str(self.root / 'conf'),
+        self.env = dict(os.environ, FLEET_PS_CACHE_DIR=str(self.root / 'ps-cache'),
+                        FLEET_CONF_DIR=str(self.root / 'conf'),
                         FLEET_GATE_WAKE_SECS='3', FLEET_GATE_PARK_SECS='3',
                         FLEET_GATE_BG_CMD='false', FLEET_PARK_MEM_FREE='50',
                         FLEET_WAKE_SLOT_DIR=str(self.root / 'slots'), FLEET_WAKE_ADMIT_CMD='true',
@@ -522,6 +523,13 @@ class client:
         self.fake()
         before = self.opt('pane_pid')
         with patch.dict(os.environ, self.env):
+            # Startup hooks may already be publishing this fixture's first census.
+            # This leg verifies known RSS; unavailable samples are covered separately.
+            from fleet_ps import snapshot
+            def census_ready():
+                try: return any(row['pid'] == before for row in snapshot())
+                except OSError: return False
+            self.wait(census_ready)
             processes = gate.relay_request(gate.window(self.fid), {'op':'status'})
             result = gate.park(self.fid)
         self.assertTrue(result.get('ok'), result)
