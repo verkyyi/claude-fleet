@@ -460,6 +460,8 @@ class A_Fresh(Sandbox):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("各部件 = 发布版声明", r.stdout)
+        if sys.platform == "darwin":
+            self.assertRegex(r.stdout, r"INFO\s+machine\s+fseventsd RSS .*; system swap ")
         v = self.cmd("versions").stdout
         self.assertIn("各部件 = 发布版声明", v)
         self.assertIn("claude 2.1.1", v)

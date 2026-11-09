@@ -469,6 +469,24 @@ Codex 停放复用启动时缓存的身份，实时复检进程归属、原生�
 派发标题最多 64 个可打印 Unicode 字符；超长或含控制字符会在创建任务记录之前拒绝。
 
 
+### macOS fseventsd 内存与 swap
+
+托管 Mac 的机器守护每 60 秒检查 fseventsd，空闲时也照跑。RSS 达到 1024 MiB，
+或者系统 swap 达到 8192 MiB 且 fseventsd 是 `top` 的最大压缩内存持有者时，
+root 发 TERM，launchd 自动拉起。压缩内存用于归因，并不等于该进程的 swap；
+归因读不到或并列第一就不触发 swap 分支，CPU 高本身也不触发重启。
+
+阈值和开关见 `conf/fleet.conf.reference` 的 `FLEET_FSEVENTSD_*`，写入机器的
+`/var/db/fleet-node/conf/fleet.conf`（自定义路径为 `$FLEET_NODE_STATE/conf/fleet.conf`），
+不是某个登录的配置。两个阈值分别可设 0 关闭；`FLEET_FSEVENTSD_WATCHDOG=0` 关闭整个保护。
+全机冷却至少一小时，守护重启不重置；失败尝试也计入冷却。
+
+`fleet doctor` 的 `machine` 行和 `fleet doctor --machine` 显示 fseventsd RSS 与
+**系统** swap。每次恢复的时间、原因、读数、结果保存在
+`/var/db/fleet-node/fseventsd/restarts.ndjson`，最近一次告警在同目录 `alert.json`，
+并写入机器的 `fseventsd` 告警事件；每个登录的消息页只收一次该事件。日志里的 `restarted` 表示 TERM 成功，
+不保证 swap 当场回落；系统通常需要数分钟回收。未托管的 Mac 保留原有提醒。
+
 ### macOS 会话提示 `launchd: Background`
 
 这是 tmux **服务器**所处的 launchd 域异常。后台 supervisor 只切换 UID/GID、

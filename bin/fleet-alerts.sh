@@ -623,6 +623,25 @@ _fa_entry_hostkey() {
     --source entry --kind alert --tag "entry-hostkey-${new}"
 }
 
+# Root's fseventsd event belongs to the machine. Mirror it once into each
+# login's message book, like entry-hostkey above; nobody reads root's book.
+_fa_fseventsd() {
+  local f="${FLEET_NODE_STATE:-/var/db/fleet-node}/fseventsd/alert.json" d="" at message seen was=""
+  local re_at='"at": *([0-9]+([.][0-9]+)?)' re_message='"message": *"([^"\\]*)"'
+  [ -r "$f" ] || return 0
+  IFS= read -r d < "$f" || return 0
+  [[ $d =~ $re_at ]] || return 0
+  at=${BASH_REMATCH[1]}
+  [[ $d =~ $re_message ]] || return 0
+  message=${BASH_REMATCH[1]}
+  seen="$(fleet_usage_cache_dir)/fseventsd.seen"
+  [ ! -f "$seen" ] || IFS= read -r was < "$seen"
+  [ "$was" != "$at" ] || return 0
+  mkdir -p "${seen%/*}" 2>/dev/null
+  printf '%s\n' "$at" > "$seen" 2>/dev/null || return 0
+  fleet_alert fseventsd "$message"
+}
+
 fleet_alerts_write() {
   local f cur prev="" now trace line row id sev su co va si ac he ta de out="" ids="|" carry=0 pid act="|" said=""
   f=$(fleet_alerts_file)
@@ -631,6 +650,7 @@ fleet_alerts_write() {
   trace="${FLEET_ALERTS_TRACE:-1800}"
   cur=$(fleet_alerts_compute "$@")
   _fa_entry_hostkey
+  _fa_fseventsd
   [ -f "$f" ] && prev=$(<"$f")   # builtin read: the bar's render path execs no cat (#888)
   # what was standing last tick: an alarm / warning that appears or heals is a
   # message in the one book (T701) — only then, never every tick

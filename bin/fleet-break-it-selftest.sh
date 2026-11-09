@@ -904,6 +904,14 @@ drill_kill_server() {
   SECS=$(since "$t0"); WHAT="下一拍拉起，只回来没做完的 issue-1（节拍 60s 另计）"
 }
 
+drill_fseventsd_swap_disk() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-fseventsd-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='fseventsd swapped out: root restart, persistent hourly cooldown, one alert; unrelated swap and unreadable attribution leave it alone'
+}
+
 drill_disk_full() {
   CAP=20; BREAK_SOCK="$WORK/sock-oc"; local t0
   nt kill-server 2>/dev/null; write_map

@@ -2051,6 +2051,10 @@ def doctor_rows(p):
     else:
         rows.append(("PASS", "runtime", "%s · release.json schema 1" % cur[:12]))
     rows.append(ccquota_row(p, cur, d))
+    if platform.system() == "Darwin":
+        # Read-only probe; pressure must never roll back a healthy release.
+        rc, out, _ = run(["/usr/bin/python3", os.path.join(os.path.dirname(__file__), "fleet-fseventsd.py"), "doctor"], timeout=35)
+        rows.append(("INFO", "machine", out.strip() if rc == 0 and out.strip() else "fseventsd RSS unknown; system swap unknown"))
     for tool in TOOLS:
         want = spec["components"][tool]["version"]
         tb = os.path.join(p.current, "tools", "bin", tool)

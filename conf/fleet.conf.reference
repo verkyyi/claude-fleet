@@ -2270,10 +2270,29 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 
 # macOS fseventsd RSS (MB) at which `fleet-doctor`'s `machine` check WARNs and the
 # diskguard --watch tick sends its once-a-day reminder (issue #889): a bloated
-# fseventsd stalls every new session 6-8s at spawn. Report-only — the fleet never
-# kills it; the fix is `sudo killall fseventsd` (launchd restarts it). Linux: unused.
+# fseventsd stalls every new session 6-8s at spawn. Unmanaged machines only
+# report it; managed nodes use the root watchdog below. Linux: unused.
 # @label=fseventsd warn MB @group=disk @tier=advanced @scope=global @edit=int @unit=MB
 #FLEET_FSEVENTSD_WARN_MB=1024
+
+# Managed macOS nodes: root's fseventsd watchdog runs every 60s, including idle.
+# Set these in the MACHINE's /var/db/fleet-node/conf/fleet.conf (or its
+# FLEET_NODE_STATE/conf/fleet.conf), not a tenant login's config. Numeric values.
+# TERM lets launchd replace the daemon. The swap trigger needs fseventsd to be
+# the unique largest holder of top's CMPRS (compressed memory, not exact swap).
+# Unknown attribution never triggers it. A zero threshold disables that trigger.
+# Every attempt logs to <state>/fseventsd/restarts.ndjson and raises one event;
+# <state>/fseventsd/alert.json retains its evidence. Cooldown survives restarts.
+# @label=fseventsd watchdog @group=disk @tier=advanced @scope=global @edit=bool
+#FLEET_FSEVENTSD_WATCHDOG=1
+# @label=fseventsd restart RSS @group=disk @tier=advanced @scope=global @edit=int @unit=MiB
+#FLEET_FSEVENTSD_RESTART_MB=1024
+# @label=fseventsd system swap trigger @group=disk @tier=advanced @scope=global @edit=int @unit=MiB
+#FLEET_FSEVENTSD_SWAP_MB=8192
+# At least 3600 seconds, even if a smaller value is configured; failed attempts
+# are cooled down too so permission errors cannot cause a restart/alert storm.
+# @label=fseventsd restart cooldown @group=disk @tier=advanced @scope=global @edit=int @unit=s
+#FLEET_FSEVENTSD_COOLDOWN=3600
 
 # `fleet-doctor`'s `memory` / `files` / `pty` lines and the diskguard --watch
 # notices (issue #1293, EPIC #1291): memory pressure (level, available %,
