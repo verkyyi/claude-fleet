@@ -41,7 +41,7 @@ def scenario(fixture, delayed=False):
                if not k.startswith(('FLEET_', 'CCQUOTA_', 'CLAUDE_', 'SPIN_', 'STUCK_'))
                and k not in ('TMUX', 'TMUX_PANE')}
         env.update(HOME=str(root / 'home'), FLEET_CONF_DIR=str(root / 'conf'),
-                   TMUX_TMPDIR=tmp, TMPDIR=str(root / 'tmp'))
+                   TMUX_TMPDIR=tmp, TMPDIR=str(root / 'tmp'), FLEET_PS_CACHE_DIR=str(root / 'ps-cache'))
         with patch.dict(os.environ, env, clear=True):
             spec = importlib.util.spec_from_file_location('schedule_spinner', BIN / 'tmux-spinner.py')
             spinner_module = importlib.util.module_from_spec(spec)
@@ -79,7 +79,11 @@ def scenario(fixture, delayed=False):
                     processes.append((now[0] - initialized, proc.pid, list(args)))
                     return proc
 
-                with patch.object(subprocess, 'Popen', recorded_popen):
+                import fleet_ps
+                cache_time = types.SimpleNamespace(time=lambda: epoch + now[0],
+                                                  strptime=time.strptime, strftime=time.strftime,
+                                                  localtime=time.localtime)
+                with patch.object(subprocess, 'Popen', recorded_popen), patch.object(fleet_ps, 'time', cache_time):
                     spinner = spinner_module.Spinner()
                     assert spinner.periods == dict(stuck_check=10, needs_check=20, degen_check=15,
                                                    hb_stamp=20, daemon_watch=30, park_timers=5)

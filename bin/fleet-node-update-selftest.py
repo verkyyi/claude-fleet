@@ -211,6 +211,8 @@ def make_release(rel, sha, claude="2.1.1", codex="0.162.1", tmux="3.7c", broken=
     wj(os.path.join(d, "release.json"), spec)
     shutil.copy(UPD, os.path.join(d, "bin"))
     shutil.copy(SUP, os.path.join(d, "bin"))
+    for helper in ("fleet_ps.py", "fleet_tick_lock.py"):
+        shutil.copy(os.path.join(BIN, helper), os.path.join(d, "bin"))
     # the credential proxy's code, different bytes per release (issue #2435)
     for f in CREDSEP_CODE:
         with open(os.path.join(BIN, f), "rb") as src:

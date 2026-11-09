@@ -66,8 +66,7 @@ def gocache():
 
 def argv_all():
     try:
-        from fleet_ps import rows
-        return rows("command")
+        return subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True, timeout=20).stdout
     except (OSError, subprocess.SubprocessError):
         return None
 

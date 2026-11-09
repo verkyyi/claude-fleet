@@ -7,6 +7,7 @@ The shared lock inode is never removed. Busy/cold/failed reads raise OSError,
 never fall back to independent ps scans. No environment is collected.
 """
 import json
+import calendar
 import os
 from pathlib import Path
 import stat
@@ -58,7 +59,7 @@ def latest(path):
     uid = 0 if root_publisher(path) else os.geteuid()
     try:
         row = read_file(path / ('%d.json' % uid))
-        if 0 <= time.time() - row['at'] < TTL:
+        if row.get('v') == 1 and 0 <= time.time() - row['at'] < TTL:
             return row
     except (OSError, ValueError, KeyError, TypeError):
         pass
@@ -66,6 +67,7 @@ def latest(path):
 
 
 def publish(path, row):
+    row['v'] = 1
     fd, tmp = tempfile.mkstemp(prefix='.', dir=str(path))
     try:
         with os.fdopen(fd, 'w') as f:
@@ -89,7 +91,9 @@ def parse(text):
             raise OSError('malformed ps snapshot')
         values = prefix[:9] + [' '.join(prefix[9:14]), prefix[14],
                                line[comm:command].strip(), line[command:].strip()]
-        result.append(dict(zip(FIELDS.split(','), values)))
+        row = dict(zip(FIELDS.split(','), values))
+        row['started'] = calendar.timegm(time.strptime(row['lstart'], '%a %b %d %H:%M:%S %Y'))
+        result.append(row)
     if not result: raise OSError('empty ps snapshot')
     return result
 
@@ -129,10 +133,12 @@ def snapshot(publish_tick=False):
         # A non-final comm defaults to 16 columns on BSD. Its header sets a
         # portable minimum width; preserve paths/spaces up to PATH_MAX.
         width = 1024 if sys.platform == 'darwin' else 4096
-        layout = FIELDS.replace('comm,', 'comm=' + 'COMM'.ljust(width, '_') + ',')
-        raw = subprocess.run([os.environ.get('FLEET_PS_COMMAND', 'ps'), '-axww', '-o', layout],
+        layout = FIELDS.split(',comm,')[0]
+        raw = subprocess.run([os.environ.get('FLEET_PS_COMMAND', 'ps'), '-axww',
+                              '-o', layout, '-o', 'comm=' + 'COMM'.ljust(width, '_'),
+                              '-o', 'command=COMMAND'],
                              capture_output=True, text=True, errors='replace', timeout=10,
-                             check=True, env=dict(os.environ, LC_ALL='C'), pass_fds=(fd,)).stdout
+                             check=True, env=dict(os.environ, LC_ALL='C', TZ='UTC'), pass_fds=(fd,)).stdout
         data = parse(raw)
         publish(path, {'at': time.time(), 'rows': data})
         return data
@@ -149,7 +155,8 @@ def rows(fields):
     # ps lstart uses a fixed 24-column field; pending-tool's parser depends on it.
     def value(row, name):
         if name == 'lstart':
-            return time.strftime('%a %b %e %H:%M:%S %Y', time.strptime(row[name], '%a %b %d %H:%M:%S %Y'))
+            # Native identity checks use the reader's timezone, not root's.
+            return time.strftime('%a %b %e %H:%M:%S %Y', time.localtime(row['started']))
         return row[name]
     return ''.join(' '.join(value(row, n) for n in names) + '\n' for row in data)
 

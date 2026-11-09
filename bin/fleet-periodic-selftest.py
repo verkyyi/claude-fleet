@@ -133,10 +133,17 @@ class Periodic(unittest.TestCase):
 
     def test_real_format(self):
         # Actual OS format, signed Darwin nobody UID, long comm, lstart spacing.
-        p = self.start(BIN / 'fleet_ps.py', 'pid,uid,lstart,comm')
+        p = self.start(BIN / 'fleet_ps.py', 'pid,uid,lstart,comm,command')
         out, err = p.communicate(timeout=15)
         self.assertEqual(p.returncode, 0, err)
-        self.assertTrue(any(line.startswith(str(os.getpid()) + ' ') for line in out.splitlines()))
+        own = next(line for line in out.splitlines() if line.startswith(str(os.getpid()) + ' '))
+        self.assertIn('fleet-periodic-selftest.py', own)
+        # The shared scan must preserve the executable and full argv separately.
+        import json
+        data = json.loads(next((self.root / 'machine').glob('*.json')).read_text())
+        row = next(r for r in data['rows'] if r['pid'] == str(os.getpid()))
+        live = subprocess.check_output(['ps', '-p', str(os.getpid()), '-o', 'comm='], text=True).strip()
+        self.assertEqual(row['comm'], live)
 
     def test_seven_real_uids_read_one_root_snapshot(self):
         import shutil
@@ -159,10 +166,8 @@ class Periodic(unittest.TestCase):
         self.assertEqual(p.returncode, 0, err)
         readers = []
         for uid in range(90001, 90008):
-            def demote(uid=uid):
-                os.setgroups([]); os.setgid(uid); os.setuid(uid)
             p = subprocess.Popen([sys.executable, str(code / 'fleet_ps.py'), 'pid,uid'],
-                                 env=self.env, preexec_fn=demote, text=True,
+                                 env=self.env, user=uid, group=uid, extra_groups=[], text=True,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.procs.append(p); readers.append(p)
         for p in readers:
@@ -176,7 +181,7 @@ class Periodic(unittest.TestCase):
         data = json.loads(sample.read_text()); data['at'] = 0
         sample.write_text(json.dumps(data))
         p = subprocess.Popen([sys.executable, str(code / 'fleet_ps.py'), 'pid'], env=self.env,
-                             preexec_fn=demote, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                             user=uid, group=uid, extra_groups=[], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.procs.append(p); p.communicate(timeout=5)
         self.assertNotEqual(p.returncode, 0)
         self.assertEqual((self.root / 'scans').read_text().splitlines(), ['scan'])
@@ -196,6 +201,29 @@ class Periodic(unittest.TestCase):
             result = fleet_trial.act(9001, 'pause', [(456, 9001, 99, 100, 'worker', 'worker')])
             self.assertEqual(result['done'], 1)
             signal.assert_called_once()
+
+    def test_birth_timestamp_survives_different_login_timezones(self):
+        for zone in ('UTC', 'Etc/GMT+8'):
+            env = dict(self.env, TZ=zone)
+            p = self.start(BIN / 'fleet_ps.py', 'pid,lstart', env=env)
+            out, err = p.communicate(timeout=15)
+            self.assertEqual(p.returncode, 0, err)
+            cached = next(line.split(None, 1)[1] for line in out.splitlines()
+                          if line.split()[0] == str(os.getpid()))
+            live = subprocess.check_output(['ps', '-p', str(os.getpid()), '-o', 'lstart='],
+                                           env=dict(env, LC_ALL='C'), text=True).strip()
+            self.assertEqual(cached, live)
+
+    def test_diskguard_modes_have_independent_matching_locks(self):
+        import runpy
+        sup = runpy.run_path(str(BIN / 'fleet-node-supervisor.py'))
+        expected = {'--watch': 'diskguard', '--orphan-watch': 'diskguard-orphan',
+                    '--tree-watch': 'diskguard-tree', '--listen-watch': 'diskguard-listen',
+                    '--brew-watch': 'diskguard-brew'}
+        for flag, key in expected.items():
+            wrapped = sup['periodic_command']({'name': 'task', 'every': 5,
+                'cmd': ['/bin/bash', str(BIN / 'fleet-diskguard.sh'), flag]})
+            self.assertEqual(wrapped[3], key)
 
     def test_entrypoints(self):
         scripts = ['fleet-control-read.sh', 'fleet-cleanup-daemon.sh', 'fleet-reconcile-tick.sh', 'fleet-diskguard.sh',

@@ -1619,7 +1619,10 @@ def periodic_command(ent):
     if ent.get("keepalive") or not ("every" in ent or ent.get("want") or ent.get("periodic")):
         return cmd
     key = ent.get("unit") or ent["name"]
-    if any(str(x).endswith("/fleet-diskguard.sh") for x in cmd): key = "diskguard"
+    if any(str(x).endswith("/fleet-diskguard.sh") for x in cmd):
+        key = "diskguard"
+        for flag in ("--orphan-watch", "--tree-watch", "--listen-watch", "--brew-watch"):
+            if flag in cmd: key += "-" + flag[2:-6]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", key):
         import hashlib
         key = "job-" + hashlib.sha256(key.encode()).hexdigest()[:24]
@@ -2730,7 +2733,8 @@ class Supervisor(object):
         if not units:
             return
         try:
-            out = process_rows("pid=,ppid=,uid=,command=")
+            out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,uid=,command="],
+                                          text=True, timeout=10)
         except Exception:
             return
         held = set(p.pid for p in self.procs.values()) | set(self.adopted.values())

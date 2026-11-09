@@ -102,9 +102,13 @@
 #                           issue #1299; bin/fleet-transcript-archive.sh has the
 #                           rules and its own knobs (FLEET_TRANSCRIPT_KEEP_DAYS, …)
 set -uo pipefail
-BIN="$(cd "$(dirname "$0")" && pwd)"
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$BIN/fleet-job-lib.sh" || exit 1
-case "${1:-}" in --watch|--orphan-watch|--tree-watch|--listen-watch|--brew-watch) fleet_job_guard diskguard "$@" ;; esac
+case "${1:-}" in
+  --watch) fleet_job_guard diskguard "$@" ;;
+  --orphan-watch|--tree-watch|--listen-watch|--brew-watch)
+    _job=${1#--}; fleet_job_guard "diskguard-${_job%-watch}" "$@" ;;
+esac
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------
