@@ -46,6 +46,7 @@ cfx_sandbox() {
 }
 
 cfx_copy() {
+  cp "$BIN/fleet-job-lib.sh" "$BIN/fleet_tick_lock.py" "$BIN/fleet_ps.py" "$WORK/bin/"
   local f list="$*"
   [ -n "$list" ] || list=$CFX_FILES
   for f in $list; do

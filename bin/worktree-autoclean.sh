@@ -54,6 +54,8 @@ set -uo pipefail
 DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-job-lib.sh" || exit 1
+fleet_job_guard worktree-autoclean "$@"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------
 # Stamped at the TOP, before any early exit, so "launchd never spawned me" stays

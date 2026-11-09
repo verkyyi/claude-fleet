@@ -87,6 +87,8 @@
 # FLEET_MEM_TRIAL_PS_CMD (rule T's `uid pid rssKB comm` rows).
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-job-lib.sh" || exit 1
+fleet_job_guard memguard "$@"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 _fs="${FLEET_CONF_DIR:-$HOME/.config/claude-fleet}"; [ -f "$_fs/fleet.settings" ] && . "$_fs/fleet.settings"; [ -f "$_fs/fleet.conf" ] && . "$_fs/fleet.conf"   # the login's settings win (#979); the machine's one file (#1623)
@@ -318,7 +320,7 @@ trial_pass() {
   [ -s "$TRIAL_DIR/mem.tsv" ] || return 0
   local rows hits uid login pid rss tot
   if [ -n "${FLEET_MEM_TRIAL_PS_CMD:-}" ]; then rows="$(/bin/sh -c "$FLEET_MEM_TRIAL_PS_CMD" 2>/dev/null)"
-  else rows="$(ps -A -o uid=,pid=,rss=,comm= 2>/dev/null)"; fi
+  else rows="$(fleet_ps uid=,pid=,rss=,comm= 2>/dev/null)"; fi
   hits="$( { sed 's/^/L	/' "$TRIAL_DIR/mem.tsv"; printf '%s\n' "$rows" | awk '{ print "R\t" $1 "\t" $2 "\t" $3 "\t" $4 }'; } | awk -F'\t' '
     $1 == "L" && $3 > 0 { lim[$2] = $3; who[$2] = $4; next }
     $1 == "R" && ($2 in lim) { tot[$2] += $4

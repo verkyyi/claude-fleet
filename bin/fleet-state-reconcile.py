@@ -130,7 +130,8 @@ def record_start(record):
 def process_tree():
     rows = {}
     try:
-        out = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,comm='], text=True, timeout=10)
+        from fleet_ps import rows as process_rows
+        out = process_rows("pid,ppid,comm")
     except (subprocess.SubprocessError, OSError):
         return rows
     for line in out.splitlines():
@@ -141,6 +142,9 @@ def process_tree():
 
 
 def has_agent_process(rows, root):
+    # A pane newer than the census is unknown, never proof its agent exited.
+    if int(root) not in rows:
+        return True
     # The pane process itself may be the agent (a bare `exec codex`), not only a child.
     if rows.get(int(root), (0, ''))[1] in AGENT_COMMS:
         return True

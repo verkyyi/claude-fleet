@@ -2556,8 +2556,9 @@ def proxy_procs():
         text = open(PS_SEAM).read()
     else:
         try:
-            text = subprocess.run(["ps", "-axo", "pid=,user=,args="], capture_output=True, text=True,
-                                  timeout=20).stdout
+            sys.path.insert(0, HERE)
+            from fleet_ps import rows as process_rows
+            text = process_rows("pid,uid,command")
         except (OSError, subprocess.SubprocessError):
             return None
     runs = {}
@@ -2575,6 +2576,9 @@ def proxy_procs():
         pid, user, args = int(f[0]), f[1], f[2]
         if "fleet-cred-proxy.py" not in args or not re.search(r"(^|\s)serve(\s|$)", args):
             continue
+        if not PS_SEAM:
+            try: user = pwd.getpwuid(int(user)).pw_name
+            except KeyError: pass
         path = lib if lib in args else next((t for t in args.split() if t.endswith("fleet-cred-proxy.py")), "")
         if path != lib and not re.search(r"/\.claude/fleet(\.versions/[^/]+)?/bin/fleet-cred-proxy\.py$", path):
             continue        # a worktree's / a sandbox's copy: a test, not a proxy of this machine

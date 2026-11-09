@@ -1122,7 +1122,10 @@ class O_SweepRemoves(Sandbox):
         rt = os.path.join(self.d, "rt", "bin")
         os.makedirs(rt)
         shutil.copy(os.path.join(BIN, "fleet-node-shell-retire.sh"), rt)
-        shutil.copy(SUP, rt)          # the retire script's one rule (shell-hooks, issue #2991)
+        shutil.copy(SUP, rt)
+        for name in ("fleet_ps.py", "fleet_tick_lock.py"):
+            shutil.copy(os.path.join(BIN, name), rt)
+        # the retire script's one rule (shell-hooks, issue #2991)
         home = os.path.join(self.d, "Users", "alice")
         os.makedirs(os.path.join(home, ".cache", "claude-fleet", "shell", "bin"))
         put(os.path.join(home, ".zshrc"), "alias y=yazi\nsource ~/.claude/fleet/shell/cw.zsh\n")
@@ -1322,6 +1325,8 @@ class F_Trust(Sandbox):
     def test_install_writes_plist(self):
         os.makedirs(os.path.join(self.d, "rt", "bin"))
         shutil.copy(SUP, os.path.join(self.d, "rt", "bin", "fleet-node-supervisor.py"))
+        for name in ("fleet_ps.py", "fleet_tick_lock.py"):
+            shutil.copy(os.path.join(BIN, name), os.path.join(self.d, "rt", "bin", name))
         r = self.run_sup("install")
         self.assertEqual(r.returncode, 0, r.stderr)
         pl = plistlib.load(open(os.path.join(self.env["FLEET_NODE_DAEMON_DIR"], "com.claude-fleet.node.plist"), "rb"))
@@ -1365,7 +1370,7 @@ class G_DefaultTable(Sandbox):
         with mock.patch.dict(os.environ, {k: v for k, v in e.items() if k.startswith("FLEET_NODE_")}):
             t = fns.default_table(fns.Paths())
         names = [x["name"] for x in t["tasks"]]
-        self.assertEqual(names, ["diskguard", "memguard"] + (["fseventsd"] if fns.MAC else [])
+        self.assertEqual(names, ["process-snapshot", "diskguard", "memguard"] + (["fseventsd"] if fns.MAC else [])
                          + ["trial-guard", "orphans", "shared-dirs", "machine-reading"]
                          + (["spotlight", "wallpaper"] if fns.MAC else []) + ["update", "credsep-enforce"])
         by = {x["name"]: x for x in t["tasks"]}
@@ -3288,7 +3293,7 @@ class T_RootCore(H_Accounts):
     child only asks (`fleet-node-core.py call … --follow`), the core runs the job as
     its login; release stops it through the core. Without a core (every other case
     here) it is the old road, byte for byte."""
-    CORE = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-release-verify.py", "fleet-node-supervisor.py")
+    CORE = ("fleet_ps.py", "fleet_tick_lock.py", "fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-release-verify.py", "fleet-node-supervisor.py")
 
     def setUp(self):
         H_Accounts.setUp(self)

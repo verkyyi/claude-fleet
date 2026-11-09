@@ -24,6 +24,8 @@
 # All state and tmux calls stay on fleet sockets.
 set -uo pipefail
 BIN=$(cd "$(dirname "$0")" && pwd)
+. "$BIN/fleet-job-lib.sh" || exit 1
+fleet_job_guard reconcile "$@"
 . "$BIN/fleet-lib.sh"
 . "$BIN/fleet-daemon-lib.sh"
 fleet_daemon_stamp_tick reconcile "$BIN/.."

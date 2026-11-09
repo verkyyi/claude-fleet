@@ -87,7 +87,8 @@ def census(socket, session, cache_dir):
     clients = command(["tmux", "-L", socket, "list-clients", "-F", "#{client_control_mode}\x1f#{window_id}"])
     watched = {wid for row in clients.split("\n") for control, sep, wid in [row.replace("\\037", "\x1f").partition("\x1f")]
                if sep and control != "1"}
-    trees = process_trees(command(["ps", "-axo", "pid=,ppid=,rss=,time=,command="]))
+    from fleet_ps import rows as process_rows
+    trees = process_trees(process_rows("pid,ppid,rss,time,command"))
     saved_by_fid = latest_park_rss(Path(cache_dir).parent / "logs/park.ndjson")
     path = Path(cache_dir) / ("park-cpu-" + session + ".json")
     try:

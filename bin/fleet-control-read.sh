@@ -2,6 +2,10 @@
 # Private, noninteractive adapter for fleet_control.py. All inputs are argv.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+if [ "${1:-}" = capacity ]; then
+  . "$BIN/fleet-job-lib.sh" || exit 1
+  fleet_job_guard capacity "$@"
+fi
 # The callers have no TMPDIR — an SSH forced command, and ccquota's agent (a
 # LaunchDaemon) reading `workers` for its heartbeat — while the daemons that
 # write the cache run with the per-user one (fleet-install-apply.sh). So read
@@ -56,7 +60,7 @@ workers_busy() {
   [ -n "$pairs" ] || return 0
   # The pairs ride the environment, not -v: BSD awk refuses a newline in a -v
   # value ("newline in string") and printed nothing — no `bg` on any Mac.
-  ps -axo ppid=,command= 2>/dev/null | WB_PAIRS="$pairs" awk -v cands="$cands" '
+  fleet_ps ppid=,command= 2>/dev/null | WB_PAIRS="$pairs" awk -v cands="$cands" '
     BEGIN {
       n = split(ENVIRON["WB_PAIRS"], pl, "\n")
       for (i = 1; i <= n; i++) { split(pl[i], f, " "); cl[f[1]] = f[2] }

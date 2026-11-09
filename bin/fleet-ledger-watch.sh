@@ -90,6 +90,8 @@ set -uo pipefail
 
 case "$0" in */*) BIN="${0%/*}" ;; *) BIN=. ;; esac   # forkless dirname (issue #888)
 BIN="$(cd "${BIN:-/}" && pwd)"
+. "$BIN/fleet-job-lib.sh" || exit 1
+fleet_job_guard ledger-watch "$@"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------

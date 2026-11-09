@@ -53,9 +53,8 @@ class Processes:
 
     @classmethod
     def collect(cls):
-        text = subprocess.run(['ps', '-axo', 'pid=,ppid=,stat=,lstart=,comm='],
-            capture_output=True, text=True, errors='replace', timeout=3, check=True,
-            env=dict(os.environ, LC_ALL='C')).stdout
+        from fleet_ps import rows
+        text = rows('pid,ppid,stat,lstart,comm')
         if not text.strip(): raise Unknown('empty_process_table')
         return cls(text)
 
@@ -228,8 +227,9 @@ def observe(reader, expected=None):
     idle here (legacy CLI alone retains code 3). expected maps pane IDs to full
     prior identities; it is scoped to ONE socket, checked including its inode,
     server birth, worker, native PID/birth/executable/SID and pane ancestry.
-    reader is invoked twice and must not return a cached view. No process, argv
-    or transcript cache survives this call; results cannot be refreshed in place.
+    reader is invoked twice and must not return a cached view. The process census
+    is at most five seconds old; native identity, argv and transcript checks are
+    repeated on every call; results cannot be refreshed in place.
     """
     start, at = time.monotonic(), time.time()
     rows = reader()  # transport failure raises; callers retain ALL candidates

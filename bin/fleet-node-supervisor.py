@@ -285,6 +285,8 @@ import time
 # the root core's client (#3555); a copy of this file without its sibling (an older
 # tree, a selftest's sandbox bin) has no core — the old road, byte for byte
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fleet_ps import rows as process_rows
+from fleet_tick_lock import acquire as acquire_tick_lock
 try:
     import fleet_node_core as core  # noqa: E402
 except ImportError:
@@ -847,6 +849,10 @@ def default_table(paths):
              "note": "C5 #2333"},
         ],
         "tasks": [
+            # One trusted process census for all logins; never stretched by idle
+            # backoff. Readers skip an unavailable sample, not run their own ps.
+            {"name": "process-snapshot", "every": 5, "idle": False, "timeout": 15,
+             "cmd": ["/usr/bin/python3", os.path.join(rt_bin, "fleet_ps.py"), "--publish"]},
             # --watch runs the orphan watchdog too; it is its own task below, all
             # users at once, so it is switched off here (one copy).
             {"name": "diskguard", "every": 60,
@@ -1477,8 +1483,15 @@ def _seat_procs():
             with open(seam) as f:
                 text = f.read()
         else:
-            text = subprocess.check_output(["ps", "-axww", "-o", "user=,pid=,command="],
-                                           stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+            names = {}
+            lines = []
+            for line in process_rows("uid,pid,command").splitlines():
+                uid, pid, command = line.split(None, 2)
+                if uid not in names:
+                    try: names[uid] = pwd.getpwuid(int(uid)).pw_name
+                    except KeyError: names[uid] = uid
+                lines.append("%s %s %s" % (names[uid], pid, command))
+            text = "\n".join(lines)
     except (OSError, subprocess.SubprocessError):
         return []
     out = []
@@ -1594,6 +1607,24 @@ ACCOUNT_SH = ('TMPDIR="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)"; [ -n "$TMPD
               'if true >>"$1" 2>/dev/null; then exec >>"$1"; else exec >/dev/null; fi; '
               'if true >>"$2" 2>/dev/null; then exec 2>>"$2"; else exec 2>/dev/null; fi; '
               'shift 2; exec "$@"')
+
+
+def periodic_command(ent):
+    """Lock the actual task process, surviving supervisor/core restarts.
+
+    Account wrappers exec in place, so the shell entrypoint sees the same PID
+    and descriptor; periodic services/tasks use this road as well as plists.
+    """
+    cmd = ent["cmd"]
+    if ent.get("keepalive") or not ("every" in ent or ent.get("want") or ent.get("periodic")):
+        return cmd
+    key = ent.get("unit") or ent["name"]
+    if any(str(x).endswith("/fleet-diskguard.sh") for x in cmd): key = "diskguard"
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", key):
+        import hashlib
+        key = "job-" + hashlib.sha256(key.encode()).hexdigest()[:24]
+    return [sys.executable, os.path.join(os.path.dirname(__file__), "fleet_tick_lock.py"),
+            "run", key.replace("/", "-"), *cmd]
 
 
 def account_entry(unit, login, ident, brew):
@@ -2476,7 +2507,7 @@ class Supervisor(object):
         if self.seated and self.seat_runs(ent):
             # the node program as the seat itself (#3669): what it does as a login
             # it asks the core (--core: exec-as), its books are the seat's
-            return subprocess.Popen(seat_agent_cmd(ent["cmd"]), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+            return subprocess.Popen(seat_agent_cmd(periodic_command(ent)), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                     env=self.seat_agent_env(), start_new_session=True, close_fds=True)
         if self.seated and not (ent.get("seat") and not ent.get("account")):
             # nothing here may be done as the seat: no core, no road (#3668)
@@ -2486,10 +2517,10 @@ class Supervisor(object):
             if ent.get("service"):
                 service_logdir(ent)
                 e = dict(e, **service_creds(self.p, ent)[0])
-            return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            return subprocess.Popen(periodic_command(ent), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=fh, env=e, start_new_session=True, close_fds=True,
                                     **demote_kw(ent["account"], ent["uid"], ent["gid"], ent["home"]))
-        return subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+        return subprocess.Popen(periodic_command(ent), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                 env=self.child_env(extra_env), start_new_session=True, close_fds=True)
 
     # -- plumbing
@@ -2699,8 +2730,7 @@ class Supervisor(object):
         if not units:
             return
         try:
-            out = subprocess.check_output(["ps", "-axo", "pid=,ppid=,uid=,command="], stderr=subprocess.DEVNULL,
-                                          timeout=20).decode("utf-8", "replace")
+            out = process_rows("pid=,ppid=,uid=,command=")
         except Exception:
             return
         held = set(p.pid for p in self.procs.values()) | set(self.adopted.values())
@@ -3107,21 +3137,19 @@ class Supervisor(object):
                 self.dirty = True
             return False
         if name in self.running:
+            if t - ts.get("last_skip", ts.get("last_start", 0)) >= self.task_every(tk, t):
+                print("fleet-job: skip: busy %s" % name, file=sys.stderr)
+                ts.update(last_skip=t, skipped=(ts.get("skipped") or 0) + 1)
+                self.dirty = True
             return False
         if self.task_orphan(tk, ts, t):
             ts.update(result="busy", skipped=(ts.get("skipped") or 0) + 1)
             self.dirty = True
             return False
         lpath = os.path.join(self.p.locks, name.replace("/", "@") + ".lock")
-        try:
-            lf = os.open(lpath, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
-        except PermissionError:
-            # a lock file root made (a hand-run tick) — flock needs no write (#3668)
-            lf = os.open(lpath, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(lf)
+        lf = acquire_tick_lock(lpath)
+        if lf is None:
+            print("fleet-job: skip: busy %s" % name, file=sys.stderr)
             ts.update(result="busy", skipped=(ts.get("skipped") or 0) + 1)
             self.dirty = True
             return False
@@ -3137,7 +3165,7 @@ class Supervisor(object):
                                           (" (pushed %s)" % woke[:12]) if woke else "")).encode())
         fh.flush()
         try:
-            p = self.spawn(tk, fh, tk.get("env"))
+            p = self.spawn(dict(tk, periodic=True), fh, tk.get("env"))
         except (OSError, subprocess.SubprocessError) as e:
             fh.close()
             os.close(lf)

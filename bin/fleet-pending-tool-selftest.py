@@ -31,6 +31,7 @@ class Fixture(unittest.TestCase):
         for d in ('home', 'registry', 'projects/p', 'conf', 'tmux'):
             (self.root / d).mkdir(parents=True)
         self.env = patch.dict(os.environ, dict(HOME=str(self.root / 'home'),
+            FLEET_PS_CACHE_DIR=str(self.root / 'ps-cache'),
             FLEET_CC_SESSIONS_DIR=str(self.root / 'registry'),
             CLAUDE_PROJECTS_DIR=str(self.root / 'projects'),
             FLEET_CONF_DIR=str(self.root / 'conf'), TMUX_TMPDIR=str(self.root / 'tmux'),

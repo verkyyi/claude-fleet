@@ -230,6 +230,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-job-lib.sh" || exit 1
+case "${1:-}" in --status|--help|-h) ;; *) fleet_job_guard install-sync "$@" ;; esac
 # scheduling heartbeat (issue #639) — guarded source, stamped before any exit
 # shellcheck source=/dev/null
 [ -f "$BIN/fleet-daemon-lib.sh" ] && { . "$BIN/fleet-daemon-lib.sh"

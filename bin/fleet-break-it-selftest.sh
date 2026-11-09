@@ -8703,6 +8703,14 @@ drill_task_start_refused() {
   SECS=$(since "$t0")
 }
 
+drill_periodic_slow_ps() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-periodic-selftest.py" >"$WORK/periodic-slow-ps.log" 2>&1 || {
+    WHY="periodic overlap: $(tail -40 "$WORK/periodic-slow-ps.log")"; return 1;
+  }
+  SECS=$(since "$t0"); WHAT='seven login namespaces, 1200 processes, one slow scan; duplicate ticks skip'
+}
+
 FAILS=$LINT; PASSES=0
 printf 'fleet-break-it: %d rows in docs/dev/BREAK-IT.md\n' "$NROWS"
 # BREAK_PART → the ids of this slice (" id id … "); empty = every drill

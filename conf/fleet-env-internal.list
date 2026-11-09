@@ -929,3 +929,8 @@ FLEET_SSM_TIMEOUT                  knob: seconds fleet-hub-aws-deploy.sh waits f
 FLEET_SSM_POLL                     knob: seconds between fleet-hub-aws-deploy.sh's SSM status polls (default 5)
 
 FLEET_NODE                         handoff: machine supervisor/core sets 1 for root tasks; diskguard leaves fseventsd alerts to the machine watchdog
+FLEET_PS_CACHE_DIR                  path: machine-wide process snapshot directory (test isolation); independent of login TMPDIR
+FLEET_PS_COMMAND                    seam: bounded numeric ps snapshot producer for periodic-slow-ps drill
+FLEET_JOB_LOCK_DIR                  path: periodic job lock directory; defaults to this login's conf/job-locks
+FLEET_JOB_PID                       handoff: PID holding periodic entrypoint descriptor 198 across exec
+FLEET_JOB_KEY                       handoff: name of periodic entrypoint held by FLEET_JOB_PID
