@@ -39,7 +39,7 @@ MT="$BIN/fleet-machine-tasks.py"
 out=$(python3 "$MT" table --check "$ROOT" 2>&1) && ok "A table --check green on this tree" || bad "A table --check on this tree: $out"
 fake="$WORK/root"; mkdir -p "$fake/conf" "$fake/launchd" "$fake/bin"
 cp "$ROOT/conf/node-tasks.tsv" "$fake/conf/"; cp "$ROOT/launchd/"*.tmpl "$fake/launchd/"
-cp "$BIN/fleet-node-supervisor.py" "$fake/bin/"
+cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-supervisor.py" "$fake/bin/"
 : > "$fake/launchd/com.claude-fleet.newloop.plist.tmpl"
 out=$(python3 "$MT" table --check "$fake" 2>&1); rc=$?
 [ "$rc" = 1 ] && printf '%s' "$out" | grep -q 'newloop: launchd template with no row' \

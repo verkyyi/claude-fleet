@@ -185,6 +185,8 @@ from urllib.parse import quote
 from urllib.request import urlopen
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from fleet_ps import rows as process_rows
 _spec = importlib.util.spec_from_file_location("fleet_node_supervisor", os.path.join(HERE, "fleet-node-supervisor.py"))
 fns = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fns)
@@ -1943,8 +1945,7 @@ def process_releases(root):
             with open(seam) as f:
                 out = f.read()
         else:
-            out = subprocess.check_output(["ps", "-axww", "-o", "command="], stderr=subprocess.DEVNULL,
-                                          universal_newlines=True)
+            out = process_rows("command=")
     except Exception:
         return set()
     roots = sorted({root.rstrip("/"), os.path.realpath(root).rstrip("/")})

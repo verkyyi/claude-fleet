@@ -138,6 +138,9 @@ fi
 # Kept past the source for fleet_identity_triplet, which re-reads the global conf
 # from a clean slate (issue #1498).
 _FLEET_LIB_DIR="$_flib_here"
+# Machine-wide, numeric-UID snapshot; an unavailable read never spawns a fallback ps.
+fleet_ps() { python3 "$_FLEET_LIB_DIR/fleet_ps.py" "$1"; }
+
 # shellcheck source=/dev/null
 [ ! -f "$_FLEET_LIB_DIR/fleet-idle-activity.sh" ] || . "$_FLEET_LIB_DIR/fleet-idle-activity.sh"
 unset _flib_here
@@ -2834,9 +2837,9 @@ fleet_bg() {
   _body="( ${1:-:}
 ) >/dev/null 2>&1 || :"
   if [ -n "$_sock" ]; then
-    tmux -L "$_sock" run-shell -b "$_body" 2>/dev/null
+    tmux -L "$_sock" run-shell -b "$_body" 198<&- 2>/dev/null
   else
-    tmux run-shell -b "$_body" 2>/dev/null
+    tmux run-shell -b "$_body" 198<&- 2>/dev/null
   fi
 }
 
@@ -4129,7 +4132,7 @@ $(lsof -w -d cwd -Fpn 2>/dev/null | awk -v d="$cdir" -v m1="$mp1" -v m2="$mp2" '
 # absent from `pgrep -x tmux` while `ps` listed it). `comm` is the executable, so
 # a basename match is immune to tmux's setproctitle rename ("tmux: server (…)").
 fleet_tmux_server_pids() {
-  ps -eo pid=,comm= 2>/dev/null | awk '
+  fleet_ps pid=,comm= 2>/dev/null | awk '
     { c = $2; sub(/.*\//, "", c)
       if (c == "tmux" || c ~ /^tmux:/) print $1 + 0 }' | sort -un
 }
@@ -4149,7 +4152,7 @@ fleet_tmux_server_pids() {
 # which leaves every caller exactly as conservative as it was before this existed.
 fleet_pids_under_tmux() {
   [ "$#" -gt 0 ] || return 0
-  ps -eo pid=,ppid=,comm= 2>/dev/null | awk -v want="$(printf '%s ' "$@")" '
+  fleet_ps pid=,ppid=,comm= 2>/dev/null | awk -v want="$(printf '%s ' "$@")" '
     { p = $1 + 0; par[p] = $2 + 0
       c = $3; sub(/.*\//, "", c)
       if (c == "tmux" || c ~ /^tmux:/) srv[p] = 1 }
@@ -4437,7 +4440,7 @@ fleet_listen_fleet_rows() {
 # session still working there?" Only asked when there is a candidate, so the full
 # cwd read is rare.
 _fleet_pane_cwd_keys() {
-  local tree; tree="$(ps -eo pid=,ppid=,comm= 2>/dev/null | awk '
+  local tree; tree="$(fleet_ps pid=,ppid=,comm= 2>/dev/null | awk '
     { p=$1+0; par[p]=$2+0; c=$3; sub(/.*\//,"",c); if (c=="tmux"||c~/^tmux:/) srv[p]=1
       if (c=="claude" || $3 ~ /\/claude\/versions\//) cl[p]=1 }
     END { for (p in par) { if (cl[p]) { print p; continue }; q=p; h=0
@@ -4465,7 +4468,7 @@ fleet_orphan_listeners() {
   rows="$(fleet_listen_fleet_rows | awk -F'\t' -v m="$minage" '$3+0 >= m')"
   [ -n "$rows" ] || return 0
   # top-below-init for each candidate, or "" when a tmux/claude ancestor owns it
-  tops="$(ps -eo pid=,ppid=,comm= 2>/dev/null | awk -v want="$(printf '%s\n' "$rows" | cut -f1 | tr '\n' ' ')" '
+  tops="$(fleet_ps pid=,ppid=,comm= 2>/dev/null | awk -v want="$(printf '%s\n' "$rows" | cut -f1 | tr '\n' ' ')" '
     { p=$1+0; par[p]=$2+0; c=$3; sub(/.*\//,"",c); cm[p]=c
       # the native build runs as …/claude/versions/<semver>, so its comm is a version
       if ($3 ~ /\/claude\/versions\//) cm[p]="claude" }
@@ -4569,7 +4572,7 @@ _fleet_agent_cred_daemons() {
     dm=$(fleet_agent_get "$ag" daemon); ch=$(fleet_agent_get "$ag" cred_home)
     [ -n "$dm" ] && [ -n "$ch" ] && [ -d "$st/$ch" ] || continue
     hd="$st/$ch"
-    ps -eo pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" -v dm="$dm" -v ag="$ag" '
+    fleet_ps pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" -v dm="$dm" -v ag="$ag" '
       $2 == 1 && $3 == me && index($0, dm) && index($0, ag) { print }' \
     | while read -r pid ppid uid et cmdline; do
         # Its home: the environment where the OS shows it (Linux), else a file it
@@ -4607,7 +4610,7 @@ fleet_orphan_trees() {
   # PPID=1 tops of ours that are neither a tmux server nor an agent, and whose
   # tree holds no exempt argv anywhere (an exempt server under a wrapper shell is
   # still exempt).
-  tops="$(ps -eo pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" -v self="$$" -v re="$re" '
+  tops="$(fleet_ps pid=,ppid=,uid=,etime=,command= 2>/dev/null | awk -v me="$me" -v self="$$" -v re="$re" '
     function secs(et,   f, n) {
       n = split(et, f, /[-:]/)
       if (n == 4) return f[1]*86400 + f[2]*3600 + f[3]*60 + f[4]
@@ -4830,7 +4833,7 @@ fleet_proc_mem_rows() {
   local uid; uid="$(id -u 2>/dev/null)"
   { if [ -n "${FLEET_MEM_PS_CMD:-}" ]; then sh -c "$FLEET_MEM_PS_CMD" 2>/dev/null
     elif [ -n "${_FLEET_PS_TABLE:-}" ] && [ -r "$_FLEET_PS_TABLE" ]; then cat "$_FLEET_PS_TABLE" 2>/dev/null
-    else ps -Ao pid=,ppid=,uid=,rss=,etime=,command= 2>/dev/null; fi; } | awk -v me="$uid" '
+    else fleet_ps pid=,ppid=,uid=,rss=,etime=,command= 2>/dev/null; fi; } | awk -v me="$uid" '
     function secs(et,   f, n) {
       n = split(et, f, /[-:]/)
       if (n == 4) return f[1]*86400 + f[2]*3600 + f[3]*60 + f[4]
@@ -4940,7 +4943,7 @@ fleet_metrics_row() {
   if [ -n "${_FLEET_PS_TABLE:-}" ] && [ -r "$_FLEET_PS_TABLE" ]; then
     cl="$(awk '{ n = $6; sub(/.*\//, "", n); if (n == "claude" || $6 ~ /\/claude\/versions\//) c++ } END { print c+0 }' "$_FLEET_PS_TABLE" 2>/dev/null)"
   else
-    cl="$(ps -axo comm= 2>/dev/null | awk '{ n = $0; sub(/.*\//, "", n); if (n == "claude" || $0 ~ /\/claude\/versions\//) c++ } END { print c+0 }')"
+    cl="$(fleet_ps comm= 2>/dev/null | awk '{ n = $0; sub(/.*\//, "", n); if (n == "claude" || $0 ~ /\/claude\/versions\//) c++ } END { print c+0 }')"
   fi
   # the three largest of OUR processes (fleet_proc_mem_rows is RSS-sorted) as name:MB
   top="$(fleet_proc_mem_rows | awk -F'\t' '$5 != "other" { split($6, w, " "); n = w[1]; sub(/.*\//, "", n)
@@ -9357,7 +9360,9 @@ fleet_pane_claude_pid() {
   if [ -n "$sock" ]; then pp=$(tmux -L "$sock" display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null)
   else                    pp=$(tmux display-message -p -t "$tgt" '#{pane_pid}' 2>/dev/null); fi
   [ -n "$pp" ] || return 1
-  out=$(fleet_pane_claude_pids "$pp") || return 1
+  # The single-pane helper is an action/ownership gate (stop, move, transfer).
+  # Keep it live; periodic bulk observations use fleet_pane_claude_pids's cache.
+  out=$(fleet_pane_claude_pids --live "$pp") || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "${out##* }"
 }
@@ -9653,7 +9658,7 @@ fleet_window_bg_busy() {
   [ "$probe" = native ] || pid=$(fleet_pane_claude_pid "$win" "$sock" 2>/dev/null) || pid=''
   [ "$probe" = native ] || [ -n "$pid" ] || return 1
   if [ "$quick" = 1 ] && [ -n "$pid" ]; then
-    ps -axo ppid=,command= 2>/dev/null \
+    fleet_ps ppid=,command= 2>/dev/null \
       | awk -v p="$pid" '$1 == p && index($0, "/shell-snapshots/snapshot-") { f = 1 } END { exit !f }' \
       || return 1
   fi
@@ -9689,13 +9694,14 @@ fleet_window_bg_busy() {
 # FLEET_TOOL_WAIT=0 turns the reason off (never busy) — and is how the BREAK-IT
 # drill `tool-wait-idle` shows the red it was written against.
 fleet_window_tool_busy() {
-  local sess="${1:-}" win="${2:-}" pp
+  local sess="${1:-}" win="${2:-}" pp table
   [ "${FLEET_TOOL_WAIT:-1}" != 0 ] || return 1
   [ -n "$win" ] || return 1
   [ -n "$sess" ] || sess=$(fleet_current_session)
   pp=$(_fleet_tmux "$sess" display-message -p -t "$win" '#{pane_pid}' 2>/dev/null)
   case "$pp" in ''|*[!0-9]*) return 1 ;; esac
-  ps -axo pid=,ppid=,stat=,command= 2>/dev/null | awk -v root="$pp" '
+  table=$(fleet_ps pid=,ppid=,stat=,command= 2>/dev/null) || return 0
+  printf '%s\n' "$table" | awk -v root="$pp" '
     {
       pid = $1; ppid = $2; st = $3
       if (index(st, "Z") > 0) next                  # a zombie is no process (#1734)
@@ -9776,7 +9782,7 @@ fleet_window_human() {
   case "$ts" in ''|*[!0-9]*) ts=$now ;; esac
   [ $(( now - ts )) -lt "$secs" ] || return 1
   case "$pp" in ''|*[!0-9]*) return 1 ;; esac
-  ps -axo pid=,ppid=,command= 2>/dev/null | awk -v root="$pp" '
+  fleet_ps pid=,ppid=,command= 2>/dev/null | awk -v root="$pp" '
     {
       pid = $1; par[pid] = $2; $1 = ""; $2 = ""; cmd[pid] = substr($0, 3)
     }

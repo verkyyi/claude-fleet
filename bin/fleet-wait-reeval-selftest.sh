@@ -31,6 +31,7 @@ trap 'exit 130' INT TERM HUP
 mkdir -p "$WORK/path" "$WORK/conf" "$WORK/proj" "$WORK/sessions" "$WORK/root/bin" "$WORK/root/logs"
 st_tmux_socket "$WORK/path" "$SOCK" strip
 PATH="$WORK/path:$PATH"; export PATH
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 export FLEET_CONF_DIR="$WORK/conf" FLEET_SKIP_GLOBAL_CONF=1
 export CLAUDE_PROJECTS_DIR="$WORK/proj" FLEET_CC_SESSIONS_DIR="$WORK/sessions"
 export FLEET_CLAUDE_COMM="fakeclaude-fleetreeval-$$"
@@ -63,7 +64,10 @@ PAR=$(tf display-message -p -t "$SESS:par" '#{window_id}')
 tf set-window-option -t "$PAR" @issue 100
 opt()  { tf display-message -p -t "$1" "#{$2}"; }
 hasopt() { tf show-options -w -t "$1" 2>/dev/null | grep -q "^$2 "; }
-re() { bash "$RB/fleet-wait-reeval.sh" "$@"; }
+re() {
+  python3 "$BIN/fleet_ps.py" --publish >/dev/null || st_fail "fixture census unavailable"
+  bash "$RB/fleet-wait-reeval.sh" "$@"
+}
 sw() { printf '%s %s' "$(opt "$1" @claude_state)" "$(opt "$1" @claude_wait)"; }
 
 # --- A. old Parent reasons clear independently ------------------------------------

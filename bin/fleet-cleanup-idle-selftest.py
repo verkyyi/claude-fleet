@@ -605,7 +605,8 @@ class Rig(unittest.TestCase):
         self.env = dict(os.environ)
         self.env.pop("TMUX", None)
         self.env.pop("TMUX_PANE", None)
-        self.env.update(FLEET_CONF_DIR=str(self.root / "conf"),
+        self.env.update(FLEET_PS_CACHE_DIR=str(self.root / "ps-cache"),
+                        FLEET_CONF_DIR=str(self.root / "conf"),
                         FLEET_HISTORY_LEDGER=str(self.root / "ledger.tsv"),
                         CLAUDE_PROJECTS_DIR=str(self.root / "projects"),
                         FLEET_REAP_MIN_AGE="0")

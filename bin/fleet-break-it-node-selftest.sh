@@ -182,7 +182,7 @@ drill_node_supervisor_dead() {
   CAP=15   # kill -9 → launchd's ThrottleInterval + a python start + the first pass
   local sb thr sup pid1 cpid t0
   sb="$WORK/node"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
-  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
   printf '#!/bin/bash\nexit 0\n' > "$sb/ok.sh"
   printf '{"children":[{"name":"c","cmd":["/bin/sleep","300"]}],"tasks":[{"name":"t","every":0.5,"cmd":["/bin/bash","%s"]}]}\n' "$sb/ok.sh" > "$sb/table.json"
   export FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
@@ -220,7 +220,7 @@ drill_node_supervisor_wedged() {
   CAP=20   # the watchdog's 2 s + launchd's ThrottleInterval + a python start + the first passes
   local sb thr sup t0 st
   sb="$WORK/wedge"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
-  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
   printf '#!/bin/bash\nexit 0\n' > "$sb/ok.sh"
   printf '{"children":[],"tasks":[{"name":"t","every":0.5,"cmd":["/bin/bash","%s"]},{"name":"u","every":0.5,"cmd":["/bin/bash","%s"]}]}\n' \
     "$sb/ok.sh" "$sb/ok.sh" > "$sb/table.json"
@@ -268,7 +268,7 @@ drill_node_supervisor_stop_hang() {
   CAP=25   # the stop's 2 s + a python start + the passes that book the orphan
   local sb sup sup2 t0 n
   sb="$WORK/stophang"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
-  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
   # a task deaf to the stop's TERM (its sleep inherits the ignore across exec)
   printf '#!/bin/bash\ntrap "" TERM\nsleep 300\n' > "$sb/deaf.sh"
   printf '{"children":[],"tasks":[{"name":"deaf","every":0.5,"timeout":600,"cmd":["/bin/bash","%s"]}]}\n' "$sb/deaf.sh" > "$sb/table.json"
@@ -339,7 +339,7 @@ drill_node_fda_probe_hang() {
   CAP=15   # the probe's 1 s timeout + a few passes
   local sb sup t0 n
   sb="$WORK/fdahang"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
-  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
   printf '#!/bin/bash\nexit 0\n' > "$sb/ok.sh"
   printf '{"children":[],"tasks":[{"name":"t","every":0.3,"cmd":["/bin/bash","%s"]}]}\n' "$sb/ok.sh" > "$sb/table.json"
   mkfifo "$sb/TCC.db"   # an open() of it never returns — tccd not answering (mac-d, 2026-10-11)
@@ -384,7 +384,7 @@ drill_tcc_prompt_wedge() {
     || { WHY="the agent half's test TestAccountScriptTCCDisclaimed is not in ${f#$ROOT/}"; return 1; }
   # the supervisor: TCC.db whose open() never returns, probed every tick
   sb="$WORK/tccwedge"; mkdir -p "$sb/LaunchDaemons" "$sb/rt/bin"
-  cp "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
+  cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-supervisor.py" "$sb/rt/bin/"
   printf '{"children":[],"tasks":[]}\n' > "$sb/table.json"
   mkfifo "$sb/TCC.db"
   FLEET_NODE_STATE="$sb/db" FLEET_NODE_LOG="$sb/log" FLEET_NODE_RUNTIME="$sb/rt" \
@@ -1166,7 +1166,7 @@ drill_node_update_half() {
   CAP=20
   local sb t0 u tk cl out
   sb="$WORK/upd"; mkdir -p "$sb/root" "$sb/rel" "$sb/db" "$sb/Users/alice" "$sb/LaunchDaemons"
-  mkdir -p "$sb/bin"; cp "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
+  mkdir -p "$sb/bin"; cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
   u="$sb/bin/fleet-node-update.py"; tk="$BIN/fleet-node-update-selftest.py"
   python3 "$tk" --fake-ccquota "$sb/ccquota" || { WHY="no fake ccquota"; return 1; }
   V1=$(printf '%040d' 0 | tr 0 1); V2=$(printf '%040d' 0 | tr 0 2); V3=$(printf '%040d' 0 | tr 0 3)
@@ -1220,7 +1220,7 @@ drill_user_pod_no_roll_road() {
   CAP=20
   local sb t0 u tk out
   sb="$WORK/noroll"; mkdir -p "$sb/root" "$sb/rel" "$sb/db" "$sb/Users/alice" "$sb/LaunchDaemons" "$sb/bin"
-  cp "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
+  cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
   u="$sb/bin/fleet-node-update.py"; tk="$BIN/fleet-node-update-selftest.py"
   python3 "$tk" --fake-ccquota "$sb/ccquota" || { WHY="no fake ccquota"; return 1; }
   V1=$(printf '%040d' 0 | tr 0 1); V2=$(printf '%040d' 0 | tr 0 2)

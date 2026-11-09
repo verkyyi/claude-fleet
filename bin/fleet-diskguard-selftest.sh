@@ -123,20 +123,23 @@ st_eq "cpu_sustain: cooled pid dropped from state" "" "$(awk -F'\t' '$1==4242{pr
 # B3. cpu_candidates filtering, against a fake `ps` + `id`. Columns emitted by the
 #     real call are: pid user pcpu tty comm. Assert: keep our-user + hot + no-tty;
 #     drop has-tty, below-threshold, other-user, and protected infra (tmux).
+# These legs test the filters with deliberately small ps fixtures. The shared
+# cache and its cross-login locking are exercised by fleet-periodic-selftest.py.
+fleet_ps() { ps -axo "$1"; }
 FAKEBIN="$WORK/fakebin"; mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/id" <<'EOF'
 #!/bin/sh
-echo tester
+echo 501
 EOF
 cat > "$FAKEBIN/ps" <<'EOF'
 #!/bin/sh
 # ignore args; emit "pid user pcpu tty comm" rows the awk filter parses.
 cat <<ROWS
-111 tester 99 ?? spinner
-222 tester 99 s003 worker-with-tty
-333 tester 10 ?? idle-proc
-444 other  99 ?? someone-elses
-555 tester 99 ?? tmux
+111 501 99 ?? spinner
+222 501 99 s003 worker-with-tty
+333 501 10 ?? idle-proc
+444 502  99 ?? someone-elses
+555 501 99 ?? tmux
 ROWS
 EOF
 chmod +x "$FAKEBIN/id" "$FAKEBIN/ps"
@@ -167,7 +170,7 @@ st_eq "cpu_watch: disabled writes no state" "absent" \
 ORPH="$WORK/orphbin"; mkdir -p "$ORPH"
 cat > "$ORPH/id" <<'EOF'
 #!/bin/sh
-echo tester
+echo 501
 EOF
 # Columns the real call emits: pid ppid user pcpu command. Row 222 is the load-
 # bearing negative: identical fingerprint, identical %CPU, but its parent is
@@ -175,14 +178,14 @@ EOF
 cat > "$ORPH/ps" <<'EOF'
 #!/bin/sh
 cat <<ROWS
-111 1 tester 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-1.sh; while :; do :; done
-222 4242 tester 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-2.sh; make -j8
-333 1 tester 10 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-3.sh; sleep 9
-444 1 other 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-4.sh; while :; do :; done
-555 1 tester 99 /usr/libexec/mdworker_shared -s mdworker -c MDSImporterWorker
-666 1 tester 99 tmux -L fleet-claude-fleet new-session -d -s fleet-claude-fleet
-777 1 tester 88 bash -c i=0; while [ "\$i" -lt 5000 ]; do i=\$((i+1)); done FLEET_LOADGEN_BURNER#t42
-888 1 tester 97 /opt/homebrew/bin/some-unrelated-hog --forever
+111 1 501 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-1.sh; while :; do :; done
+222 4242 501 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-2.sh; make -j8
+333 1 501 10 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-3.sh; sleep 9
+444 1 502 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-4.sh; while :; do :; done
+555 1 501 99 /usr/libexec/mdworker_shared -s mdworker -c MDSImporterWorker
+666 1 501 99 tmux -L fleet-claude-fleet new-session -d -s fleet-claude-fleet
+777 1 501 88 bash -c i=0; while [ "\$i" -lt 5000 ]; do i=\$((i+1)); done FLEET_LOADGEN_BURNER#t42
+888 1 501 97 /opt/homebrew/bin/some-unrelated-hog --forever
 ROWS
 EOF
 chmod +x "$ORPH/id" "$ORPH/ps"
@@ -250,7 +253,7 @@ st_eq "orphan_watch: default action is report-only" "notify" "$ORPHAN_ACTION"
 #     the operator to ignore the line.
 cat > "$ORPH/ps" <<'EOF'
 #!/bin/sh
-echo "222 4242 tester 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-2.sh; make -j8"
+echo "222 4242 501 99 /bin/zsh -c source /home/t/.claude/shell-snapshots/snapshot-zsh-2.sh; make -j8"
 EOF
 chmod +x "$ORPH/ps"
 ORPHAN_ACTION=notify PATH="$ORPH:$PATH" orphan_watch
@@ -317,6 +320,6 @@ rm -f "$PSCALLS"
 FLEET_MACHINE_TASKS='' PATH="$PST:$PATH" fseventsd_watch
 # (fseventsd is macOS's: elsewhere the probe never runs ps at all)
 want=0; [ "$(uname -s 2>/dev/null)" = Darwin ] && want=1
-st_eq "fseventsd_watch: any other login scans as before" "$want" "$( [ -f "$PSCALLS" ] && grep -c . "$PSCALLS" || echo 0)"
+st_eq "fseventsd_watch: any 502 login scans as before" "$want" "$( [ -f "$PSCALLS" ] && grep -c . "$PSCALLS" || echo 0)"
 
 printf 'selftest OK: fleet-diskguard (%s assertions — worktree proc-reap + CPU watchdog + orphan watchdog + one ps table)\n' "$CHECKS"

@@ -660,7 +660,7 @@ has "$FLEET_TEST_LOG" 'sysadminctl -deleteUser alice' 'emptied register: the log
 # service it kept in the attic is never loaded back (only no longer kept).
 reset_fixture; cs_fixture own
 mkdir -p "$WORK/rt" "$WORK/node/logins" "$WORK/node/attic/a1"
-cp "$BIN/fleet-node-supervisor.py" "$WORK/rt/"
+cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-supervisor.py" "$WORK/rt/"
 printf '{"alice": {"managed": true, "since": 1}, "bob": {"managed": true, "since": 1}}\n' > "$WORK/node/accounts.json"
 : > "$WORK/node/logins/alice.env"; : > "$WORK/node/logins/bob.env"
 printf 'plist\n' > "$WORK/node/attic/a1/com.claude-fleet.dispatch.plist"

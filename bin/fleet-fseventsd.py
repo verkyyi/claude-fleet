@@ -6,7 +6,6 @@ Only numeric settings are read from the machine's conf/fleet.conf. No tenant
 config or commands enter this privileged path. CMPRS is attribution, not an
 exact per-process swap counter; the displayed swap is system-wide.
 """
-import fcntl
 import json
 import os
 from pathlib import Path
@@ -15,6 +14,10 @@ import re
 import subprocess
 import sys
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fleet_tick_lock import acquire as acquire_tick_lock
+from fleet_ps import rows as process_rows
 
 DEFAULTS = {
     "FLEET_FSEVENTSD_WATCHDOG": 1,
@@ -96,7 +99,11 @@ def probe(swap_limit=8192):
     if platform.system() != "Darwin":
         return sample
     sample["swap_mb"] = swap_used(run(["/usr/sbin/sysctl", "-n", "vm.swapusage"]))
-    for line in run(["/bin/ps", "-axo", "uid=,pid=,rss=,comm="]).splitlines():
+    try:
+        census = process_rows("uid,pid,rss,comm")
+    except OSError:
+        return sample
+    for line in census.splitlines():
         cols = line.split(None, 3)
         if len(cols) != 4 or cols[0] != "0" or cols[3] not in DAEMONS:
             continue
@@ -147,12 +154,11 @@ def tick(state, cfg, now=None):
         return "disabled"
     state.mkdir(mode=0o755, parents=True, exist_ok=True)
     # Lock and timestamp survive supervisor/core restarts and hand-run ticks.
-    fd = os.open(state / "lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return "busy"
+    fd = acquire_tick_lock(state / "lock")
+    if fd is None:
+        print("fleet-job: skip: busy fseventsd", file=sys.stderr)
+        return "busy"
+    with os.fdopen(fd, "w"):
         now = time.time() if now is None else now
         sample = probe(cfg["FLEET_FSEVENTSD_SWAP_MB"])
         why = reason(sample, cfg)

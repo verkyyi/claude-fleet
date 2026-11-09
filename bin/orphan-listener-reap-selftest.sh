@@ -45,6 +45,7 @@ st_need lsof python3
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/orphan-listen.XXXXXX")" || exit 2
 WORK="$(cd "$WORK" && pwd -P)"
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 
 PROBES=""
 PANE_SOCK=""

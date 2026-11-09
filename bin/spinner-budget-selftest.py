@@ -60,7 +60,7 @@ def check_costs(fixture, commands, checks, read_query):
     observed = [sum(at - .1 <= row[0] <= at + 2 for row in recurring) for at in needs]
     assert sum(observed) == len(recurring), ('process outside a maintenance observation', recurring, needs)
     assert all(row[3] == 'ps' for row in recurring), ('unexpected recurring process', recurring)
-    assert all(row[2] == spinner[1] and row[4] == '-axo pid=,ppid=,stat=,lstart=,comm=' for row in recurring), ('fresh process source', recurring)
+    assert all(row[2] == spinner[1] and row[4].startswith('-axww -o pid,ppid,uid,') and '-o command=COMMAND' in row[4] for row in recurring), ('fresh process source', recurring)
     assert all(count <= 1 for count in observed), ('process cost per fresh observation', observed)
     if fixture == 'maintenance':
         assert observed == [1, 1], ('both default safety observations must be fresh', observed)

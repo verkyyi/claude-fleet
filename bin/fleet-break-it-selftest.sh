@@ -1976,7 +1976,7 @@ drill_loop_window_killed() {
 # isolated server. FLEET_TOOL_WAIT=0 is the red this drill was written against.
 tw_env() {   # <args…> — the sandbox's hooks and lib, against sock-tw
   env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
-    FLEET_CONF_DIR="$WORK/tw/conf" FLEET_SKIP_GLOBAL_CONF=1 "$@"
+    FLEET_PS_CACHE_DIR="$WORK/tw/ps-cache" FLEET_CONF_DIR="$WORK/tw/conf" FLEET_SKIP_GLOBAL_CONF=1 "$@"
 }
 drill_tool_wait_idle() {
   CAP=10; BREAK_SOCK="$WORK/sock-tw"; local d="$WORK/tw" w p t0 st why
@@ -2026,6 +2026,7 @@ PY
   nt set-option -w -t "$w" @claude_state looping \; set-option -w -t "$w" @claude_wait tool
   kill "$(cat "$d/call.pid")"; t0=$(now)
   until_ok 10 sh -c '! kill -0 "$(cat "$1")" 2>/dev/null' _ "$d/call.pid"
+  sleep 6  # the next tick observes the completed call after the census TTL
   tw_env bash "$BIN/fleet-wait-reeval.sh" --window "$w" tw >/dev/null 2>&1
   st="$(o "$w" @claude_state)/$(o "$w" @claude_wait)"
   [ "$st" = done/ ] || { WHY="after the call returned the re-ask left [$st], want done/"; return 1; }
@@ -2040,7 +2041,7 @@ PY
 # re-ask are the real ones; the browser is a process carrying Playwright's argv.
 hw_env() {   # <args…> — the sandbox's hooks and lib, against sock-hw
   env PATH="$WORK/tbin:$PATH" HOME="$WORK/home" BREAK_SOCK="$BREAK_SOCK" TMUX="$BREAK_SOCK,1,0" \
-    FLEET_CONF_DIR="$WORK/hw/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 "$@"
+    FLEET_PS_CACHE_DIR="$WORK/hw/ps-cache" FLEET_CONF_DIR="$WORK/hw/conf" FLEET_SKIP_GLOBAL_CONF=1 FLEET_ID_PUSH=0 "$@"
 }
 drill_human_step_reopen() {
   CAP=60; BREAK_SOCK="$WORK/sock-hw"; local d="$WORK/hw" w p t0 st why out
@@ -8701,6 +8702,14 @@ drill_task_start_refused() {
   _drill_go_tests 'TestTaskStartFailure TestTaskPlaceholderTitleRepair' "$ROOT/tokenledger/hub/store/fleet_task_start_failure_test.go" \
     '派发拒绝原因保留，同一记录可重试，取消和已启动记录拒绝重试' ./hub/store || return 1
   SECS=$(since "$t0")
+}
+
+drill_periodic_slow_ps() {
+  local t0; t0=$(now); CAP=30
+  python3 "$BIN/fleet-periodic-selftest.py" >"$WORK/periodic-slow-ps.log" 2>&1 || {
+    WHY="periodic overlap: $(tail -40 "$WORK/periodic-slow-ps.log")"; return 1;
+  }
+  SECS=$(since "$t0"); WHAT='seven login namespaces, 1200 processes, one slow scan; duplicate ticks skip'
 }
 
 FAILS=$LINT; PASSES=0

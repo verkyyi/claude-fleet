@@ -1114,9 +1114,8 @@ def park_saved_mb(w):
     """C8's pane process-tree RSS in MiB; an unreadable sample stays unknown."""
     from fleet_park_metrics import process_trees
     try:
-        sample = subprocess.run(["ps", "-axo", "pid=,ppid=,rss=,time="], capture_output=True,
-                                text=True, timeout=5, check=True)
-        rss, _, known = process_trees(sample.stdout)(int(w.get("pane_pid") or 0))
+        from fleet_ps import rows
+        rss, _, known = process_trees(rows("pid,ppid,rss,time"))(int(w.get("pane_pid") or 0))
         return round(rss, 1) if known else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None

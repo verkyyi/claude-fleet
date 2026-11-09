@@ -55,12 +55,13 @@ class Watchdog(unittest.TestCase):
                 return ps
             self.assertNotIn("-n", argv)  # macOS top -n 0 prints NO processes
             return "PID COMMAND CMPRS\n123 fseventsd 20G\n42 Safari 1G\n"
-        with patch.object(w.platform, "system", return_value="Darwin"), patch.object(w, "run", side_effect=read) as run:
+        with patch.object(w.platform, "system", return_value="Darwin"), patch.object(w, "run", side_effect=read) as run, \
+                patch.object(w, "process_rows", return_value=ps):
             self.assertEqual(w.probe()["rss_mb"], 100)
             self.assertTrue(w.probe()["biggest"])
             run.reset_mock()
             self.assertIsNone(w.probe(0)["compressed_mb"])
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(run.call_count, 1)
             self.assertIn("system swap 24576 MiB", w.doctor())
         with patch.object(w.platform, "system", return_value="Linux"), patch.object(w, "run") as run:
             self.assertIsNone(w.probe()["rss_mb"])

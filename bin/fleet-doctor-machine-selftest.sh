@@ -24,7 +24,7 @@
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
-for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh; do
+for f in fleet-job-lib.sh fleet_tick_lock.py fleet_ps.py fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh; do
   [ -f "$BIN/$f" ] || { printf 'selftest: %s not found\n' "$BIN/$f" >&2; exit 2; }
 done
 
@@ -34,7 +34,7 @@ st_sandbox "${TMPDIR:-/tmp}/doctor-machine-selftest.XXXXXX" physical
 # in a box of its own (mkbox again with its own $WORK).
 mkbox() {
 mkdir -p "$WORK/bin" "$WORK/fakepath" "$WORK/conf"
-for f in fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do cp "$BIN/$f" "$WORK/bin/"; done
+for f in fleet-job-lib.sh fleet_tick_lock.py fleet_ps.py fleet-doctor.sh fleet-diskguard.sh fleet-lib.sh fleet-client-core.sh fleet-daemon-lib.sh fleet-daemon-loaded.sh; do cp "$BIN/$f" "$WORK/bin/"; done
 chmod +x "$WORK/bin/"*.sh
 cat > "$WORK/fakepath/sysctl" <<EOF
 #!/bin/sh
@@ -64,12 +64,30 @@ EOF
 cat > "$WORK/fakepath/ps" <<EOF
 #!/bin/sh
 case "\$*" in
+  -axww*) exec python3 "$WORK/fakepath/snapshot.py" ;;
   *rss=,pcpu=,etime=,comm=*)    cat "$WORK/fsev"; exit 0 ;;
   *ppid=,user=,pcpu=,command=*) cat "$WORK/pstable"; exit 0 ;;
   *etime=*-p*)                  echo "  03:20:15  524288"; exit 0 ;;
 esac
 exec /bin/ps "\$@"
 EOF
+# Canonical numeric snapshot consumed by the real fleet_ps cache reader.
+cat > "$WORK/fakepath/snapshot.py" <<'PYPS'
+import os
+from pathlib import Path
+root = Path(__file__).parent.parent
+print('PID PPID UID PGID STAT RSS %CPU ELAPSED TIME STARTED TTY'.ljust(90) + 'COMM'.ljust(30) + 'COMMAND')
+def row(pid, ppid, uid, rss, cpu, age, comm, cmd):
+    prefix = f'{pid} {ppid} {uid} 1 S {rss} {cpu} {age} 00:01 Mon Nov  9 00:00:00 2026 ?? '
+    print(prefix.ljust(90) + comm.ljust(30) + cmd)
+row(1, 0, 0, 100, 0, '01:00:00', 'init', 'init')
+for line in (root / 'fsev').read_text().splitlines():
+    rss, cpu, age, comm = line.split(None, 3)
+    row(42, 1, 0, rss, cpu, age, 'fseventsd', comm)
+for line in ((root / 'pstable').read_text().splitlines() if (root / 'pstable').exists() else []):
+    pid, ppid, user, cpu, cmd = line.split(None, 4)
+    row(pid, ppid, os.getuid(), 524288, cpu, '03:20:15', 'zsh', cmd)
+PYPS
 # --- fake uname: the fseventsd section is macOS-only, so the OS is switchable too.
 cat > "$WORK/fakepath/uname" <<EOF
 #!/bin/sh
@@ -91,9 +109,10 @@ has() { CHECKS=$((CHECKS + 1)); case "$2" in *"$1"*) ;; *) fail "$3" "$2";; esac
 
 # The doctor's `machine` line, plus a marker proving the run got PAST it.
 run_doctor() {
+  rm -rf "$WORK/ps-cache"
   : > "$WORK/stderr"
   PATH="$WORK/fakepath:$PATH" TMPDIR="$WORK" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 \
-  FLEET_CONF_DIR="$WORK/conf" FLEET_GLOBAL_MAX_SESSIONS="${GMAX:-8}" \
+  FLEET_PS_CACHE_DIR="$WORK/ps-cache" FLEET_CONF_DIR="$WORK/conf" FLEET_GLOBAL_MAX_SESSIONS="${GMAX:-8}" \
     sh "$WORK/bin/fleet-doctor.sh" 2>"$WORK/stderr"
 }
 machine_line() { printf '%s\n' "$1" | grep -aE '^[[:space:]]+(PASS|WARN|FAIL)[[:space:]]+machine([[:space:]]|$)' | head -1; }
@@ -319,7 +338,8 @@ printf '%s\n---\n' "\$1" >> "$WORK/notified"
 EOF
 chmod +x "$WORK/notify"; : > "$WORK/notified"
 fwatch() {
-  PATH="$WORK/fakepath:$PATH" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" \
+  rm -rf "$WORK/ps-cache"
+  PATH="$WORK/fakepath:$PATH" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_PS_CACHE_DIR="$WORK/ps-cache" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_NOTIFY_CMD="$WORK/notify" FLEET_DISKGUARD_SOURCE=1 \
     bash -c ". '$WORK/bin/fleet-diskguard.sh'; fseventsd_watch" 2>>"$WORK/stderr"
 }
@@ -399,7 +419,7 @@ lane 1 1; lane 5 5; lane 6 6; lane 9 9   # the doctor legs, at once; 8 above and
 # ============================================================================
 : > "$WORK/notified"; rm -f "$WORK/conf/diskguard/res-"*
 rwatch() {
-  PATH="$WORK/fakepath:$PATH" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_CONF_DIR="$WORK/conf" \
+  PATH="$WORK/fakepath:$PATH" HOME="$WORK" FLEET_SKIP_GLOBAL_CONF=1 FLEET_PS_CACHE_DIR="$WORK/ps-cache" FLEET_CONF_DIR="$WORK/conf" \
   FLEET_NOTIFY_CMD="$WORK/notify" FLEET_DISKGUARD_SOURCE=1 FLEET_MEM_PS_CMD="cat $WORK/memps" \
   FLEET_MEM_PROBE_CMD="cat $WORK/rmem" FLEET_FILES_PROBE_CMD="cat $WORK/rfiles" FLEET_PTY_PROBE_CMD="cat $WORK/rpty" \
     bash -c ". '$WORK/bin/fleet-diskguard.sh'; mem_watch" 2>>"$WORK/stderr"

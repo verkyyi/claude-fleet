@@ -52,10 +52,16 @@ class Processes:
                 self.kids[int(parent)].append(int(p))
 
     @classmethod
-    def collect(cls):
-        text = subprocess.run(['ps', '-axo', 'pid=,ppid=,stat=,lstart=,comm='],
-            capture_output=True, text=True, errors='replace', timeout=3, check=True,
-            env=dict(os.environ, LC_ALL='C')).stdout
+    def collect(cls, live=False):
+        if live:
+            # Administrative handovers must see the exit/start that just happened.
+            # Periodic observations share the census; this is an explicit action read.
+            text = subprocess.run(['ps', '-axo', 'pid=,ppid=,stat=,lstart=,comm='],
+                capture_output=True, text=True, errors='replace', timeout=3, check=True,
+                env=dict(os.environ, LC_ALL='C')).stdout
+        else:
+            from fleet_ps import rows
+            text = rows('pid,ppid,stat,lstart,comm')
         if not text.strip(): raise Unknown('empty_process_table')
         return cls(text)
 
@@ -228,8 +234,9 @@ def observe(reader, expected=None):
     idle here (legacy CLI alone retains code 3). expected maps pane IDs to full
     prior identities; it is scoped to ONE socket, checked including its inode,
     server birth, worker, native PID/birth/executable/SID and pane ancestry.
-    reader is invoked twice and must not return a cached view. No process, argv
-    or transcript cache survives this call; results cannot be refreshed in place.
+    reader is invoked twice and must not return a cached view. The process census
+    is at most five seconds old; native identity, argv and transcript checks are
+    repeated on every call; results cannot be refreshed in place.
     """
     start, at = time.monotonic(), time.time()
     rows = reader()  # transport failure raises; callers retain ALL candidates
@@ -286,9 +293,11 @@ def observe(reader, expected=None):
 
 def cli(args):
     if args[:1] == ['--pids']:
+        live = args[1:2] == ['--live']
+        if live: args = [args[0], *args[2:]]
         if len(args) == 1: return 0
         try:
-            processes = Processes.collect()
+            processes = Processes.collect(live=live)
             for root in args[1:]:
                 pid = processes.claude(root)
                 if pid: print(root, pid)

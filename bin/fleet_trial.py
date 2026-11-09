@@ -30,10 +30,13 @@ def ps_rows():
     (a test seam) stands in for it: its output in the same columns,
     pid uid pcpu rss args."""
     cmd = os.environ.get("FLEET_TRIAL_PS_CMD")
-    argv = ["/bin/sh", "-c", cmd] if cmd else ["ps", "-A", "-ww", "-o", "pid=,uid=,pcpu=,rss=,args="]
     try:
-        out = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                             universal_newlines=True, timeout=30).stdout
+        if cmd:
+            out = subprocess.run(["/bin/sh", "-c", cmd], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                 universal_newlines=True, timeout=30).stdout
+        else:
+            from fleet_ps import rows as process_rows
+            out = process_rows("pid,uid,pcpu,rss,command")
     except (OSError, subprocess.SubprocessError):
         return []
     rows = []
@@ -64,6 +67,20 @@ def act(uid, action, rows=None):
     if uid == os.getuid() and os.environ.get("FLEET_NODE_TEST") != "1":
         raise ValueError("uid %d is the caller's own" % uid)
     pids = uid_pids(uid, rows)
+    # The census can be five seconds old. Verify current ownership in one
+    # PID-targeted query before a privileged signal/priority change.
+    if pids:
+        try:
+            if os.environ.get("FLEET_TRIAL_PS_CMD"):
+                owned = {r[0] for r in ps_rows() if r[1] == uid}
+            else:
+                current = subprocess.check_output(["ps", "-p", ",".join(map(str, pids)), "-o", "pid=,uid="],
+                                                  text=True, stderr=subprocess.DEVNULL, timeout=5)
+                owned = {int(f[0]) for line in current.splitlines() for f in [line.split()]
+                         if len(f) == 2 and f[0].isdigit() and f[1] == str(uid)}
+            pids = [pid for pid in pids if pid in owned]
+        except (OSError, subprocess.SubprocessError):
+            pids = []
     done = 0
     for pid in pids:
         try:

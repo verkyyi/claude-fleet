@@ -35,6 +35,7 @@ cfx_sandbox() {
   command -v python3 >/dev/null 2>&1 || { printf 'selftest: python3 not installed — SKIP\n' >&2; exit 0; }
   WORK=$(mktemp -d "${TMPDIR:-/tmp}/collect-$1.XXXXXX") || exit 2
   WORK=$(cd "$WORK" && pwd -P)
+  export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
   CFX_HANG="cfx-hang-$1-$$"; CFX_PIDS=''; export CFX_HANG
   trap '[ -n "$CFX_PIDS" ] && kill $CFX_PIDS 2>/dev/null; pkill -9 -f "$CFX_HANG" >/dev/null 2>&1; rm -rf "$WORK"' EXIT
   L="$WORK"; C="$WORK/.claude-dash"; G="$C/global"
@@ -46,6 +47,7 @@ cfx_sandbox() {
 }
 
 cfx_copy() {
+  cp "$BIN/fleet-job-lib.sh" "$BIN/fleet_tick_lock.py" "$BIN/fleet_ps.py" "$WORK/bin/"
   local f list="$*"
   [ -n "$list" ] || list=$CFX_FILES
   for f in $list; do

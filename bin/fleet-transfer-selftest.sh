@@ -38,7 +38,8 @@ export FLEET_CONF_DIR="$WORK/conf" FLEET_CC_SESSIONS_DIR="$WORK/sessions" FLEET_
 cp "$BIN/fleet_needs_detail.py" "$IBIN/fleet_needs_detail.py"
 # The canonical pane→Claude walk is imported by fleet-lib (#4474). Keep this
 # hand-built install complete; an absent module must not impersonate an exit.
-cp "$BIN/fleet_pending_tool.py" "$IBIN/"
+cp "$BIN/fleet_pending_tool.py" "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$IBIN/"
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 # The fake ccquota (issue #1667): the ONE registered Codex profile, its login
 # state read from a file; no file = no profiles, so every leg that does not set
 # one sees `target auth: unknown` and runs exactly as before.

@@ -67,6 +67,7 @@ CLEAN_LOG="$WORK/reaps"; : > "$CLEAN_LOG"
 # scripts next to them (both are invoked as "$BIN/<name>").
 cp "$SRC" "$WORK/bin/fleet-cleanup-daemon.sh"
 cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
+cp "$BIN/fleet-job-lib.sh" "$BIN/fleet_tick_lock.py" "$BIN/fleet_ps.py" "$WORK/bin/"
 chmod +x "$WORK/bin/fleet-cleanup-daemon.sh"
 
 # --- fake fleet-cleanup.sh: record the PR arg, emit a `cleaned:` token -----------

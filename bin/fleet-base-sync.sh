@@ -62,6 +62,8 @@
 set -uo pipefail
 
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-job-lib.sh" || exit 1
+fleet_job_guard base-sync "$@"
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------

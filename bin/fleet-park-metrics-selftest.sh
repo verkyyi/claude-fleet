@@ -40,12 +40,16 @@ case "$*" in
   *) exit 0 ;;
 esac
 SH
-cat > "$WORK/fake/ps" <<'SH'
-#!/bin/sh
-case "$*" in
- *rss=*) printf '100 1 1024 00:02 wrapper\n101 100 102400 00:10 claude\n200 1 1024 00:01 wrapper\n201 200 204800 00:00 claude\n300 1 4096 00:00 wrapper\n';;
-esac
-SH
+cat > "$WORK/fake/ps" <<'PYPS'
+#!/usr/bin/env python3
+print('PID PPID UID PGID STAT RSS %CPU ELAPSED TIME STARTED TTY'.ljust(90) + 'COMM'.ljust(20) + 'COMMAND')
+for pid, parent, rss, cpu, comm in [(100, 1, 1024, '00:02', 'wrapper'), (101, 100, 102400, '00:10', 'claude'),
+                                   (200, 1, 1024, '00:01', 'wrapper'), (201, 200, 204800, '00:00', 'claude'),
+                                   (300, 1, 4096, '00:00', 'wrapper')]:
+    prefix = f'{pid} {parent} 501 1 S {rss} 0.0 00:01 {cpu} Mon Nov  9 00:00:00 2026 ?? '
+    print(prefix.ljust(90) + comm.ljust(20) + comm)
+PYPS
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 chmod +x "$WORK/fake/"*
 printf 'FLEET_SESSION=census\n' > "$WORK/conf/fleets/census/conf"
 printf 'test-identity\n' > "$WORK/conf/fleets/census/identity"

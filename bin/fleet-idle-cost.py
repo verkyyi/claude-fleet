@@ -90,7 +90,8 @@ def who(cmd):
 
 
 class Sampler:
-    def __init__(self, exclude):
+    def __init__(self, exclude, cached=False):
+        self.cached = cached
         self.own = 0                 # processes this sampler started
         self.own_pids = set()
         self.exclude = set(exclude) | {os.getpid()}
@@ -119,7 +120,11 @@ class Sampler:
         return out
 
     def sample(self):
-        out = self.run(["ps", "-axo", "pid=,ppid=,uid=,etime=,time=,command="])
+        if self.cached:
+            from fleet_ps import rows
+            out = rows("pid,ppid,uid,etime,time,command")
+        else:
+            out = self.run(["ps", "-axo", "pid=,ppid=,uid=,etime=,time=,command="])
         if not out.strip():
             raise RuntimeError("process table unreadable")
         now = time.monotonic()
@@ -614,7 +619,7 @@ def main(argv):
     rp.add_argument("--top", type=int, default=10)
     a = ap.parse_args(argv)
     if a.cmd in {"idle", "snapshot"}:
-        s = Sampler([])
+        s = Sampler([], cached=True)
         guard = IdleGuard(a, s)
         if a.cmd == "snapshot":
             print(json.dumps(guard.snapshot(), separators=(",", ":")))

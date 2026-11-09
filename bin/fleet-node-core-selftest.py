@@ -85,7 +85,7 @@ REPO = os.path.dirname(BIN)
 sys.path.insert(0, BIN)
 import fleet_ed25519  # noqa: E402
 
-CORE_FILES = ("fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-node-supervisor.py",
+CORE_FILES = ("fleet_ps.py", "fleet_tick_lock.py", "fleet-node-core.py", "fleet_node_core.py", "fleet_ed25519.py", "fleet-node-supervisor.py",
               "fleet-node-update.py", "fleet_node_codesign.py", "fleet_admin_seat.py", "fleet-release-verify.py")
 SECRET = hashlib.sha256(b"fleet-node-core-selftest").digest()
 OTHER = hashlib.sha256(b"someone else").digest()

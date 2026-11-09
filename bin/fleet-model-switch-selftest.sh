@@ -50,6 +50,7 @@ has()  { case "$2" in *"$1"*) return 0 ;; esac; return 1; }
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fleet-model-switch-selftest.XXXXXX")" || exit 2
 export TMPDIR="$WORK"                                     # FLEET_C (the cap ledger)
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
 export FLEET_ACCOUNTS_DIR="$WORK/accounts"; mkdir -p "$FLEET_ACCOUNTS_DIR"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
@@ -331,7 +332,11 @@ tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state working 2>/dev/null
 tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state_ts "$((NOWS - 600))" 2>/dev/null
 painted "$W_OK" "$W_BUSY" "$W_STUCK" "$W_DONE"
 
-RUN() { FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$@" 2>&1; }
+RUN() {
+  # Advance the fixture's machine tick after creating/replacing panes.
+  python3 "$BIN/fleet_ps.py" --publish >/dev/null || st_fail "fixture census unavailable"
+  FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$@" 2>&1
+}
 
 if selftest_section 1; then
 # --- --dry-run touches nothing ------------------------------------------------
@@ -495,16 +500,16 @@ cat > "$WORK/ps-shim/ps" <<'SH'
 printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 Z Fri Oct 16 02:00:00 2026 claude\n910 1 Ss Fri Oct 16 02:00:00 2026 zsh\n911 910 S+ Fri Oct 16 02:00:00 2026 claude\n'
 SH
 chmod +x "$WORK/ps-shim/ps"
-zout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" fleet_pane_claude_pids 900 910 2>/dev/null)
+zout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" fleet_pane_claude_pids --live 900 910 2>/dev/null)
 st_count; [ "$zout" = "910 911" ] || st_fail "a zombie claude must not count; a live one must" "$zout"
 # Invalid bytes from an unrelated process must remain silent (#3129).
 cat > "$WORK/ps-shim/ps" <<'SH'
 #!/bin/sh
 printf '900 1 Ss Fri Oct 16 02:00:00 2026 zsh\n901 900 S+ Fri Oct 16 02:00:00 2026 claude\n950 1 S Fri Oct 16 02:00:00 2026 python3 \346\211\n'
 SH
-cerr=$( { FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids 900 >/dev/null; } 2>&1 )
+cerr=$( { FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 fleet_pane_claude_pids --live 900 >/dev/null; } 2>&1 )
 st_count; [ -z "$cerr" ] || st_fail "a non-UTF-8 argv must not make the walk write to stderr" "$cerr"
-cout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 fleet_pane_claude_pids 900 2>/dev/null)
+cout=$(FLEET_CLAUDE_COMM='' PATH="$WORK/ps-shim:$PATH" LC_ALL=en_US.UTF-8 fleet_pane_claude_pids --live 900 2>/dev/null)
 st_count; [ "$cout" = "900 901" ] || st_fail "a non-UTF-8 argv elsewhere must not change the walk" "$cout"
 
 # --- the breadcrumb a tree-kill leaves behind (issue #706) -------------------

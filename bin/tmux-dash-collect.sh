@@ -58,6 +58,8 @@
 # ⇒ it is killed (whole process tree) and superseded.
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
+. "$BIN/fleet-job-lib.sh" || exit 1
+fleet_job_guard collect "$@"
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------
 # collect.heartbeat below already proves PROGRESS (phase_ts advances at every
@@ -238,7 +240,7 @@ fi
 # `--issues` kick above bypasses this on purpose (short, single writer of its own
 # file, and the caller wants it NOW).
 kill_tree() {  # TERM <pid> and every descendant (children first is not needed: TERM, not KILL)
-  local ps p kids; ps=$(ps -axo pid=,ppid=) || { kill -TERM "$1" 2>/dev/null; return 0; }
+  local ps p kids; ps=$(fleet_ps pid=,ppid=) || { kill -TERM "$1" 2>/dev/null; return 0; }
   set -- "$1"
   while [ $# -gt 0 ]; do
     p=$1; shift

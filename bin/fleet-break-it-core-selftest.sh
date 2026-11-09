@@ -66,7 +66,7 @@ trap core_cleanup EXIT
 core_sandbox() {
   local sb="$1"
   mkdir -p "$sb/root/rt/bin" "$sb/db" "$sb/Users/alice"
-  for f in fleet-node-core.py fleet_node_core.py fleet_ed25519.py fleet-release-verify.py fleet-node-supervisor.py fleet-node-update.py \
+  for f in fleet_ps.py fleet_tick_lock.py fleet-node-core.py fleet_node_core.py fleet_ed25519.py fleet-release-verify.py fleet-node-supervisor.py fleet-node-update.py \
       fleet_node_codesign.py fleet_trial_egress.py; do
     cp "$BIN/$f" "$sb/root/rt/bin/"
   done

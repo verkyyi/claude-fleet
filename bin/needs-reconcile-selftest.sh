@@ -72,6 +72,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/nrec.XXXXXX")" || exit 2
 # is what the spinner's fleet_sockets enumerates — so the daemon under test can see
 # this fleet and ONLY this fleet.
 export TMUX_TMPDIR="$WORK/tmt"; mkdir -p "$TMUX_TMPDIR"
+export FLEET_PS_CACHE_DIR="$WORK/ps-cache"
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR"
 printf 'FLEET_REPO="acme/fleetR"\n' > "$FLEET_CONF_DIR/fleetR.conf"
 # The two lookup trees the resolution chain walks, pointed at scratch (both overrides
@@ -138,6 +139,7 @@ mkwin() {
     cmd="while :; do sleep 300; done"
   fi
   tf new-window -d -n "$name" "$cmd" 2>/dev/null
+  rm -f "$FLEET_PS_CACHE_DIR"/*.json  # a new fixture needs a new census
   tf set-window-option -t "$name" @claude_state "$state" 2>/dev/null
   tf set-window-option -t "$name" @claude_needs "$sub" 2>/dev/null
   tf set-window-option -t "$name" @claude_state_ts "$ts" 2>/dev/null

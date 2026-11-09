@@ -1555,8 +1555,8 @@ class Cleaner:
         """{pid: (ppid, rss KB)} for every process — one ps."""
         out = {}
         try:
-            text = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True,
-                                  text=True, timeout=15).stdout
+            from fleet_ps import rows
+            text = rows("pid,ppid,rss")
         except (OSError, subprocess.SubprocessError):
             return out
         for line in text.splitlines():

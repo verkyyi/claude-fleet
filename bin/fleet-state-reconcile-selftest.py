@@ -26,6 +26,8 @@ class ReconcileTest(unittest.TestCase):
         cls.socket = 'reconcile-test-' + str(os.getpid())
         cls.bin = cls.root / 'bin'; cls.bin.mkdir()
         shutil.copyfile(BIN / 'fleet-state-reconcile.py', cls.bin / 'fleet-state-reconcile.py')
+        for name in ('fleet_ps.py', 'fleet_tick_lock.py'):
+            shutil.copyfile(BIN / name, cls.bin / name)
         shutil.copyfile(BIN / 'fleet-input.py', cls.bin / 'fleet-input.py')
         # The retired screen classifier (issue #2543): a planted copy proves the
         # reconcile no longer hands a demoted window to it.
@@ -67,6 +69,10 @@ class ReconcileTest(unittest.TestCase):
         for f in self.registry.glob('*'): f.unlink()
         for f in (self.root / 'classify.log', self.log): f.unlink(missing_ok=True)
         shutil.rmtree(self.cache, ignore_errors=True)
+        self.ps_cache = self.root / ('ps-cache-' + self._testMethodName)
+        from unittest.mock import patch
+        cache_env = patch.dict(os.environ, FLEET_PS_CACHE_DIR=str(self.ps_cache))
+        cache_env.start(); self.addCleanup(cache_env.stop)
         self.windows = []
 
     def tearDown(self):
@@ -78,7 +84,8 @@ class ReconcileTest(unittest.TestCase):
 
     def run_cli(self, *extra):
         p = subprocess.run(['python3', str(self.bin / 'fleet-state-reconcile.py'), *self.argv(*extra)],
-                           text=True, capture_output=True, timeout=60)
+                           text=True, capture_output=True, timeout=60,
+                           env=dict(os.environ, FLEET_PS_CACHE_DIR=str(self.ps_cache)))
         self.assertEqual(p.returncode, 0, p.stderr)
         return p
 
@@ -153,6 +160,11 @@ class ReconcileTest(unittest.TestCase):
         self.assertEqual(self.state(wid)[0], 'done'); self.assertIn('exited', self.log.read_text())
         wid, pane = self.window(age=300)
         self.record(wid, pane, status='idle', started=978307200)   # our pid, a start from 2001
+        self.run_cli()
+        self.assertEqual(self.state(wid)[0], 'working')  # newer than the census: unknown
+        for sample in self.ps_cache.glob('*.json'):
+            data = json.loads(sample.read_text()); data['at'] = 0
+            sample.write_text(json.dumps(data))
         self.run_cli()
         self.assertEqual(self.state(wid)[0], 'done')
         wid, pane = self.window(age=10)                                            # too fresh to call exited

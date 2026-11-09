@@ -49,6 +49,7 @@ WINDOWS="$WORK/windows";  : > "$WINDOWS"
 # scripts next to them (both invoked as "$BIN/<name>").
 cp "$SRC" "$WORK/bin/fleet-ledger-watch.sh"
 cp "$BIN/fleet-lib.sh" "$WORK/bin/fleet-lib.sh"; cp "$BIN/fleet-client-core.sh" "$WORK/bin/fleet-client-core.sh"
+cp "$BIN/fleet-job-lib.sh" "$BIN/fleet_tick_lock.py" "$BIN/fleet_ps.py" "$WORK/bin/"
 chmod +x "$WORK/bin/fleet-ledger-watch.sh"
 
 # --- fake fleet-history.sh: log every record-closed --key, emit a token ----------

@@ -102,7 +102,13 @@
 #                           issue #1299; bin/fleet-transcript-archive.sh has the
 #                           rules and its own knobs (FLEET_TRANSCRIPT_KEEP_DAYS, …)
 set -uo pipefail
-BIN="$(cd "$(dirname "$0")" && pwd)"
+BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$BIN/fleet-job-lib.sh" || exit 1
+case "${1:-}" in
+  --watch) fleet_job_guard diskguard "$@" ;;
+  --orphan-watch|--tree-watch|--listen-watch|--brew-watch)
+    _job=${1#--}; fleet_job_guard "diskguard-${_job%-watch}" "$@" ;;
+esac
 # shellcheck source=/dev/null
 [ -f "$BIN/../fleet.conf" ] && . "$BIN/../fleet.conf"
 # --- scheduling heartbeat (issue #639) ---------------------------------------
@@ -240,7 +246,7 @@ capture() {
     done
     echo
     echo "## top processes by RSS"
-    ps -Ao pid,rss,comm 2>/dev/null | sort -k2,2nr | head -15 \
+    fleet_ps pid,rss,comm 2>/dev/null | sort -k2,2nr | head -15 \
       | awk '{ printf "%-8s %8.1fMB  %s\n", $1, $2/1024, $3 }'
   } > "$inc" 2>/dev/null
   printf '%s' "$inc"
@@ -255,8 +261,8 @@ capture() {
 # killed. Emits "pid|pcpu|comm" lines. Split out so the selftest can drive
 # cpu_sustain() with synthetic input (real CPU load is not hermetic).
 cpu_candidates() {
-  local pct="$1" me; me="$(id -un 2>/dev/null)"
-  ps -Ao pid=,user=,pcpu=,tty=,comm= 2>/dev/null | awk -v me="$me" -v pct="$pct" '
+  local pct="$1" me; me="$(id -u 2>/dev/null)"
+  fleet_ps pid=,uid=,pcpu=,tty=,comm= 2>/dev/null | awk -v me="$me" -v pct="$pct" '
     { if ($2!=me) next;
       if (($3+0) < pct) next;
       t=$4; if (t!="?" && t!="??" && t!="-") next;         # has a tty → skip
@@ -305,7 +311,7 @@ capture_cpu() {   # $1=runaways $2=pct $3=secs $4=action $5=killed-pids
     done
     echo
     echo "## top processes by %CPU"
-    ps -Ao pid,pcpu,tty,comm 2>/dev/null | sort -k2,2nr | head -15
+    fleet_ps pid,pcpu,tty,comm 2>/dev/null | sort -k2,2nr | head -15
   } > "$inc" 2>/dev/null
   printf '%s' "$inc"
 }
@@ -378,16 +384,12 @@ tmux server. Action: \`${CPU_ACTION}\`${killed:+ — killed$killed}. Forensics:
 #
 # Emits "pid|pcpu|comm" — the same shape cpu_sustain() consumes, so the sustain
 # bookkeeping is shared rather than reimplemented.
-ps_all() {   # full process table, timeboxed — the machine this fires on is slow
-  if command -v perl >/dev/null 2>&1; then
-    tmo 15 ps -Ao pid=,ppid=,user=,pcpu=,command= 2>/dev/null
-  else
-    ps -Ao pid=,ppid=,user=,pcpu=,command= 2>/dev/null
-  fi
+ps_all() {   # shared machine census; refresh has its own bounded deadline
+  fleet_ps pid=,ppid=,uid=,pcpu=,command= 2>/dev/null
 }
 
 orphan_candidates() {   # $1=pct → "pid|pcpu|comm" lines
-  local pct="$1" me; me="$(id -un 2>/dev/null)"
+  local pct="$1" me; me="$(id -u 2>/dev/null)"
   [ "${FLEET_ORPHAN_ALL_USERS:-0}" = 1 ] && me='*'
   ps_all | awk -v me="$me" -v pct="$pct" -v re="$ORPHAN_RE" '
     { if (me!="*" && $3!=me) next;                         # ours only (or every login)
@@ -430,7 +432,7 @@ capture_orphan() {   # $1=runaways(pid\tpcpu\tcomm) $2=action $3=killed-pids
     done
     echo
     echo "## top processes by %CPU"
-    ps -Ao pid,ppid,pcpu,etime,comm 2>/dev/null | sort -k3,3nr | head -15
+    fleet_ps pid,ppid,pcpu,etime,comm 2>/dev/null | sort -k3,3nr | head -15
   } > "$inc" 2>/dev/null
   printf '%s' "$inc"
 }
@@ -665,7 +667,7 @@ cache_watch() {
   [ $((nowt - last)) -ge 21600 ] || return 0
   printf '%s\n' "$nowt" > "$st" 2>/dev/null
   ( cd / && nohup sh -c 'printf "%s free=%sG " "$(date "+%Y-%m-%dT%H:%M:%S")" "$1"; python3 "$2" --run' _ \
-      "$free" "$BIN/fleet-cache-reclaim.py" >> "$GDIR/cache-reclaim.log" 2>&1 </dev/null & ) >/dev/null 2>&1
+      "$free" "$BIN/fleet-cache-reclaim.py" 198<&- >> "$GDIR/cache-reclaim.log" 2>&1 </dev/null & ) >/dev/null 2>&1
   return 0
 }
 transcript_watch() {
@@ -708,7 +710,7 @@ machine_load() {   # 1-minute load average, or '' if unreadable
 # so the watchdog and the doctor share one definition of "the number".
 fseventsd_probe() {
   [ "$(uname -s 2>/dev/null)" = Darwin ] || return 0
-  ps -axo rss=,pcpu=,etime=,comm= 2>/dev/null | awk '
+  fleet_ps rss=,pcpu=,etime=,comm= 2>/dev/null | awk '
     { c = $4; for (i = 5; i <= NF; i++) c = c " " $i }
     c == "fseventsd" || c ~ /\/fseventsd$/ {
       if (!seen || $1+0 > best) { best = $1+0; cpu = $2; et = $3; seen = 1 }
@@ -757,12 +759,12 @@ restarts it immediately. Reported once a day; the fleet never kills it."
 # takes it ONCE, right before them, into the login's own diskguard dir (0600,
 # replaced atomically, removed by ps_table_done); _FLEET_PS_TABLE is a plain shell
 # variable, never exported, so nothing this tick starts reads a table it did not
-# take. No table (ps failed) ⇒ each reader runs its own `ps` as before.
+# take. No table (refresh busy/failed) ⇒ readers use the shared cache or return unavailable.
 ps_table() {
   _FLEET_PS_TABLE=
   mkdir -p "$GDIR" 2>/dev/null || return 0
   local t="$GDIR/ps-table" tmp="$GDIR/ps-table.$$"
-  if ( umask 077; ps -Ao pid=,ppid=,uid=,rss=,etime=,command= > "$tmp" 2>/dev/null ) \
+  if ( umask 077; fleet_ps pid=,ppid=,uid=,rss=,etime=,command= > "$tmp" 2>/dev/null ) \
      && [ -s "$tmp" ] && mv -f "$tmp" "$t" 2>/dev/null; then
     _FLEET_PS_TABLE="$t"
   else

@@ -16,7 +16,7 @@ spec.loader.exec_module(budget)
 startup = [(0, 1, 0, 'spinner', 'tmux-spinner.sh'),
            (.01, 2, 1, 'tmux', '-L test -C attach-session'),
            (.02, 3, 1, 'bash', '/tmp/fixture/fleet-client-where.sh --json')]
-ps_args = '-axo pid=,ppid=,stat=,lstart=,comm='
+ps_args = '-axww -o pid,ppid,uid,pgid,stat,rss,pcpu,etime,time,lstart,tty -o comm=COMM____ -o command=COMMAND'
 fresh = [(20.1, 4, 1, 'ps', ps_args), (40.1, 5, 1, 'ps', ps_args)]
 checks = {'needs_check': [20, 40]}
 assert budget.due_times(20, 60) == [20, 40]

@@ -39,6 +39,7 @@ pass=0
 
 mkdir -p "$WORK/bin" "$WORK/fakebin" "$WORK/conf" "$WORK/logs"
 ln -s "$SRC" "$WORK/bin/worktree-autoclean.sh"
+for f in fleet-job-lib.sh fleet_tick_lock.py fleet_ps.py; do ln -s "$BIN/$f" "$WORK/bin/$f"; done
 ln -s "$LIB" "$WORK/bin/fleet-lib.sh"
 ln -s "$BIN/fleet-reap-live.py" "$WORK/bin/fleet-reap-live.py"
 ISSUES_FILE="$WORK/issues"; PATHS_FILE="$WORK/paths"; NOTIFY_LOG="$WORK/notify"

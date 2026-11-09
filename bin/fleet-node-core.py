@@ -919,7 +919,7 @@ class Core(object):
                 sup.service_logdir(ent)
                 e = dict(e, **sup.service_creds(sup.Paths(), ent)[0])
             fh = self.logfile(a["login"])
-            p = subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=fh,
+            p = subprocess.Popen(sup.periodic_command(ent), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=fh,
                                  env=e, start_new_session=True, close_fds=True,
                                  **sup.demote_kw(ent["account"], ent["uid"], ent["gid"], ent["home"]))
             fh.close()
@@ -1113,13 +1113,20 @@ class Core(object):
         # Mine: the seat's stand-in follows it (its pid, then its exit) instead of
         # being refused — refused, the stand-in exited rc 1 once a minute for days
         # and the seat had nothing to stop when the job's code changed (task APVZ).
+        if mine and task:
+            self.log(self.tl.uid, "machine", a, "skip: busy %s pid %d" % (a["job"], mine.pid))
+            self.send(conn, {"ok": True, "pid": mine.pid, "skipped": True})
+            self.send(conn, {"exit": 0})
+            return None
         if mine:
             self.log(self.tl.uid, "machine", a, "following pid %d" % mine.pid)
             self.send(conn, {"ok": True, "pid": mine.pid, "following": True})
             rc = mine.wait()
             self.send(conn, {"exit": rc})
             return None
-        left = self.strays(ent)
+        # Periodic jobs serialize in their exec wrapper, including a previous
+        # core's live run. Never scan/kill that run just to start the next tick.
+        left = [] if task else self.strays(ent)
         if left:
             # An orphan (PPID 1) no book of this core holds is what an earlier core
             # ran: a core restart — every release switch — forgot it, its stand-in
@@ -1146,7 +1153,7 @@ class Core(object):
             if old is not None and old.poll() is None:
                 return {"error": "running", "pid": old.pid}
             fh = self.machine_log(a["job"], task)
-            p = subprocess.Popen(ent["cmd"], stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
+            p = subprocess.Popen(sup.periodic_command(dict(ent, periodic=task)), stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
                                  env=sup.machine_env(sup.Paths(), ent.get("env")), start_new_session=True,
                                  close_fds=True)
             fh.close()

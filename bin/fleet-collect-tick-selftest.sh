@@ -131,14 +131,14 @@ case "$1" in
 esac
 FAKE
   cat > "$WORK/fakepath/ps" <<'FAKE'
-#!/bin/sh
-printf '%s\n' "$*" >> "$PSLOG"
-[ "$*" = '-axo pid=,ppid=,stat=,lstart=,comm=' ] || exit 1
-for pane in 101 102 103 104 105 106 107 108 109; do   # state + a 24-char C-locale birth
-  agent=claude; [ "$pane" != 103 ] || agent=codex
-  printf '%s 1 Ss Thu Oct 15 10:00:00 2026 zsh\n' "$pane"
-  printf '%s %s S Thu Oct 15 10:00:00 2026 %s\n' "$((pane + 100))" "$pane" "$agent"
-done
+#!/usr/bin/env python3
+import os, sys
+with open(os.environ['PSLOG'], 'a') as log: log.write(' '.join(sys.argv[1:]) + '\n')
+print('PID PPID UID PGID STAT RSS %CPU ELAPSED TIME STARTED TTY'.ljust(90) + 'COMM'.ljust(20) + 'COMMAND')
+for pane in range(101, 110):
+    for pid, parent, comm in [(pane, 1, 'zsh'), (pane + 100, pane, 'codex' if pane == 103 else 'claude')]:
+        prefix = f'{pid} {parent} 501 1 S 100 0.0 00:01 00:00 Thu Oct 15 10:00:00 2026 ?? '
+        print(prefix.ljust(90) + comm.ljust(20) + comm)
 FAKE
   cat > "$WORK/fakepath/token-probe" <<'FAKE'
 #!/bin/sh
@@ -158,7 +158,8 @@ FAKE
   st_has 'an empty stamp is healed' "$tl" '-L fixture set-window-option -t %2 @cc_account acctB'
   st_has 'a quiet pane stamp is healed' "$tl" '-L fixture set-window-option -t %6 @cc_account acctA'
   st_hasnt 'a correct stamp writes nothing' "$tl" 'set-window-option -t %7'
-  st_eq 'one canonical process walk' '-axo pid=,ppid=,stat=,lstart=,comm=' "$(cat "$PSLOG")"
+  st_eq 'one canonical process walk' 1 "$(wc -l < "$PSLOG" | tr -d ' ')"
+  st_has 'numeric snapshot format' "$(cat "$PSLOG")" '-axww -o pid,ppid,uid,'
   ! grep -Eq 'token-A|token-B|unregistered-token' "$WORK/out" "$WORK/err" "$TMLOG" "$ACLOG" || st_fail 'a token leaked to output'
   : > "$TMLOG"; : > "$PSLOG"
   TMUX=fake TMUX_PANE=%1 bash "$WORK/bin/fleet-context.sh" --json \
@@ -167,8 +168,7 @@ FAKE
   case "$out" in *'account   acctA'*'process token'*) ;; *) st_fail 'context text lacks account provenance' "$out" ;; esac
   grep -q set-window-option "$TMLOG" && st_fail 'a context query mutated a stamp'
   st_eq 'context quiet verdict' OK "$(TMUX=fake TMUX_PANE=%1 bash "$WORK/bin/fleet-context.sh" -q)"
-  st_eq 'JSON/text read one batch each; quiet none' 2 "$(wc -l < "$PSLOG" | tr -d ' ')"
-  st_eq 'context process query format' '-axo pid=,ppid=,stat=,lstart=,comm=' "$(sort -u "$PSLOG")"
+  st_eq 'JSON/text share the fresh snapshot; quiet none' 0 "$(wc -l < "$PSLOG" | tr -d ' ')"
   # Both production token readers; no host credentials are inspected.
   python3 - "$BIN/fleet-account-truth.py" "$WORK/accounts" <<'PY' || st_fail 'production token reader contracts failed'
 import importlib.util, os, pathlib, subprocess, sys

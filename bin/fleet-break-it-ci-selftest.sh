@@ -776,7 +776,7 @@ drill_train_hub_backwards() {
   [ "$rc" = 1 ] && ! printf '%s' "$out" | grep -q '^paused=true$' || { WHY="an unreadable pause switch did not go red: $rc $out"; rm -rf "$d"; return 1; }
   # a machine only moves forward (#4671): it runs V2 (seq 5), the target is V1 (seq 4)
   sb="$d/back"; mkdir -p "$sb/root" "$sb/rel" "$sb/db" "$sb/Users/alice" "$sb/LaunchDaemons" "$sb/bin"
-  cp "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
+  cp "$BIN/fleet_ps.py" "$BIN/fleet_tick_lock.py" "$BIN/fleet-node-update.py" "$BIN/fleet-node-supervisor.py" "$sb/bin/"
   u="$sb/bin/fleet-node-update.py"; tk="$BIN/fleet-node-update-selftest.py"
   python3 "$tk" --fake-ccquota "$sb/ccquota" || { WHY="no fake ccquota"; rm -rf "$d"; return 1; }
   V1=$(printf '%040d' 0 | tr 0 1); V2=$(printf '%040d' 0 | tr 0 2)

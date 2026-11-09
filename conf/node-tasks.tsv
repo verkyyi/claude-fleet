@@ -59,3 +59,4 @@ credsep-enforce	machine	machine	every human fleet login credential-separated, by
 trial-guard	machine	machine	every trial login held to fleet.trial.limits (renice → pause, miner / scan paused), by root (WACK C4)
 credential-pool	machine	machine	the subscription pool sync (an image-updated node)
 machine-reading	machine	machine	memory pressure, total memory and load per core, once every 15 s → cluster/machine.json (in a cluster: fleet-ops reads each user pod against its own limits and the hub pushes it into the pod login's $FLEET_CONF_DIR/cluster/, #3734)
+process-snapshot	machine	machine	one numeric-UID process census every five seconds, shared by every login
