@@ -49,6 +49,7 @@ ci-runner	machine	machine	the test runner
 sshd	machine	machine	sshd on a Linux node
 diskguard	machine	machine	disk, CPU and orphan watch for the whole machine
 memguard	machine	machine	memory spike / orphan watch for every process on the machine
+fseventsd	machine	machine	macOS fseventsd RSS / attributed swap watchdog, one root tick and cooldown for every login
 orphans	machine	machine	the orphaned-runaway watchdog, every login at once
 shared-dirs	machine	machine	the shared dirs (heavy slots, session counts) kept root's
 spotlight	machine	machine	Spotlight off on a managed Mac
