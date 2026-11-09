@@ -94,7 +94,7 @@ def registry_source(a):
     """The source a session registry names (transfer_source=registry): the live
     agent process under the pane, its registry record, its one projects transcript."""
     lib = str(Path(__file__).with_name('fleet-lib.sh'))
-    found = subprocess.run(['bash', '-c', '. "$1"; p=$(fleet_pane_claude_pid "$2" "$3" --live) || exit 3; '
+    found = subprocess.run(['bash', '-c', '. "$1"; p=$(fleet_pane_claude_pid "$2" "$3") || exit 3; '
                             'r=$(fleet_cc_session_json "$p") || r=; printf "%s\\n%s" "$p" "$r"',
                             'fleet-source', lib, a.pane, a.socket], capture_output=True, text=True)
     if found.returncode == 3 or not found.stdout.strip():
@@ -708,7 +708,7 @@ def target_ready(bundle, socket_label, pane):
         sid, pid = identity['session_id'], identity['owner']
     else:
         lib = str(Path(__file__).with_name('fleet-lib.sh'))
-        result = run('bash', '-c', '. "$1"; p=$(fleet_pane_claude_pid "$2" "$3" --live) || exit 1; r=$(fleet_cc_session_json "$p"); printf "%s\\n%s" "$p" "$r"',
+        result = run('bash', '-c', '. "$1"; p=$(fleet_pane_claude_pid "$2" "$3") || exit 1; r=$(fleet_cc_session_json "$p"); printf "%s\\n%s" "$p" "$r"',
                      'fleet-target', lib, pane, socket_label).splitlines()
         pid, registry = result
         identity = json.loads(Path(registry).read_text())

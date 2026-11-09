@@ -139,12 +139,13 @@ mkwin() {
     cmd="while :; do sleep 300; done"
   fi
   tf new-window -d -n "$name" "$cmd" 2>/dev/null
+  rm -f "$FLEET_PS_CACHE_DIR"/*.json  # a new fixture needs a new census
   tf set-window-option -t "$name" @claude_state "$state" 2>/dev/null
   tf set-window-option -t "$name" @claude_needs "$sub" 2>/dev/null
   tf set-window-option -t "$name" @claude_state_ts "$ts" 2>/dev/null
   [ "$hasc" = yes ] || return 0
   # shellcheck source=/dev/null
-  pid=$(. "$BIN/fleet-lib.sh" 2>/dev/null; fleet_pane_claude_pid "$name" fleetR --live 2>/dev/null)
+  pid=$(. "$BIN/fleet-lib.sh" 2>/dev/null; fleet_pane_claude_pid "$name" fleetR 2>/dev/null)
   [ -n "$pid" ] || { st_miss "fixture: no fake claude resolved under window $name"; return 0; }
   [ -n "$tool" ] || return 0                       # registered=no: the "unknown" case
   sid="sid-$name"

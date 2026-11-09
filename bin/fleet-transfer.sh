@@ -815,7 +815,7 @@ if [ -n "$QUOTA_LOOP_REPLACEMENT" ]; then
 fi
 python3 "$HELPER" state "$BUNDLE" source_exited || die 'cannot record source exit'
 [ "$(opt '#{window_id}')" = "$WIN" ] || die 'source window was closed by an older hook; use the saved handoff to recover'
-fleet_pane_claude_pid "$PANE" "$SOCK" --live >/dev/null 2>&1 && die 'another Claude appeared; leaving the pane alone'
+fleet_pane_claude_pid "$PANE" "$SOCK" >/dev/null 2>&1 && die 'another Claude appeared; leaving the pane alone'
 if [ "$(opt '#{pane_dead}')" != 1 ]; then
   # The fleet runner execs the shell after the agent. Allow that brief transition.
   SHELL_OK=0

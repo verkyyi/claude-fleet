@@ -106,8 +106,12 @@ TMUXV="$SOCK,1,0"
 opt()  { tf display-message -p -t "$1" "#{$2}"; }
 hasopt() { tf show-options -w -t "$1" 2>/dev/null | grep -q "^$2 "; }
 pane() { tf display-message -p -t "$1" '#{pane_id}'; }
+census_tick() { python3 "$BIN/fleet_ps.py" --publish >/dev/null || st_fail "fixture census unavailable"; }
 stop() {  # <win> [payload] [extra args] — the Stop hook, as Claude Code runs it
   local p; p=$(pane "$1")
+  # Fixture transitions are immediate; publish the next machine tick before
+  # asserting its Stop-hook classification (cache lifetime is tested separately).
+  census_tick
   printf '%s' "${2:-}" | env TMUX="$TMUXV" TMUX_PANE="$p" sh "$BIN/set-claude-state.sh" ${3:-} 'done' >/dev/null 2>&1
 }
 reap() { python3 "$BIN/fleet-reap-live.py" "$1" --socket-name "$SESS"; }
@@ -306,6 +310,7 @@ for _ in $(seq 1 50); do
   [ -s "$WORK/tw.pid" ] && pgrep -f "fbin/fleet-mcp.py --probe" >/dev/null 2>&1 && break
   sleep 0.1
 done
+census_tick
 fleet_window_tool_busy "$SESS" "$TW"; st_eq "F: a server with a live call is busy" 0 $?
 fleet_window_tool_busy "$SESS" "$TI"; st_eq "F: an idle server is not a call" 1 $?
 fleet_window_tool_busy "$SESS" "$TP"; st_eq "F: a server probing a new version is not" 1 $?
@@ -335,6 +340,7 @@ stop "$TW"
 st_eq "F: still in flight → still looping" "looping tool" "$(opt "$TW" @claude_state) $(opt "$TW" @claude_wait)"
 kill "$(cat "$WORK/tw.pid")" 2>/dev/null
 for _ in $(seq 1 50); do kill -0 "$(cat "$WORK/tw.pid")" 2>/dev/null || break; sleep 0.1; done
+census_tick
 out=$(fleet_window_reeval "$SESS" "$TW"); rc=$?
 st_eq "F: the call returned → the re-ask writes done" "0 looping (tool) -> done" "$rc $out"
 hasopt "$TW" @claude_wait && st_fail "F: the reason goes with it" "$(tf show-options -w -t "$TW")"
