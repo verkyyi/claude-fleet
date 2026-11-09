@@ -3104,7 +3104,7 @@ class Supervisor(object):
             # on request only (issue #3561): a request newer than the last one run
             w = want_stamp(tk["want"])
             return w > 0 and w != ts.get("want_seen")
-        since = t - (ts.get("last_start") or 0)
+        since = t - max(ts.get("last_start") or 0, ts.get("last_skip") or 0)
         if since >= self.task_every(tk, t):
             return True
         # A new stable pushed by the hub (issue #3146) runs the update now; its
@@ -3143,14 +3143,15 @@ class Supervisor(object):
                 self.dirty = True
             return False
         if self.task_orphan(tk, ts, t):
-            ts.update(result="busy", skipped=(ts.get("skipped") or 0) + 1)
+            print("fleet-job: skip: busy %s (previous supervisor)" % name, file=sys.stderr)
+            ts.update(result="busy", last_skip=t, skipped=(ts.get("skipped") or 0) + 1)
             self.dirty = True
             return False
         lpath = os.path.join(self.p.locks, name.replace("/", "@") + ".lock")
         lf = acquire_tick_lock(lpath)
         if lf is None:
             print("fleet-job: skip: busy %s" % name, file=sys.stderr)
-            ts.update(result="busy", skipped=(ts.get("skipped") or 0) + 1)
+            ts.update(result="busy", last_skip=t, skipped=(ts.get("skipped") or 0) + 1)
             self.dirty = True
             return False
         if tk.get("account"):

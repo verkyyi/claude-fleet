@@ -181,6 +181,22 @@ class Periodic(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0)
         self.assertEqual((self.root / 'scans').read_text().splitlines(), ['scan'])
 
+    def test_privileged_trial_action_rechecks_current_uid(self):
+        from unittest.mock import patch
+        import fleet_trial
+        with patch.dict(os.environ, FLEET_TRIAL_PS_CMD=''), \
+                patch.object(fleet_trial.subprocess, 'check_output', return_value='456 9002\n'), \
+                patch.object(fleet_trial.os, 'kill') as signal:
+            result = fleet_trial.act(9001, 'pause', [(456, 9001, 99, 100, 'worker', 'worker')])
+            self.assertEqual(result['done'], 0)
+            signal.assert_not_called()
+        with patch.dict(os.environ, FLEET_TRIAL_PS_CMD='fixture'), \
+                patch.object(fleet_trial, 'ps_rows', return_value=[(456, 9001, 99, 100, 'worker', 'worker')]), \
+                patch.object(fleet_trial.os, 'kill') as signal:
+            result = fleet_trial.act(9001, 'pause', [(456, 9001, 99, 100, 'worker', 'worker')])
+            self.assertEqual(result['done'], 1)
+            signal.assert_called_once()
+
     def test_entrypoints(self):
         scripts = ['fleet-control-read.sh', 'fleet-cleanup-daemon.sh', 'fleet-reconcile-tick.sh', 'fleet-diskguard.sh',
                    'fleet-memguard.sh', 'tmux-dash-collect.sh', 'fleet-base-sync.sh',
