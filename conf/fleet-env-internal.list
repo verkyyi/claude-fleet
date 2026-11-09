@@ -927,3 +927,5 @@ FLEET_TASK_CONTINUATION_STOP       handoff: canonical never-claimed stop ID; mut
 FLEET_AWS                          seam: the aws command fleet-hub-aws-deploy.sh runs (default aws; a fixture in its drill)
 FLEET_SSM_TIMEOUT                  knob: seconds fleet-hub-aws-deploy.sh waits for the box's SSM command before cancelling it red (default 1800)
 FLEET_SSM_POLL                     knob: seconds between fleet-hub-aws-deploy.sh's SSM status polls (default 5)
+
+FLEET_NODE                         handoff: machine supervisor/core sets 1 for root tasks; diskguard leaves fseventsd alerts to the machine watchdog

@@ -1961,12 +1961,14 @@ fsev=''
 if [ -n "$fsev" ]; then
   fmb=$(printf '%s' "$fsev" | cut -f1); fcpu=$(printf '%s' "$fsev" | cut -f2)
   fet=$(printf '%s' "$fsev" | cut -f3)
+  fswap=$(sysctl -n vm.swapusage 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="used" && $(i+1)=="=") {print $(i+2); exit}}')
+  [ -n "$fswap" ] || fswap=unknown
   fwmb="${FLEET_FSEVENTSD_WARN_MB:-$(_gconf_val FLEET_FSEVENTSD_WARN_MB)}"
   case "$fwmb" in ''|*[!0-9]*) fwmb=1024 ;; esac
   if awk -v m="$fmb" -v c="$fcpu" -v w="$fwmb" 'BEGIN{ exit !((m+0 >= w+0) || (c+0 >= 90)) }'; then
-    warn machine "fseventsd at ${fmb} MB RSS, ${fcpu}% CPU, up ${fet} — over the ${fwmb} MB / 90% line; new sessions stall at spawn while it is bloated (issue #889). Fix: \`sudo killall fseventsd\` — launchd restarts it at once"
+    warn machine "fseventsd at ${fmb} MB RSS, ${fcpu}% CPU, up ${fet}, system swap ${fswap} — over the ${fwmb} MB / 90% line; new sessions stall at spawn while it is bloated (issue #889). managed nodes restart it automatically at the watchdog limit; otherwise \`sudo killall fseventsd\` lets launchd restart it"
   else
-    pass machine "fseventsd ${fmb} MB RSS, ${fcpu}% CPU, up ${fet}"
+    pass machine "fseventsd ${fmb} MB RSS, ${fcpu}% CPU, up ${fet}, system swap ${fswap}"
   fi
 fi
 # 1b. A Homebrew keg the other logins cannot read (issue #2283): brew pours with

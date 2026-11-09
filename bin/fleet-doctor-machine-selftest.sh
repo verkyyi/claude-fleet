@@ -39,6 +39,7 @@ chmod +x "$WORK/bin/"*.sh
 cat > "$WORK/fakepath/sysctl" <<EOF
 #!/bin/sh
 case "\$*" in
+  *vm.swapusage*) echo "total = 32768.00M used = 24576.00M free = 8192.00M (encrypted)" ;;
   *hw.ncpu*)    cat "$WORK/cores" ;;
   *vm.loadavg*) [ -s "$WORK/load" ] && printf '{ %s 1.00 1.00 }\n' "\$(cat "$WORK/load")"
                 # an empty load file = the machine would not answer (the #697 symptom)
@@ -210,6 +211,7 @@ printf '  3040000  12.0 3-02:11:40 /System/Library/Frameworks/CoreServices.frame
 out="$(run_doctor)"; l="$(fsline "$out")"
 has "WARN" "$l" "5b: a 2.9 GB fseventsd must WARN"
 has "2968 MB" "$l" "5b: the WARN must state the RSS"
+has "system swap 24576.00M" "$l" "5b: the machine line must expose system swap beside RSS"
 has "sudo killall fseventsd" "$l" "5b: the WARN must name the fix"
 has "launchd" "$l" "5b: the WARN must say launchd brings it back (so the fix is not scary)"
 survived "$out" || fail "5b: the doctor did not survive the fseventsd WARN" "$l"
@@ -323,6 +325,8 @@ fwatch() {
 }
 : > "$WORK/stderr"
 printf '  3040000  12.0 3-02:11:40 /usr/sbin/fseventsd\n' > "$WORK/fsev"
+FLEET_NODE=1 fwatch
+[ ! -s "$WORK/notified" ] || fail "8: root machine watchdog owns the restart alert"
 fwatch; fwatch
 CHECKS=$((CHECKS + 1))
 [ "$(grep -c '^---$' "$WORK/notified")" = 1 ] || fail "8a: two ticks over the line must remind exactly ONCE" "$(cat "$WORK/notified")"

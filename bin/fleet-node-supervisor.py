@@ -857,6 +857,11 @@ def default_table(paths):
             {"name": "memguard", "every": 10,
              "cmd": ["/bin/bash", os.path.join(rt_bin, "fleet-memguard.sh"), "--once"],
              "core": {"op": "memguard", "args": {"level": "once"}}},
+            # macOS file-event leak: one machine clock, even while idle. The
+            # seated supervisor uses the core's fixed `machine` job table.
+            *([{"name": "fseventsd", "every": 60, "idle": False, "timeout": 90,
+                "cmd": ["/usr/bin/python3", "-I", os.path.join(rt_bin, "fleet-fseventsd.py"), "tick"],
+                "env": {"FLEET_NODE_STATE": paths.state}}] if MAC else []),
             # Every trial login held to its share of the machine (claude-fleet WACK
             # C4): the hub's fleet.trial.limits, renice → pause on sustained full
             # load, a miner / pool / scan paused at once, home over its size warned

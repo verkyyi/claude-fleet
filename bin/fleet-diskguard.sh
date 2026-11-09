@@ -700,8 +700,8 @@ machine_load() {   # 1-minute load average, or '' if unreadable
 # manual digging to find why: macOS's file-event daemon had grown to 2.9 GB and
 # pegged a core, so every process that opened a watch waited on it. Nothing in the
 # fleet looked at it, because it is not the fleet's process — it is the machine's.
-# So it is reported, never acted on: it runs as root, and `sudo killall fseventsd`
-# (launchd restarts it at once) is the operator's call, not a daemon's.
+# Unmanaged logins report it. Managed machines use fleet-fseventsd.py as root
+# to recover memory; this legacy reminder does not duplicate its restart alert.
 #
 # fseventsd_probe → "<rss-MB>\t<%cpu>\t<etime>" for the largest fseventsd, or
 # nothing on Linux / when it is absent. The doctor re-reads it through --fseventsd,
@@ -729,6 +729,7 @@ fseventsd_watch() {
   # (conf/node-tasks.tsv), the fix is `sudo`, which a tenant has not, and nine
   # logins each scanning every process for one daemon's size was the cost.
   [ "${FLEET_MACHINE_TASKS:-}" = off ] && return 0
+  [ "${FLEET_NODE:-}" = 1 ] && return 0
   local line mb cpu et stamp last nowt s
   line="$(fseventsd_probe)"; stamp="$GDIR/last-fseventsd-remind"
   [ -n "$line" ] || return 0

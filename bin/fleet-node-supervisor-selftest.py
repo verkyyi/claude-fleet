@@ -1365,7 +1365,8 @@ class G_DefaultTable(Sandbox):
         with mock.patch.dict(os.environ, {k: v for k, v in e.items() if k.startswith("FLEET_NODE_")}):
             t = fns.default_table(fns.Paths())
         names = [x["name"] for x in t["tasks"]]
-        self.assertEqual(names, ["diskguard", "memguard", "trial-guard", "orphans", "shared-dirs", "machine-reading"]
+        self.assertEqual(names, ["diskguard", "memguard"] + (["fseventsd"] if fns.MAC else [])
+                         + ["trial-guard", "orphans", "shared-dirs", "machine-reading"]
                          + (["spotlight", "wallpaper"] if fns.MAC else []) + ["update", "credsep-enforce"])
         by = {x["name"]: x for x in t["tasks"]}
         # #4607: every fleet login separated by the daemon itself, root's job
