@@ -332,7 +332,11 @@ tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state working 2>/dev/null
 tmux -L "$LBL" set-window-option -t "$W_STUCK" @claude_state_ts "$((NOWS - 600))" 2>/dev/null
 painted "$W_OK" "$W_BUSY" "$W_STUCK" "$W_DONE"
 
-RUN() { FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$@" 2>&1; }
+RUN() {
+  # Advance the fixture's machine tick after creating/replacing panes.
+  python3 "$BIN/fleet_ps.py" --publish >/dev/null || st_fail "fixture census unavailable"
+  FLEET_MODEL_SWITCH_VERIFY=12 "$SCRIPT" --session "$LBL" --no-fallback "$@" 2>&1
+}
 
 if selftest_section 1; then
 # --- --dry-run touches nothing ------------------------------------------------
