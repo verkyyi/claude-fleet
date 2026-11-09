@@ -122,7 +122,10 @@ def snapshot(publish_tick=False):
             if 'rows' not in cached: raise OSError('process refresh failed or in progress')
             return cached['rows']
         # Persist failed attempts too: a broken ps cannot trigger a retry storm.
-        publish(path, {'at': time.time()})
+        # Keep a still-fresh completed sample readable during a proactive
+        # publisher refresh: memguard often runs in the very same scheduler pass.
+        if not publish_tick or 'rows' not in latest(path):
+            publish(path, {'at': time.time()})
         # A non-final comm defaults to 16 columns on BSD. Its header sets a
         # portable minimum width; preserve paths/spaces up to PATH_MAX.
         width = 1024 if sys.platform == 'darwin' else 4096

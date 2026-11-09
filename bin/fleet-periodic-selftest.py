@@ -76,6 +76,23 @@ class Periodic(unittest.TestCase):
         self.assertIn('501 worker --name hello world', out)
         self.assertEqual((self.root / 'scans').read_text().splitlines(), ['scan'])
 
+    def test_fresh_sample_survives_slow_publisher_refresh(self):
+        self.fake_ps()
+        first = self.start(BIN / 'fleet_ps.py', 'pid')
+        first.communicate(timeout=5)
+        self.assertEqual(first.returncode, 0)
+        publisher = self.start(BIN / 'fleet_ps.py', '--publish')
+        deadline = time.monotonic() + 3
+        while len((self.root / 'scans').read_text().splitlines()) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        reader = self.start(BIN / 'fleet_ps.py', 'pid')
+        out, err = reader.communicate(timeout=5)
+        self.assertEqual(reader.returncode, 0, err)
+        self.assertEqual(len(out.splitlines()), 1200)
+        publisher.communicate(timeout=5)
+        self.assertEqual(publisher.returncode, 0)
+        self.assertEqual(len((self.root / 'scans').read_text().splitlines()), 2)
+
     def test_expiry_and_failed_refresh(self):
         self.fake_ps()
         def read():
