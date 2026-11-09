@@ -29,7 +29,8 @@ real_tmux = next(t for t in (shutil.which("tmux", path=d)
 real_ps = shutil.which("ps")
 label = f"model-switch-scale-selftest-{os.getpid()}"
 work = Path(tempfile.mkdtemp(prefix="model-switch-scale-selftest."))
-env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / "conf"))
+env = dict(os.environ, TMPDIR=str(work), FLEET_CONF_DIR=str(work / "conf"),
+           FLEET_PS_CACHE_DIR=str(work / "ps-cache"))
 
 def tm(*args):
     return subprocess.check_output(
@@ -157,8 +158,10 @@ case "$3" in list-windows|display-message|capture-pane) ;; *) exit 91 ;; esac
     rows = [line.split("\t") for line in call_log.read_text().splitlines()]
     counts = collections.Counter(row[3] for row in rows if row[0] == "tmux")
     assert counts == {"list-windows": 1, "capture-pane": 22}, counts
-    assert [row for row in rows if row[0] == "ps"] == [
-        ["ps", "-axo", "pid=,ppid=,stat=,lstart=,comm="]], rows
+    scans = [row for row in rows if row[0] == "ps"]
+    assert len(scans) == 1, rows
+    assert scans[0][:4] == ["ps", "-axww", "-o", "pid,ppid,uid,pgid,stat,rss,pcpu,etime,time,lstart,tty"], scans
+    assert scans[0][-2:] == ["-o", "command=COMMAND"], scans
     assert ledger.read_bytes() == before, "dry-run changed the ledger"
     assert all(not path.read_bytes() for path in work.glob("typed-*")), "typed into a pane"
     print(f"model-switch-scale: 24 windows, 8 selected, 4 busy + 4 recovered refused; "
