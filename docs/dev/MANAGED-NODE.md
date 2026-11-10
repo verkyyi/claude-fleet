@@ -320,6 +320,16 @@ Claude Code 解析插件文件真实路径时都落在目录内（不报「Path 
   已经建好、却缺钉住制品的发布包（入口当时取不到 / 旧入口建的）不是死的：下一次有机器取它的清单，入口发现
   `release.json` 钉的缺了、而且现在补得上，就补取并重建、重签（每版至多 10 分钟试一次；重建失败照旧发老的），
   所以不必为它再移一次 stable。清单因此不再标 immutable。
+- **Claude Code 的钉版每天自己升**（操作者 2026-11-10 拍板，取代 #5607 / #5619 那样的手动升版）：
+  `.github/workflows/claude-pin.yml` 每天 01:37 UTC（北京 09:37）跑 `bin/fleet-release-claude-pin.py plan`——
+  目标是高于当前钉版、不高于 npm `latest` 的最高 X.Y.Z，且同一主版本（跨主版本要操作者点头：dispatch 输入
+  `allow_major` 或仓库变量 `FLEET_CLAUDE_PIN_ALLOW_MAJOR=1`）、发布满 24 小时、三个平台包在 npmjs 与 npmmirror
+  都在、入口 `/v1/fleet/release/artifacts?want=` 说三个都有或取得到（入口连不上只记一句，交给列车第 7 道门）。
+  有目标就开 / 更新**唯一一个** PR（分支 `claude-pin`，标题「release: pin Claude Code <ver> on managed machines」，
+  改这里的 `release.json` 与上面的示例，正文带两版之间的 CHANGELOG），等门（`fleet-pr-verdict.sh --wait`）绿了用
+  `fleet-pr-merge.sh` 合并，之后照常由发布列车挪 stable。绝不降版；重跑幂等（PR 已在目标版本就不再推）；钉版已到
+  （手动升过）就关掉 PR。门红、合并被拒、够老却不完整 ⇒ PR 留着，入口告警发一条 `pin-stuck`
+  （`POST /v1/fleet/release/notice`）。选版规则的自测：`fleet-release-claude-pin-selftest.py`。
 - `fleet-stable.sh move` 拒绝一个带 `bin/fleet-node-update.py` 却没有合法 `release.json` 的目标（`release:`，`--force` 记一行）；
   校验只有一处：`fleet-node-update.py check-release`。
 

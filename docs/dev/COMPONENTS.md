@@ -73,7 +73,7 @@
 |---|---|---|
 | 凭据代理（cred-proxy） | 核心 | 会话访问订阅的统一入口。 |
 | 额度观察（quotawatch） | 核心 | 提供用量及额度可见性；每分钟的巡查单元已退休（T549），它的四件杂事并入状态对账。 |
-| 版本维护（install-sync / base-sync） | 核心 | 跟随稳定版本及维护基础检出；版本激活由既有发布流程负责。 |
+| 版本维护（install-sync / base-sync；Claude Code 钉版每日自动升 `claude-pin.yml`） | 核心 | 跟随稳定版本及维护基础检出；版本激活由既有发布流程负责。钉版自动升只开 PR、过同一道门合并，不另起发布路径。 |
 | 宿主清理与保护（memguard / diskguard / cleanup / worktree-autoclean） | 核心 | 维持共享宿主稳定，回收退出会话资源；周期任务共用非阻塞锁；节点现有 supervisor 每五秒以 root 发布进程快照供所有登录读取，避免慢 tick 与 ps 叠加；Git 锁和已识别的原生 Worktree 所有权先于 Fleet 回收，不能因目录干净/已合并或 `--force` 而接管原生清理。 |
 | 休眠（sleep） | 移除 | 已于 T548（EPIC T542 C8）删除：闲着的会话就是闲着；`fleet-sleep*` 与 `fleet_sleep_*` 只剩一版兼容转发。 |
 | 收集与账本观察（collect / ledger-watch） | 待定 | 待发起人定：逐项区分计量、恢复必需的数据和可选遥测。 |

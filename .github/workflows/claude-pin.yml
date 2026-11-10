@@ -1,0 +1,269 @@
+name: claude pin
+
+# Keep the managed machines' Claude Code current by itself (operator, 2026-11-10;
+# the hand bumps it replaces: #5607 → 2.1.318, #5619 → 2.1.322). The pin is
+# release.json's components.claude.version; docs/dev/MANAGED-NODE.md §7.
+#
+# Once a day — 01:37 UTC = 09:37 Beijing — and on workflow_dispatch:
+#
+#   plan  bin/fleet-release-claude-pin.py plan picks the target: the highest X.Y.Z
+#         above the pin and at most npm's `latest`, same major (input allow_major
+#         or the repo variable FLEET_CLAUDE_PIN_ALLOW_MAJOR=1 lifts it), published
+#         ≥ 24 h ago, its three platform packages on npmjs AND npmmirror, and the
+#         hub's /v1/fleet/release/artifacts?want= carrying or able to fetch all
+#         three (hub unreachable ⇒ a note: the train's gate 7 asks it again).
+#         Nothing newer ⇒ "already current (<pin>)", the run ends there.
+#   land  ONE PR, head branch `claude-pin` (opened, or rewritten when a newer
+#         target soaked; closed when the pin got there some other way): the bump
+#         of release.json + the §7 example, the CHANGELOG.md entries between the
+#         two versions in its body. Then it waits for the gate (fleet-pr-verdict.sh
+#         --wait) and merges with fleet-pr-merge.sh — no person. The release train
+#         then moves stable (a GITHUB_TOKEN merge starts no push run; the train's
+#         10-minute backstop release-train-next.yml dispatches it: 「新头」).
+#
+# A rerun is idempotent: a PR already on the target is left alone (no push, so
+# no CI restart) and only waited on again. A red gate, a refused merge or a
+# target that is old enough but not whole ⇒ the PR stays open and ONE notice goes
+# to the person through the hub's alert channel (POST /v1/fleet/release/notice,
+# verdict pin-stuck, this run's OIDC — as the train). A gate still running after
+# two hours is no failure: the next day's run waits on it again.
+#
+# The branch is pushed with STABLE_PUSH_TOKEN (environment release-sign — an
+# existing secret, no new credential): GitHub starts no workflow for a push or a
+# PR made with GITHUB_TOKEN, so without it the PR's checks would never run. The
+# PR is opened with it too; if it may not open PRs, GITHUB_TOKEN opens it and
+# one empty commit pushed with the PAT starts the checks.
+run-name: ${{ github.event_name == 'workflow_dispatch' && 'claude pin (dispatch)' || 'claude pin' }}
+
+on:
+  schedule:
+    - cron: '37 1 * * *'
+  workflow_dispatch:
+    inputs:
+      allow_major:
+        description: 'take a new major version too (the operator''s opt-in)'
+        type: boolean
+        required: false
+        default: false
+      soak_hours:
+        description: 'how old a version must be before it is pinned (hours)'
+        type: string
+        required: false
+        default: '24'
+
+concurrency:
+  group: claude-pin
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FLEET_HUB_URL: https://claudefleet.24haowan.com  # oss-ok: the train's hub (release-train.yml)
+  PIN_BRANCH: claude-pin
+
+jobs:
+  plan:
+    name: 看版本
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write   # the notice's OIDC token (audience ccquota-fleet-release)
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      current: ${{ steps.plan.outputs.current }}
+      latest: ${{ steps.plan.outputs.latest }}
+      target: ${{ steps.plan.outputs.target }}
+      reason: ${{ steps.plan.outputs.reason }}
+      notes: ${{ steps.plan.outputs.notes }}
+      pr_action: ${{ steps.plan.outputs.pr_action }}
+      pr: ${{ steps.pr.outputs.pr }}
+      pr_ver: ${{ steps.pr.outputs.ver }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: the open bump PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PIN_BRANCH" --state open --json number --jq '.[0].number // empty') \
+            || { echo "::error::cannot list the open PRs"; exit 1; }
+          ver=''
+          if [ -n "$pr" ]; then
+            git fetch -q --depth 1 origin "$PIN_BRANCH" \
+              && ver=$(git show FETCH_HEAD:release.json | python3 -c 'import json,sys; print(json.load(sys.stdin)["components"]["claude"]["version"])') \
+              || ver=0.0.0
+          fi
+          echo "open PR: ${pr:-none}${pr:+ ($ver)}"
+          { echo "pr=$pr"; echo "ver=$ver"; } >> "$GITHUB_OUTPUT"
+      - name: plan
+        id: plan
+        env:
+          OPEN_PR_VER: ${{ steps.pr.outputs.ver }}
+          ALLOW_MAJOR: ${{ inputs.allow_major == true || vars.FLEET_CLAUDE_PIN_ALLOW_MAJOR == '1' }}
+          SOAK: ${{ inputs.soak_hours || '24' }}
+        run: |
+          set -uo pipefail
+          major=(); [ "$ALLOW_MAJOR" = true ] && major=(--allow-major)
+          python3 bin/fleet-release-claude-pin.py plan --release release.json --hub "$FLEET_HUB_URL" \
+            --soak-hours "$SOAK" --open-pr "$OPEN_PR_VER" "${major[@]}" | tee plan.txt
+          rc=${PIPESTATUS[0]}; [ "$rc" = 0 ] || exit "$rc"
+          get() { sed -n "s/^$1=//p" plan.txt; }
+          echo "### 📌 Claude Code：$(get action) — $(get reason)（PR：$(get pr_action)）" >> "$GITHUB_STEP_SUMMARY"
+          [ -z "$(get notes)" ] || echo "$(get notes)" >> "$GITHUB_STEP_SUMMARY"
+      - name: say a blocked target
+        if: steps.plan.outputs.action == 'blocked' && steps.plan.outputs.pr_action == 'none' && github.ref == 'refs/heads/master'
+        env:
+          REASON: ${{ steps.plan.outputs.reason }}
+        run: |
+          python3 - "$(git rev-parse HEAD)" "$GITHUB_RUN_ID" "$REASON" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > notice.json <<'PY'
+          import json, sys
+          print(json.dumps({"run_id": sys.argv[2], "sha": sys.argv[1], "verdict": "pin-stuck",
+                            "text": ("没有可钉的新版 / nothing whole to pin: " + sys.argv[3])[:290], "url": sys.argv[4]},
+                           ensure_ascii=False))
+          PY
+          python3 bin/fleet-train-ledger.py post notice.json --to notice --hub "$FLEET_HUB_URL" \
+            || echo "::warning::the hub did not take the notice"
+
+  land:
+    name: 开 PR、等门、合并
+    needs: plan
+    if: github.ref == 'refs/heads/master' && needs.plan.outputs.pr_action != 'none' && needs.plan.outputs.pr_action != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    environment: release-sign   # STABLE_PUSH_TOKEN: a push / PR GitHub starts checks for
+    permissions:
+      contents: write        # the merge (fleet-pr-merge.sh, GITHUB_TOKEN)
+      pull-requests: write   # open / edit / close the PR
+      checks: read           # the gate read (fleet-pr-verdict.sh)
+      statuses: read
+      actions: read
+      id-token: write        # the notice's OIDC token
+    env:
+      ACTION: ${{ needs.plan.outputs.pr_action }}
+      PR: ${{ needs.plan.outputs.pr }}
+      PR_VER: ${{ needs.plan.outputs.pr_ver }}
+      CURRENT: ${{ needs.plan.outputs.current }}
+      LATEST: ${{ needs.plan.outputs.latest }}
+      TARGET: ${{ needs.plan.outputs.target }}
+      REASON: ${{ needs.plan.outputs.reason }}
+      NOTES: ${{ needs.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+          persist-credentials: false
+      - name: open, update or close the PR; wait for the gate; merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSH_TOKEN: ${{ secrets.STABLE_PUSH_TOKEN }}
+        run: |
+          set -uo pipefail
+          R=$GITHUB_REPOSITORY
+          RUN_URL="$GITHUB_SERVER_URL/$R/actions/runs/$GITHUB_RUN_ID"
+          MASTER=$(git rev-parse HEAD)
+          git config user.name "fleet claude pin"
+          git config user.email "fleet-claude-pin@users.noreply.github.com"
+          say() { echo "$1"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; }
+          notice() {  # notice <text> <url>: the person's one line (pin-stuck)
+            python3 - "$MASTER" "$GITHUB_RUN_ID" "$1" "$2" > notice.json <<'PY'
+          import json, sys
+          print(json.dumps({"run_id": sys.argv[2], "sha": sys.argv[1], "verdict": "pin-stuck",
+                            "text": sys.argv[3][:290], "url": sys.argv[4]}, ensure_ascii=False))
+          PY
+            python3 bin/fleet-train-ledger.py post notice.json --to notice --hub "$FLEET_HUB_URL" \
+              || echo "::warning::the hub did not take the notice"
+          }
+          push() {  # push [<extra git args>]: force the branch with the PAT (never GITHUB_TOKEN)
+            [ -n "$PUSH_TOKEN" ] || return 1
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)" \
+              push -q --force "https://github.com/$R.git" "HEAD:refs/heads/$PIN_BRANCH"
+          }
+          build() {  # the bump commit on master's head, pushed; the PR body in body.md
+            git checkout -q -B "$PIN_BRANCH" "$MASTER"
+            [ -n "$TARGET" ] || { echo "::error::no target to build"; return 1; }
+            python3 bin/fleet-release-claude-pin.py bump --to "$TARGET" --release release.json --doc docs/dev/MANAGED-NODE.md >/dev/null || return 1
+            git commit -q -a -F - <<EOF || return 1
+          release: pin Claude Code $TARGET on managed machines
+
+          Managed machines run Claude Code $CURRENT, the release.json pin; npm
+          latest is $LATEST. Picked by claude-pin.yml ($RUN_URL):
+          $REASON. MANAGED-NODE.md section 7 example follows.
+          EOF
+            push || { echo "::error::the branch push failed (STABLE_PUSH_TOKEN missing or refused)"; return 1; }
+            {
+              echo "Managed machines run Claude Code $CURRENT, the \`release.json\` pin; this moves it to **$TARGET** (npm \`latest\` = $LATEST)."
+              echo "Opened by \`claude-pin.yml\` ([run]($RUN_URL)), the daily automation the operator approved 2026-11-10: it merges this PR itself once \`CI 结论\` is green, and the release train then moves stable."
+              echo
+              echo "- \`release.json\`: \`components.claude.version\` $CURRENT → **$TARGET**. No other component touched."
+              echo "- \`docs/dev/MANAGED-NODE.md\` §7 example follows."
+              echo
+              echo "**Checked before opening** (\`bin/fleet-release-claude-pin.py plan\`): $REASON — published ≥ 24 h ago, \`@anthropic-ai/claude-code-{darwin-arm64,linux-x64,linux-arm64}@$TARGET\` on registry.npmjs.org and registry.npmmirror.com${NOTES:+; $NOTES}. The hub fetches the binaries from npm itself (#2631); the train's \`fleet-stable.sh move\` gate 7 checks them again."
+              echo
+              echo "### Changelog ($CURRENT → $TARGET)"
+              echo
+              python3 bin/fleet-release-claude-pin.py changelog --from "$CURRENT" --to "$TARGET"
+            } > body.md
+          }
+          title="release: pin Claude Code $TARGET on managed machines"
+
+          case "$ACTION" in
+            close)
+              gh pr close "$PR" --repo "$R" --delete-branch \
+                --comment "The pin is already at $CURRENT (or npm withdrew this version) — closed by claude-pin.yml ($RUN_URL)." \
+                && say "closed #$PR: the pin is already $CURRENT"
+              exit 0 ;;
+            keep)
+              m=$(gh pr view "$PR" --repo "$R" --json mergeable --jq .mergeable 2>/dev/null)
+              if [ "$m" = CONFLICTING ]; then
+                ACTION=update TARGET=${TARGET:-$PR_VER}
+                say "#$PR conflicts with master — rebuilt on its head"
+              fi ;;
+          esac
+          case "$ACTION" in
+            open)
+              build || { notice "$TARGET：分支推不上去 / the branch push failed" "$RUN_URL"; exit 1; }
+              url=$(GH_TOKEN=$PUSH_TOKEN gh pr create --repo "$R" --base master --head "$PIN_BRANCH" --title "$title" --body-file body.md 2>pr.err) || {
+                cat pr.err
+                url=$(gh pr create --repo "$R" --base master --head "$PIN_BRANCH" --title "$title" --body-file body.md) \
+                  || { notice "$TARGET：开不了 PR / could not open the PR" "$RUN_URL"; exit 1; }
+                # a PR GITHUB_TOKEN opened starts no checks: one PAT push does
+                git commit -q --allow-empty -m "ci: start the checks (the PR was opened with GITHUB_TOKEN)" && push \
+                  || { notice "$TARGET：PR 的检查没启动 / the PR's checks did not start" "$url"; exit 1; }
+              }
+              PR=${url##*/}
+              say "opened #$PR: $CURRENT → $TARGET" ;;
+            update)
+              build || { notice "$TARGET：分支推不上去 / the branch push failed" "$RUN_URL"; exit 1; }
+              gh pr edit "$PR" --repo "$R" --title "$title" --body-file body.md >/dev/null \
+                || echo "::warning::could not edit #$PR's title/body"
+              say "updated #$PR → $TARGET" ;;
+            keep)
+              say "#$PR already pins its version — waiting on it again" ;;
+          esac
+          PR_URL="$GITHUB_SERVER_URL/$R/pull/$PR"
+
+          v=$(bin/fleet-pr-verdict.sh "$PR" --repo "$R" --wait --timeout 7200 --no-checks-timeout 900)
+          say "#$PR gate: $v"
+          case "$v" in
+            READY)
+              m=$(bin/fleet-pr-merge.sh "$PR" --repo "$R" --squash)
+              if [ "$m" = MERGED ]; then
+                say "✅ merged #$PR ($PR_URL): Claude Code $TARGET — the release train moves stable next"
+                exit 0
+              fi
+              notice "#$PR 门是绿的但没合进去（$m）/ green but the merge was refused" "$PR_URL"; exit 1 ;;
+            MERGED)
+              say "#$PR is already merged"; exit 0 ;;
+            TIMEOUT|PENDING)
+              say "#$PR's gate is still running — tomorrow's run waits on it again"; exit 0 ;;
+            *)
+              notice "#$PR 留着没合：$v / left open: $v" "$PR_URL"; exit 1 ;;
+          esac

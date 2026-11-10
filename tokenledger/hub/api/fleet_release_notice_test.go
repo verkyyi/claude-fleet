@@ -46,6 +46,7 @@ func TestReleaseNoticeRoute(t *testing.T) {
 	next := p.oidc.token(map[string]any{"workflow_ref": "o/r/.github/workflows/release-train-next.yml@refs/heads/master"})
 	watch := p.oidc.token(map[string]any{"workflow_ref": "o/r/.github/workflows/release-watch.yml@refs/heads/master"})
 	other := p.oidc.token(map[string]any{"workflow_ref": "o/r/.github/workflows/selftests.yml@refs/heads/master"})
+	pin := p.oidc.token(map[string]any{"workflow_ref": "o/r/.github/workflows/claude-pin.yml@refs/heads/master"})
 	sha := "1c593db" + strings.Repeat("a", 33)
 	prev := "5dbd42c" + strings.Repeat("b", 33)
 	url := "https://github.com/o/r/actions/runs/9"
@@ -94,6 +95,13 @@ func TestReleaseNoticeRoute(t *testing.T) {
 			t.Fatalf("%v: %d %s", q["verdict"], code, body)
 		}
 	}
+	pr := "https://github.com/o/r/pull/5"
+	if code, body := p.postNotice(pin, map[string]any{"run_id": "910", "sha": sha, "verdict": "pin-stuck", "url": pr, "text": "2.1.330 · #5 FAILING"}); code != 200 || !strings.Contains(body, `"sent"`) {
+		t.Fatalf("pin-stuck: %d %s", code, body)
+	}
+	if code, body := p.postNotice(pin, map[string]any{"run_id": "911", "sha": sha, "verdict": "pin-maybe", "text": "x"}); code != 400 {
+		t.Fatalf("pin bad verdict: %d %s", code, body)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	want := []string{
@@ -103,7 +111,7 @@ func TestReleaseNoticeRoute(t *testing.T) {
 		"【fleet】发布红了 · 1c593db\ny-selftest.sh 不稳，补发也没救回来\n\n[fleet] Release red · 1c593db\ny-selftest.sh is flaky and re-sending did not save it",
 		"【fleet】已回滚 · 1c593db → 5dbd42c\n上线后体检不过，已退回上一版\n\n[fleet] Rolled back · 1c593db → 5dbd42c\nPost-release check failed — back on the previous release",
 	}
-	if len(got) != 5 {
+	if len(got) != 6 {
 		t.Fatalf("notified %d: %q", len(got), got)
 	}
 	for i, w := range want {
@@ -114,8 +122,12 @@ func TestReleaseNoticeRoute(t *testing.T) {
 	if !strings.HasPrefix(got[4], "【fleet】回滚失败 · 1c593db\n") || !strings.Contains(got[4], "[fleet] Rollback failed · 1c593db") {
 		t.Fatalf("rollback-failed: %q", got[4])
 	}
+	if w := "【fleet】Claude Code 自动升版没合进去\n2.1.330 · #5 FAILING\n点开看 › " + pr +
+		"\n\n[fleet] Claude Code pin bump did not land\n2.1.330 · #5 FAILING\nOpen it › " + pr; got[5] != w {
+		t.Fatalf("pin-stuck:\n got %q\nwant %q", got[5], w)
+	}
 	rows, _ := p.h.srv.Store.HubAuditByAction("release.notice", time.Now().Add(-time.Hour))
-	if len(rows) != 10 {
+	if len(rows) != 11 {
 		t.Fatalf("audit rows %d, want every notice recorded", len(rows))
 	}
 }
