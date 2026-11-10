@@ -42,14 +42,17 @@ import (
 const trainNoticeMaxBytes = 4 << 10
 
 // trainNoticeWorkflows may post a notice: the train and its backstop.
-// … and the post-release watch (claude-fleet#4915).
-var trainNoticeWorkflows = []string{"release-train.yml", "release-train-next.yml", "release-watch.yml"}
+// … and the post-release watch (claude-fleet#4915), and the daily Claude Code
+// pin bump (claude-pin.yml: its PR did not land, or no new version is whole).
+var trainNoticeWorkflows = []string{"release-train.yml", "release-train-next.yml", "release-watch.yml", "claude-pin.yml"}
 
 var trainNoticeVerdicts = map[string]bool{
 	"shipped": true, "flaky": true, "red": true, "held": true,
 	"cancelled": true, "superseded": true, "resent": true,
 	// the post-release watch (claude-fleet#4915)
 	"rolledback": true, "rollback-failed": true,
+	// the daily Claude Code pin bump (claude-pin.yml)
+	"pin-stuck": true,
 }
 
 type trainNotice struct {
@@ -86,7 +89,7 @@ func parseTrainNotice(b []byte) (*trainNotice, error) {
 	case !release.ValidSHA(n.SHA):
 		return nil, fmt.Errorf("sha: want 40 hex, got %q", runLine(n.SHA, 50))
 	case !trainNoticeVerdicts[n.Verdict]:
-		return nil, fmt.Errorf("verdict: want shipped|flaky|red|held|cancelled|superseded|resent|rolledback|rollback-failed, got %q", runLine(n.Verdict, 40))
+		return nil, fmt.Errorf("verdict: want shipped|flaky|red|held|cancelled|superseded|resent|rolledback|rollback-failed|pin-stuck, got %q", runLine(n.Verdict, 40))
 	case n.Text == "":
 		return nil, fmt.Errorf("text: missing")
 	}
@@ -179,6 +182,10 @@ func (n *trainNotice) message() string {
 		rz, re := run("点开看运行", "Open the run")
 		zh = "【fleet】回滚失败 · " + sha + "\n" + n.Text + rz
 		en = "[fleet] Rollback failed · " + sha + "\nSomething broke and the automatic rollback failed — handle it by hand" + re
+	case "pin-stuck":
+		rz, re := run("点开看", "Open it")
+		zh = "【fleet】Claude Code 自动升版没合进去\n" + n.Text + rz
+		en = "[fleet] Claude Code pin bump did not land\n" + n.Text + re
 	default:
 		return ""
 	}

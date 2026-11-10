@@ -837,11 +837,12 @@ master's head through the same lane (`workflow_dispatch`, run name 「补发 <sh
 n/2」, at most two a sha), and POSTs `{run_id, sha, verdict, text}` (+ `tests` ·
 `holds` · `url` · `action`; the post-release watch adds `to`) to `POST
 /v1/fleet/release/notice` (`fleet-train-ledger.py post --to notice`; the same OIDC
-check, `release-train.yml`, its 10-minute backstop `release-train-next.yml` and
-`release-watch.yml` taken). The hub writes one `release.notice` audit row for
+check, `release-train.yml`, its 10-minute backstop `release-train-next.yml`,
+`release-watch.yml` and the daily Claude Code pin bump `claude-pin.yml` taken). The hub writes one `release.notice` audit row for
 every notice — never a GitHub issue — and pushes to its notifier
 (`FLEET_NOTIFY_CMD`) **only what the person must act on** (T893): red, a flaky one
-no re-send saved, held, rolled back, a failed rollback — one line in Chinese then
+no re-send saved, held, rolled back, a failed rollback, a Claude Code pin bump that
+did not land (`pin-stuck`, docs/dev/MANAGED-NODE.md §7) — one line in Chinese then
 English. shipped · superseded · cancelled · resent · a re-sent flaky are the row
 alone; the day's trains are ONE digest at 09:00 Beijing (the alerts leader's
 sweep, `releaseDigestTick`: 昨天上线 N 次 · 含 M 个 PR / 红 K 次，都已补好 / 有无挡着的
