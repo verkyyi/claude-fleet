@@ -50,7 +50,20 @@ def validate(value):
     return value
 
 
-def resolve(explicit=(), template="", label="", default="", accepted=None, request_id=""):
+def origin_agent(env=None):
+    """The coding agent of the session that asked for this dispatch (T1381):
+    $FLEET_ORIGIN_AGENT, stamped by fleet-mcp.py's spawn road from the caller
+    window's @cc_agent. "" when no session asked (a schedule, a person's CLI,
+    the hub) or the value is not a provider — then the fleet default stands."""
+    value = (os.environ if env is None else env).get("FLEET_ORIGIN_AGENT", "")
+    return value if value in PROVIDERS else ""
+
+
+def resolve(explicit=(), template="", label="", default="", accepted=None, request_id="", origin=None):
+    """explicit > the agent file's > the issue label's > the asking session's own
+    (T1381: a Claude session's task is Claude's, a Codex session's Codex's) > the
+    fleet's FLEET_AGENT > claude. The asking session's choice is a default, not a
+    request: it carries agent_source "fleet" (the hub's enum) and never pins."""
     choices = {provider(v) for v in explicit}
     if len(choices) > 1:
         raise ValueError("contradictory explicit coding agents")
@@ -62,7 +75,8 @@ def resolve(explicit=(), template="", label="", default="", accepted=None, reque
     chosen = next(iter(choices), "")
     source = "explicit"
     if not chosen:
-        for source, hint in (("template", template), ("label", label), ("fleet", default), ("default", "claude")):
+        origin = origin_agent() if origin is None else origin
+        for source, hint in (("template", template), ("label", label), ("fleet", origin), ("fleet", default), ("default", "claude")):
             if hint:
                 chosen = provider(hint)
                 break

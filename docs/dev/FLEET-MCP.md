@@ -217,8 +217,14 @@ means provider; `fleet-task-record.sh dispatch --as` selects a definition.
 Unknown providers and contradictory repeated explicit choices fail before work
 is opened. No picker or tool availability changes are part of this contract.
 
-A local start resolves explicit provider, definition hint, issue label, fleet
-configuration, then built-in Claude, in that order. The client placement API
+A local start resolves explicit provider, definition hint, issue label, the
+asking session's own agent, fleet configuration, then built-in Claude, in that
+order (T1381): with no `coding_agent`, a Claude session's `task` / `spawn` opens
+Claude and a Codex session's opens Codex, whatever `FLEET_AGENT` says.
+`fleet-mcp.py`'s `spawn_env` hands the caller window's `@cc_agent` to the
+script as `$FLEET_ORIGIN_AGENT` (never an inherited value); a start no session
+asked for (a schedule, a person's CLI, the hub) keeps the fleet default. The
+asker's choice is a default, not a request: `agent_source` stays `fleet`. The client placement API
 has no local repository configuration, so its unspecified provider resolves to
 Claude. The request records the source. A `--title` fast path may use cached
 labels only before acceptance. Its accepted `dispatch` envelope carries

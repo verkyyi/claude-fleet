@@ -513,18 +513,35 @@ def caller_fid():
     return fid if FID_RE.fullmatch(fid or "") else ""
 
 
+def caller_agent():
+    """The calling session's coding agent — its window's @cc_agent (claude | codex,
+    stamped by fleet-claude.sh / fleet-codex.sh at every launch); "" otherwise."""
+    if not (os.environ.get("TMUX") and os.environ.get("TMUX_PANE")):
+        return ""
+    try:
+        agent = pane_opt("#{@cc_agent}")
+    except ToolFault:
+        return ""
+    return agent if agent in ("claude", "codex") else ""
+
+
 def spawn_env(ttl):
     """hub_env, plus the caller's ID as $FLEET_FROM_FID (task PV5W): the session it
     opens is drawn under it in the lists. Display only — nothing routes, reports or
-    reaps by it (the retired Parent stays retired). Never an inherited value."""
+    reaps by it (the retired Parent stays retired). And the caller's coding agent as
+    $FLEET_ORIGIN_AGENT (T1381): with no agent asked for, the new session runs what
+    its asker runs (fleet_dispatch.resolve). Never an inherited value, either."""
     env = hub_env(ttl)
-    fid = caller_fid()
-    if not fid and "FLEET_FROM_FID" not in os.environ:
+    fid, agent = caller_fid(), caller_agent()
+    if not fid and not agent and "FLEET_FROM_FID" not in os.environ and "FLEET_ORIGIN_AGENT" not in os.environ:
         return env
     env = dict(env if env is not None else os.environ)
     env.pop("FLEET_FROM_FID", None)
+    env.pop("FLEET_ORIGIN_AGENT", None)
     if fid:
         env["FLEET_FROM_FID"] = fid
+    if agent:
+        env["FLEET_ORIGIN_AGENT"] = agent
     return env
 
 

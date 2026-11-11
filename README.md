@@ -521,7 +521,10 @@ so. The screen text is Chinese, fixed — the fleet has no UI-language setting.
 
 A fleet spawns **Claude Code** by default and can spawn **OpenAI Codex CLI**
 instead (`FLEET_AGENT=codex` for the fleet, or `--agent codex` / the tools'
-`coding_agent` for one session).
+`coding_agent` for one session). A session's own `task` / `spawn` with no
+`coding_agent` opens the agent that session runs — a Claude session's tasks are
+Claude's, a Codex session's Codex's; `FLEET_AGENT` is the default only for a
+start no session asked for (a schedule, a CLI, the hub).
 Set `FLEET_AGENT` with `bin/fleet-conf.sh set-node FLEET_AGENT 'FLEET_AGENT="codex"'`
 on each host (an older fleet overlay that sets the key must agree). For hub
 dispatch, clients without a local choice, and a fresh browser's new-session

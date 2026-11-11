@@ -531,7 +531,7 @@ fi
 # A start already known to be Codex never asks the Claude CLI for plugins (#4726).
 # what this session's agent can do is asked of its adapter-table row (T620) — never its name
 agent_col() { fleet_agent_get "$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")" "$1"; }
-AS_FOR=$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")
+AS_FOR=$(fleet_agent_or_default "${AGENT:-$(fleet_dispatch_default)}")   # T1381: the asker's agent first
 if [ "$NOREPO" != 1 ] && [ -z "$REPO_ARG" ] && [ -z "$SEL" ] && [ -n "$AS_ARG" ]; then
   REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \
     | awk -F'\t' '$1 == "repo" { print $2; exit }')
