@@ -1753,5 +1753,337 @@
     "independent": false,
     "unknown": true,
     "references": []
+  },
+  {
+    "name": "native-subagent-spawn",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": true,
+      "store": false,
+      "tool_choice": "auto",
+      "parallel_tool_calls": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": "fixture-cache",
+      "client_metadata": {
+        "session_id": "fixture-session",
+        "thread_id": "fixture-child",
+        "turn_id": "fixture-turn",
+        "parent_turn_id": "fixture-parent-turn",
+        "root_turn_id": "fixture-parent-turn",
+        "x-openai-subagent": "collab_spawn",
+        "x-codex-parent-thread-id": "fixture-parent",
+        "x-codex-window-id": "fixture-window"
+      },
+      "input": [
+        {
+          "type": "message",
+          "id": "msg_client_role",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "<multi_agent_role>Fixture</multi_agent_role>"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_prompt",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Spawn alpha and beta."
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_role",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "<multi_agent_role>Fixture</multi_agent_role>"
+            }
+          ]
+        },
+        {
+          "type": "agent_message",
+          "id": "amsg_client_spawn",
+          "author": "/root",
+          "recipient": "/root/alpha",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Message Type: NEW_TASK\nTask name: /root/alpha\nSender: /root\nPayload:\n"
+            },
+            {
+              "type": "encrypted_content",
+              "encrypted_content": "fixture-sealed-alpha"
+            }
+          ]
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "encrypted",
+        "value": "fixture-sealed-alpha"
+      }
+    ]
+  },
+  {
+    "name": "native-subagent-final-answer",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": true,
+      "store": false,
+      "tool_choice": "auto",
+      "parallel_tool_calls": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": "fixture-cache",
+      "client_metadata": {
+        "session_id": "fixture-session",
+        "thread_id": "fixture-parent",
+        "turn_id": "fixture-parent-turn"
+      },
+      "input": [
+        {
+          "type": "message",
+          "id": "msg_client_role",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "<multi_agent_role>Fixture</multi_agent_role>"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_prompt",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Spawn alpha and beta."
+            }
+          ]
+        },
+        {
+          "type": "function_call",
+          "id": "fc_source_spawn",
+          "name": "spawn_agent",
+          "namespace": "collaboration",
+          "arguments": "{\"task_name\": \"alpha\", \"message\": \"fixture-sealed-alpha\"}",
+          "call_id": "call_source_spawn"
+        },
+        {
+          "type": "function_call_output",
+          "id": "fco_client_spawn",
+          "call_id": "call_source_spawn",
+          "output": "{\"task_name\":\"/root/alpha\"}"
+        },
+        {
+          "type": "agent_message",
+          "id": "amsg_client_final",
+          "author": "/root/alpha",
+          "recipient": "/root",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/alpha\nPayload:\nALPHA_OK"
+            }
+          ]
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": false,
+    "references": [
+      {
+        "kind": "id",
+        "value": "fc_source_spawn"
+      },
+      {
+        "kind": "id",
+        "value": "call_source_spawn"
+      }
+    ]
+  },
+  {
+    "name": "native-subagent-extra-field-unknown",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": true,
+      "store": false,
+      "tool_choice": "auto",
+      "parallel_tool_calls": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": "fixture-cache",
+      "client_metadata": {
+        "session_id": "fixture-session",
+        "thread_id": "fixture-child",
+        "turn_id": "fixture-turn",
+        "parent_turn_id": "fixture-parent-turn",
+        "root_turn_id": "fixture-parent-turn",
+        "x-openai-subagent": "collab_spawn",
+        "x-codex-parent-thread-id": "fixture-parent",
+        "x-codex-window-id": "fixture-window"
+      },
+      "input": [
+        {
+          "type": "message",
+          "id": "msg_client_role",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "<multi_agent_role>Fixture</multi_agent_role>"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_prompt",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Spawn alpha and beta."
+            }
+          ]
+        },
+        {
+          "type": "agent_message",
+          "id": "amsg_client_spawn",
+          "author": "/root",
+          "recipient": "/root/alpha",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Message Type: NEW_TASK\nTask name: /root/alpha\nSender: /root\nPayload:\n"
+            },
+            {
+              "type": "encrypted_content",
+              "encrypted_content": "fixture-sealed-alpha"
+            }
+          ],
+          "metadata": {
+            "opaque": "fixture"
+          }
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": true,
+    "references": [
+      {
+        "kind": "id",
+        "value": "amsg_client_spawn"
+      },
+      {
+        "kind": "encrypted",
+        "value": "fixture-sealed-alpha"
+      }
+    ]
+  },
+  {
+    "name": "native-subagent-opaque-part-unknown",
+    "method": "POST",
+    "path": "/codex/responses",
+    "headers": {},
+    "body": {
+      "model": "gpt-6.1-sol",
+      "stream": true,
+      "store": false,
+      "tool_choice": "auto",
+      "parallel_tool_calls": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": "fixture-cache",
+      "client_metadata": {
+        "session_id": "fixture-session",
+        "thread_id": "fixture-child",
+        "turn_id": "fixture-turn",
+        "parent_turn_id": "fixture-parent-turn",
+        "root_turn_id": "fixture-parent-turn",
+        "x-openai-subagent": "collab_spawn",
+        "x-codex-parent-thread-id": "fixture-parent",
+        "x-codex-window-id": "fixture-window"
+      },
+      "input": [
+        {
+          "type": "message",
+          "id": "msg_client_role",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "<multi_agent_role>Fixture</multi_agent_role>"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "id": "msg_client_prompt",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Spawn alpha and beta."
+            }
+          ]
+        },
+        {
+          "type": "agent_message",
+          "id": "amsg_client_spawn",
+          "author": "/root",
+          "recipient": "/root/alpha",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Message Type: NEW_TASK\nTask name: /root/alpha\nSender: /root\nPayload:\n"
+            },
+            {
+              "type": "encrypted_content",
+              "encrypted_content": "fixture-sealed-alpha",
+              "opaque": "x"
+            }
+          ]
+        }
+      ]
+    },
+    "independent": false,
+    "unknown": true,
+    "references": [
+      {
+        "kind": "id",
+        "value": "amsg_client_spawn"
+      },
+      {
+        "kind": "encrypted",
+        "value": "fixture-sealed-alpha"
+      }
+    ]
   }
 ]

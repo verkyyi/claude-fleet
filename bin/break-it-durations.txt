@@ -116,6 +116,7 @@
 0.5 cred-codex-refs-overflow
 1.5 cred-codex-reopen
 1.0 cred-codex-handoff
+2.3 cred-codex-subagent
 0.6 cred-codex-path-open
 0.5 cred-enforce-fails-no-lease
 0.5 cred-existing-unseparated

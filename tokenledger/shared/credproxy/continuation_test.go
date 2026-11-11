@@ -224,6 +224,34 @@ func TestCodexContinuationOutputSources(t *testing.T) {
 	}
 }
 
+// T1381: a Codex multi-agent v2 child resends its parent's sealed spawn
+// message as an agent_message; the parent's collaboration call is where the
+// provider first said it, so that is where it is recorded. Other tools'
+// arguments stay unread.
+func TestCodexContinuationRecordsCollaborationSealedMessage(t *testing.T) {
+	item := func(namespace, args string) map[string]any {
+		return map[string]any{"item": map[string]any{"type": "function_call", "namespace": namespace, "arguments": args}}
+	}
+	sealed := CodexReference("encrypted", "fixture-sealed-alpha")
+	has := func(refs []string) bool {
+		for _, ref := range refs {
+			if ref == sealed {
+				return true
+			}
+		}
+		return false
+	}
+	refs, err := codexOutputReferences(item("collaboration", `{"task_name":"alpha","message":"fixture-sealed-alpha"}`))
+	if err != nil || !has(refs) {
+		t.Fatalf("collaboration sealed message not recorded: %v %v", refs, err)
+	}
+	for _, other := range []map[string]any{item("functions", `{"message":"fixture-sealed-alpha"}`), item("collaboration", `not json`)} {
+		if refs, _ := codexOutputReferences(other); has(refs) {
+			t.Fatalf("read arguments it must not: %v", other)
+		}
+	}
+}
+
 func TestCodexContinuationNeverFollowsRedirect(t *testing.T) {
 	for _, status := range []int{http.StatusTemporaryRedirect, http.StatusSeeOther} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
