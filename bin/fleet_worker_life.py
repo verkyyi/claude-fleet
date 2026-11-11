@@ -188,11 +188,16 @@ class Worker:
             source=self.inspect()
             if message['session_id']!=source['session_id']:raise ValueError('pending message belongs to an earlier conversation')
             self.stamp('@sleep_evidence','')
-            # The one road into a live session of any agent (T626): the evidence is
-            # cleared above, so fleet_agent_deliver puts it straight in by the
-            # adapter's deliver column. Held stays held (exit 3), never «sent».
+            # The evidence is cleared above, so the adapter's own deliver column
+            # puts it straight in. Never the whole fleet_agent_deliver: this runs
+            # INSIDE it (_fleet_agent_deliver_native), under the session gate's
+            # lock for the delivery id the caller already admitted. Re-entering
+            # the gate here admitted the same words a second time under a fresh
+            # id — blocked on that lock until this run timed out, the caller
+            # retried, and the words landed twice (task M6WH). Held stays held
+            # (exit 3), never «sent».
             try:
-                run(['bash','-c','. "$1"; text=$(cat); fleet_agent_deliver "$2" "$3" "$text" "${FLEET_REPORT_FROM:-fleet}"; rc=$?; '
+                run(['bash','-c','. "$1"; text=$(cat); _fleet_agent_deliver_native "$2" "$3" "$text" "${FLEET_REPORT_FROM:-fleet}"; rc=$?; '
                      '[ "$rc" -eq 0 ] || printf "%s\\n" "$FLEET_DELIVER_NOTE" >&2; exit "$rc"',
                      'sleep-delivery',BIN/'fleet-lib.sh',self.pane,self.session],input=text,timeout=20)
             except subprocess.TimeoutExpired:
