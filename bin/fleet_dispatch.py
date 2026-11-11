@@ -52,7 +52,7 @@ def validate(value):
 
 def origin_agent(env=None):
     """The coding agent of the session that asked for this dispatch (T1381):
-    $FLEET_ORIGIN_AGENT, stamped by fleet-mcp.py's spawn road from the caller
+    $FLEET_ORIGIN_AGENT, stamped by the fleet MCP server's spawn road from the caller
     window's @cc_agent. "" when no session asked (a schedule, a person's CLI,
     the hub) or the value is not a provider — then the fleet default stands."""
     value = (os.environ if env is None else env).get("FLEET_ORIGIN_AGENT", "")
