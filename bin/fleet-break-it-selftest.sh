@@ -2650,7 +2650,8 @@ PY2
   done
   for cmd in 'fleet --test-identity mac-a' 'FLEET_CLIENT_IDENTITY=test fleet' 'fleet doctor' 'ssh mac-a fleet --test-identity' 'FLEET_ALLOW_PERSON_CLIENT=1 fleet' \
              'fleet claude --here' 'fleet --test-identity codex hi' 'fleet --test-identity --thin' \
-             'FLEET_CLIENT_IDENTITY=test python3 fleet-thin.py' 'python3 fleet-thin.py --help'; do
+             'FLEET_CLIENT_IDENTITY=test python3 fleet-thin.py' 'python3 fleet-thin.py --help' \
+             'fleet ls --archived' 'fleet archive R29E --yes' 'fleet show R29E'; do
     out=$(printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$(printf '%s' "$cmd" | sed 's/["\\]/\\&/g')" | "${h[@]}" 2>&1)
     [ $? = 0 ] || { WHY="bash-guard refused [$cmd]: [$out]"; return 1; }
   done
