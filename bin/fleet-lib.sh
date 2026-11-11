@@ -55,6 +55,16 @@ _flib_ad="$_flib_here/fleet-agent-adapter.sh"
 # shellcheck source=fleet-agent-adapter.sh
 [ -f "$_flib_ad" ] && . "$_flib_ad"
 unset _flib_ad
+# The coding agent a spawn falls back to when none was asked for (T1381): the
+# asking session's own ($FLEET_ORIGIN_AGENT, fleet-mcp.py's spawn road stamps it
+# from the caller's @cc_agent), else the fleet's FLEET_AGENT. The same order as
+# bin/fleet_dispatch.py's resolve — that one decides; this only reads ahead of it.
+fleet_dispatch_default() {
+  case "${FLEET_ORIGIN_AGENT:-}" in
+    claude|codex) printf '%s' "$FLEET_ORIGIN_AGENT" ;;
+    *) printf '%s' "${FLEET_AGENT:-}" ;;
+  esac
+}
 
 # GLOBAL-ONLY FLEET_* keys (issue #237): read machine-wide — one daemon serving
 # EVERY fleet (collector, spinner, diskguard) or the SYSTEM-WIDE

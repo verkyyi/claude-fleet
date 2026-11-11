@@ -263,7 +263,7 @@ refuse() {  # <reason> — stderr line + sticky red toast; the CALLER exits with
 # hosted; else the fleet's only repo; several ⇒ refuse, the caller asks.
 # A named agent file's `fleet: repo` is the repo when the spawn names none (#3122).
 # A start already known to be Codex never asks the Claude CLI for plugins (#4726).
-AS_FOR=$(fleet_agent_or_default "${AGENT:-${FLEET_AGENT:-}}")
+AS_FOR=$(fleet_agent_or_default "${AGENT:-$(fleet_dispatch_default)}")   # T1381: the asker's agent first
 if [ -n "$AS_ARG" ] && [ -z "$REPO_ARG" ]; then
   python3 "$BIN/fleet-agent-def.py" check-role "$AS_ARG" || exit 3
   REPO_ARG=$(python3 "$BIN/fleet-agent-def.py" launch "$AS_ARG" --dir "${FLEET_MAIN:-$PWD}" --for "$AS_FOR" 2>/dev/null \

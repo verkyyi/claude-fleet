@@ -352,6 +352,16 @@ class Monitor:
                           '@claude_state_ts':str(int(time.time()))}
             elif before:
                 values = {'@codex_attention':''}
+            elif not why and state == 'working' and thread.get('status', {}).get('type') == 'systemError':
+                # A turn the provider failed (T1381: every retry refused) leaves
+                # the thread in systemError with no Stop hook: the row read
+                # «working» over an idle prompt. Only a settled FAILED last turn
+                # ends it — as done (the person's turn), never as success.
+                latest = thread_read(self.client, data, include_turns=True)
+                turns = latest.get('turns') or []
+                if latest.get('status', {}).get('type') != 'systemError' or not turns or turns[-1].get('status') != 'failed':
+                    return
+                values = {'@claude_state': 'done', '@claude_state_ts': str(int(time.time()))}
             elif not why and state in ('working', 'done') and thread.get('status', {}).get('type') in ('active', 'idle'):
                 # Interrupts may emit native idle without a Stop hook. Project
                 # the loaded thread directly; this says nothing about Task completion.

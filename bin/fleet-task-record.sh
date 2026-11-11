@@ -403,7 +403,7 @@ PYTITLE
   # The file is read ONCE a start (T716): the probe's answer is the launch's, and
   # it rides to the spawner (FLEET_AS_KV, keyed by FLEET_AS_KV_FOR) so
   # dash-raw-session.sh does not read it again.
-  as_for=claude; [ "${agent:-${FLEET_AGENT:-claude}}" = codex ] && as_for=codex   # #4726
+  as_for=claude; [ "${agent:-$(fleet_dispatch_default)}" = codex ] && as_for=codex   # #4726, T1381
   # looked for where the session will run — the repo's main checkout, as the
   # spawner looks (T992: from $PWD the two never matched, and dash-raw-session.sh
   # read the file a second time)

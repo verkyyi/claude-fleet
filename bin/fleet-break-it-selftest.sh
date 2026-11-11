@@ -1194,6 +1194,9 @@ drill_install_sync_killed() {
   pid=$(cat "$d/conf/global/install-sync.lock/pid" 2>/dev/null)
   kill -9 "$pid" 2>/dev/null || { WHY="no live holder pid in the lock [$pid]"; return 1; }
   wait 2>/dev/null; rm -f "$d/hold"                           # killed mid-tick: no trap ran
+  # its held doctor child outlives it and keeps the job's kernel lock (fleet_tick_lock.py,
+  # #5618) until it ends — let it, or the next tick is a fair «busy» skip, not this drill
+  until_ok 10 test -s "$d/doctor.log" || { WHY="the killed tick's doctor child never finished"; return 1; }
   [ -d "$d/conf/global/install-sync.lock" ] || { WHY="SIGKILL left no lock — nothing to drill"; return 1; }
   t0=$(now)
   isync >"$d/tick2.out" 2>&1

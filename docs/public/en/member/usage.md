@@ -127,6 +127,7 @@ Everything you hand over on the + New session line is first written down by toke
 - Historical results remain in details, without a completed icon in the list. A missing session is not proof of completion; unknown observations are not proof of stopping. Failed reads preserve existing content and explain the problem; retrying a read does not start work.
 - For native terminal interactions, open the task in iTerm2. The separate personal browser Shell remains available. Old task links containing `?view=term` open the same task's web conversation.
 - Tell a colleague "the T42 thing" and they can find it by its code on the Sessions page.
+- A task a session hands out for you runs that session's own agent unless it names one: a Claude session's tasks are Claude's, a Codex session's Codex's. A named agent ("do it with Codex") wins; a start no session asked for (a schedule, the command line, the web) uses the fleet default.
 
 ### A design page first, then the task
 
