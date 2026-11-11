@@ -127,6 +127,7 @@ FLEET_NODE_ROLE_TTL                knob: seconds the hub's client/managed word i
 FLEET_NOTICE_FORBID                handoff: run-selftests.sh → fleet_notice.py, the message records a test may not write (T741)
 FLEET_NOTICE_FORBID_HIT            handoff: run-selftests.sh's per-test marker a refused record write touches (T741)
 FLEET_NOTICE_OWN_BOOK              seam: a drill's stand-in for the login's own message record (fleet_notice.py own_book, T741)
+FLEET_ORIGIN_AGENT                 handoff: the calling session's @cc_agent, fleet-mcp.py spawn / task → fleet_dispatch.resolve: a task with no agent asked for runs its asker's (T1381)
 FLEET_POPUP_FOLLOW_SECS            knob: how often a frozen popup re-reads its client's window (fleet-popup-lib.sh, T741)
 FLEET_POPUP_HOLD_SECS              knob: how often dash-popup.sh --hold checks the panel it holds the popup book for (T890)
 FLEET_PRESTART                     handoff: a start's prestart dir (dash-raw-session.sh --prestart: admission, --finish, worktree made beside the record or ahead of the ↵) to the spawner that takes it (T992)
