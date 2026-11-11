@@ -357,14 +357,16 @@ class Monitor:
         raise ValueError('native event backlog exceeds monitor budget')
 
     def failed_turn(self, data):
-        """The thread's last turn when it settled FAILED and the thread is not
-        running another; None otherwise (or when the turns cannot be read)."""
+        """The thread's last turn when it settled FAILED and the thread sits in
+        systemError (where a provider-failed turn leaves it — an idle thread is
+        the plain idle branch's, and reading every turn end's history is not
+        worth it); None otherwise (or when the turns cannot be read)."""
         try:
             latest = thread_read(self.client, data, include_turns=True)
         except ValueError:
             return None
         turns = latest.get('turns') or []
-        if (latest.get('status', {}).get('type') not in ('systemError', 'idle') or not turns
+        if (latest.get('status', {}).get('type') != 'systemError' or not turns
                 or not isinstance(turns[-1], dict) or turns[-1].get('status') != 'failed'):
             return None
         return turns[-1]
@@ -504,10 +506,6 @@ class Monitor:
                 failed = self.failed_turn(data)
                 if failed is None:
                     return
-                values = self.failure(failed, book)
-            elif (not why and state == 'working' and stype == 'idle'
-                    and (failed := self.failed_turn(data)) is not None):
-                # The same failure with the thread back at idle (T1392).
                 values = self.failure(failed, book)
             elif not why and state in ('working', 'done') and thread.get('status', {}).get('type') in ('active', 'idle'):
                 # Interrupts may emit native idle without a Stop hook. Project

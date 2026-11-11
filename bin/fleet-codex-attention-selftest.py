@@ -423,7 +423,7 @@ class MonitorEvents(unittest.TestCase):
         e409={'message':'unexpected status 409 Conflict: {"error":"Codex continuation source unknown"}','codexErrorInfo':None}
         before=int(a.time.time())
         with patch.dict(os.environ,{'FLEET_CODEX_TURN_RETRY_SECS':'30','FLEET_CODEX_TURN_RETRY_MAX':'2','FLEET_CONF_DIR':self.tmp}):
-            for state in ('systemError','idle'):   # the thread may come back as either
+            for state in ('systemError',):
                 w=self.failed(e409,state)
                 self.assertIn('@claude_state needs',w);self.assertIn('@claude_needs error',w)
                 self.assertIn('unexpected status 409 Conflict',w)
