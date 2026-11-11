@@ -142,7 +142,9 @@ def cancel_pending_start(task):
 
 # --- the rows ------------------------------------------------------------------------
 
-def rows():
+def rows(gone=False):
+    """The list's rows; gone=True adds the hub's ended sessions too (archive's
+    choice — a session already stopped is still one you may archive, task M6WH)."""
     qo = lib("fleet_quickopen", "fleet-quickopen.py")
     seam = os.environ.get("FLEET_SESSION_CLI_ROWS")
     if seam:
@@ -153,10 +155,10 @@ def rows():
     if HOME[0]:
         hub_freshen()
     got = qo.full_rows(os.environ.get("FLEET_SESSION", ""), timeout=15)
-    return pending_rows(own_ids(own_node(got or [])))
+    return pending_rows(own_ids(own_node(got or [])), gone)
 
 
-def pending_rows(rs):
+def pending_rows(rs, gone_too=False):
     """Home-only row expansion, after main() has forwarded a thin client."""
     import fleet_view
     board = fleet_view.board_read()
@@ -173,11 +175,12 @@ def pending_rows(rs):
                                task=r.get('task') or matched.get('task') or '',
                                execution_endpoint=r.get('execution_endpoint') or matched.get('execution_endpoint') or '')
                 continue
-            if not (r.get("archived") or pending_start_task(r) or fleet_view.controlled_stop_task(r)) or r.get("fid") in known:
+            ended = gone_too and r.get("gone") and not r.get("archived")
+            if not (ended or r.get("archived") or pending_start_task(r) or fleet_view.controlled_stop_task(r)) or r.get("fid") in known:
                 continue
             rs.append(dict(key="id:" + r["board"], name=r["name"], title=r["text"],
                            state=r.get("state") or "starting", node=r.get("machine") or "", issue="", pr="", reap="",
-                           group="", repo=r.get("repo") or "", ended="", task=r["task"],
+                           group="", repo=r.get("repo") or "", ended="gone" if ended else "", task=r["task"],
                            archived=r.get("archived", False), board=r.get("board"),
                            record_only=True, pending_start=r.get('pending_start',False),
                            pending_start_explicit=r.get('pending_start_explicit',False),
@@ -273,11 +276,27 @@ def own_ids(rs):
         if wid:
             r["worker_id"] = wid
             r["fleet_id"] = wid.split("/", 1)[1] if "/" in wid else ""
+            if k.startswith("@") and not is_fid(r["fleet_id"]):
+                # a keyed window's hub row carries its worker_id's key alias
+                # (`<fleet UUID>/<slug>:scratch-N`), not an identity (task M6WH):
+                # its fleet_id is the window's own @fleet_id (none: the alias
+                # stays, and archive refuses it as no identity)
+                if fids is None:
+                    fids = window_fids()
+                r["fleet_id"] = fids.get(k) or r["fleet_id"]
         elif k.startswith("@"):
             if fids is None:
                 fids = window_fids()
             r["fleet_id"] = fids.get(k, "")
     return rs
+
+
+FID_RE = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
+
+
+def is_fid(s):
+    """A session identity (a UUID, the hub's store.IsFleetID) — not a key alias."""
+    return bool(FID_RE.fullmatch(str(s or "").lower()))
 
 
 FLEET_UUID = []
@@ -701,11 +720,13 @@ def cmd_archive(args, archived=True):
     args = [a for a in args if a not in ("--yes", "-y")]
     if len(args) != 1:
         return usage()
-    row, rc = one(rows(), args[0])
+    row, rc = one(rows(gone=archived), args[0])
     if row is None:
         return rc
     fid = row.get("board") or row.get("fleet_id")
-    if not fid:
+    if not is_fid(fid):
+        # checked before any stop: a key alias is no identity, and the hub
+        # refuses it — never stop a session that then cannot be archived
         say("入口尚未确认此会话的身份，请稍后重试")
         return 1
     if archived and archive_stops(row):
