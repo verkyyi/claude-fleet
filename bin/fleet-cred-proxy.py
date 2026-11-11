@@ -593,11 +593,57 @@ def codex_ref(kind, value):
     return hashlib.sha256(("fleet-codex-affinity-v1\0" + kind + "\0" + value).encode()).hexdigest()
 
 
+def codex_agent_message(v):
+    """A whole Codex multi-agent v2 message (T1381): client-minted id, the two
+    agent paths, and parts that are client text or ONE sealed provider payload.
+    Anything else in it keeps the request unknown."""
+    if not isinstance(v, dict) or v.get("type") != "agent_message":
+        return False
+    if set(v) - {"type", "id", "author", "recipient", "content"}:
+        return False
+    if not all(isinstance(v.get(k), str) and v[k] for k in ("id", "author", "recipient")):
+        return False
+    content = v.get("content")
+    if not isinstance(content, list) or not content:
+        return False
+    for part in content:
+        if not isinstance(part, dict):
+            return False
+        if part.get("type") == "input_text":
+            if not isinstance(part.get("text"), str) or set(part) - {"type", "text"}:
+                return False
+        elif part.get("type") == "encrypted_content":
+            if not isinstance(part.get("encrypted_content"), str) or not part["encrypted_content"] or set(part) - {"type", "encrypted_content"}:
+                return False
+        else:
+            return False
+    return True
+
+
+def codex_collab_sealed(v):
+    """-> the sealed message a provider's collaboration call carries, else "".
+    Codex multi-agent v2 hands it to the child (and back) as an agent_message's
+    encrypted_content; it is the provider's ciphertext, so it is recorded like
+    one. The only tool arguments ever read, and only this one key."""
+    if v.get("type") != "function_call" or v.get("namespace") != "collaboration" or not isinstance(v.get("arguments"), str):
+        return ""
+    try:
+        args = json.loads(v["arguments"])
+    except (ValueError, RecursionError):
+        return ""
+    msg = args.get("message") if isinstance(args, dict) else None
+    return msg if isinstance(msg, str) else ""
+
+
 def codex_output_refs(value):
-    """Provider envelopes only, never parse tool arguments or user text."""
+    """Provider envelopes only, never parse tool arguments or user text — but
+    a collaboration call's sealed message (codex_collab_sealed)."""
     refs = set()
     def visit(v):
         if isinstance(v, dict):
+            sealed = codex_collab_sealed(v)
+            if sealed:
+                refs.add(codex_ref("encrypted", sealed))
             for k, x in v.items():
                 if k in ("id", "call_id", "conversation", "encrypted_content") and isinstance(x, str) and x:
                     refs.add(codex_ref("encrypted" if k == "encrypted_content" else "id", x))
@@ -756,6 +802,8 @@ def codex_context(method, path, headers, body):
         if v.get("type") == "additional_tools":
             return (v.get("role") == "developer" and not set(v) - {"type", "id", "role", "tools"}
                     and tools(v.get("tools")))
+        if v.get("type") == "agent_message":
+            return codex_agent_message(v)
         if v.get("type", "") not in ("", "message") or v.get("role") not in ("user", "developer", "system"):
             return False
         if set(v) - {"type", "id", "role", "content"}:
@@ -786,8 +834,17 @@ def codex_context(method, path, headers, body):
         typ = v.get("type", "")
         if not isinstance(typ, str):
             unknown, typ = True, ""
-        if typ not in set("message function_call function_call_output custom_tool_call custom_tool_call_output additional_tools local_shell_call web_search_call tool_search_call tool_search_output reasoning compaction item_reference".split()) | {""}:
+        if typ not in set("message function_call function_call_output custom_tool_call custom_tool_call_output additional_tools local_shell_call web_search_call tool_search_call tool_search_output reasoning compaction item_reference agent_message".split()) | {""}:
             unknown = True
+        if typ == "agent_message":
+            # Codex multi-agent v2 (T1381): one thread's message to another. Its
+            # id is client-minted; a sealed payload is the provider's ciphertext
+            # (the parent's spawn_agent / send_message argument) and stays affinity.
+            if not codex_agent_message(v):
+                unknown = True
+            for part in v.get("content") if isinstance(v.get("content"), list) else ():
+                if isinstance(part, dict) and part.get("type") == "encrypted_content":
+                    add("encrypted", part.get("encrypted_content"))
         for k in ("id", "call_id"):
             if k != "id" or not client_input_id(v):
                 add("id", v.get(k))
@@ -798,7 +855,8 @@ def codex_context(method, path, headers, body):
             unknown = True
         if typ in ("reasoning", "compaction") and v.get("id") is None and v.get("encrypted_content") is None:
             unknown = True
-        unknown |= bool(set(v) - set("type role content id call_id name namespace arguments input output status summary encrypted_content phase tools action execution".split()))
+        unknown |= bool(set(v) - set("type role content id call_id name namespace arguments input output status summary encrypted_content phase tools action execution".split())
+                        - ({"author", "recipient"} if typ == "agent_message" else set()))
         if isinstance(v.get("output"), list):
             item(dict(type="message", content=v["output"]))
         content = v.get("content")
@@ -812,6 +870,8 @@ def codex_context(method, path, headers, body):
                     unknown |= bool(set(part) - {"type", "text", "annotations", "logprobs"})
                 elif typ == "input_image":
                     unknown |= not isinstance(part.get("image_url"), str) or not part.get("image_url", "").startswith("data:") or bool(set(part) - {"type", "image_url", "detail"})
+                elif typ == "encrypted_content" and v.get("type") == "agent_message":
+                    pass        # checked and collected above (codex_agent_message)
                 else:
                     unknown = True
         elif content is not None and not isinstance(content, str):
@@ -1983,9 +2043,11 @@ class Tenant:
             by_ref, contested = self.codex_resume_origins(sid, old, refs)
             origins = set(by_ref.values())
             vouched = ""
-            if refs and not unknown and (None in origins or len(origins) != 1):
+            if refs and (unknown or None in origins or len(origins) != 1):
                 # Unrecorded refs of a session that only ever had one origin
                 # stand for it; the checks below then hold it to that origin.
+                # So does a shape this proxy cannot read whole (T1381: a new
+                # Codex item type): whatever it hides came from that origin too.
                 vouched = self.codex_sole_vouches(old, by_ref, contested)
                 if vouched:
                     origins = {vouched}
@@ -2060,9 +2122,10 @@ class Tenant:
                 # Resolve all references to one original subscription. Unknown
                 # context stays on the sole account ever used by this session;
                 # after any switch ambiguity must refuse, never guess.
-                if refs and None not in origins and len(origins) == 1 and not unknown:
+                if refs and None not in origins and len(origins) == 1 and (not unknown or vouched):
                     origin = next(iter(origins))
-                    pick, reason = origin.split("\0", 1)[0], "sole_origin_unseen_ref" if vouched else "source_affinity"
+                    pick, reason = origin.split("\0", 1)[0], ("sole_origin_unknown_shape" if unknown else
+                        "sole_origin_unseen_ref") if vouched else "source_affinity"
                 elif old.get("sole") and not refs:
                     pick, reason = old["sole"], "unknown_context_original"
                 else:

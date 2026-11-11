@@ -350,7 +350,8 @@ class Codex:
             turns = self._turns.get(tid) or []
             if not turns:
                 raise ValueError("list_turns is not supported yet")
-            t["turns"] = [dict(id=x["id"], items=[dict(type="userMessage", clientId=x["clientId"])]) for x in turns]
+            t["turns"] = [dict(id=x["id"], items=[dict(type="userMessage", clientId=x["clientId"])],
+                               **({"status": x["status"]} if x.get("status") else {})) for x in turns]
         return {"thread": t}
 
     def _thread_turns_list(self, params):

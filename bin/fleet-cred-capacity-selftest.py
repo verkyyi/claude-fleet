@@ -113,6 +113,92 @@ class Capacity(unittest.TestCase):
         proxy=server(p.Proxy)
         return proxy,attempts
 
+    def test_native_subagents_parallel_through_http_proxy(self):
+        # T1381: Codex multi-agent v2 — a parent spawns two children at once; each
+        # child's first request carries the parent's sealed spawn message as an
+        # agent_message, and the parent's next request carries their answers.
+        # Every one was a 409 «continuation source unknown» before the fix.
+        proxy,attempts=self.native_http_fixture()
+        vectors={v['name']:v['body'] for v in json.loads((BIN.parent/'tokenledger/shared/credproxy/testdata/codex_native_context.json').read_text())}
+        first=vectors['native-first-turn']
+        def sse(items,rid):
+            response=dict(id=rid,object='response',status='completed',output=items,usage=dict(input_tokens=10,output_tokens=2,total_tokens=12))
+            events=[dict(type='response.created',response=dict(id=rid,object='response',status='in_progress',output=[]))]
+            for index,item in enumerate(items):
+                events+= [dict(type='response.output_item.added',output_index=index,item=item),
+                          dict(type='response.output_item.done',output_index=index,item=item)]
+            events.append(dict(type='response.completed',response=response))
+            return ''.join('event: '+e['type']+'\ndata: '+json.dumps(e)+'\n\n' for e in events).encode()
+        lock=threading.Lock()
+        class Upstream(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_POST(handler):
+                body=json.loads(handler.rfile.read(int(handler.headers['Content-Length'])))
+                with lock:attempts.append((handler.headers.get('chatgpt-account-id'),body))
+                kinds=[i.get('type') for i in body['input']]
+                sealed=[part['encrypted_content'] for i in body['input'] if i.get('type')=='agent_message'
+                        for part in i['content'] if part.get('type')=='encrypted_content']
+                if sealed:          # a child: answer as it
+                    name=sealed[0].rsplit('-',1)[1]
+                    data=sse([dict(type='message',id='msg_child_'+name,role='assistant',status='completed',
+                        content=[dict(type='output_text',text=name.upper()+'_OK',annotations=[])])],'resp_child_'+name)
+                elif 'agent_message' in kinds:   # the parent reading both answers
+                    data=sse([dict(type='message',id='msg_parent_done',role='assistant',status='completed',
+                        content=[dict(type='output_text',text='BOTH_OK',annotations=[])])],'resp_parent_done')
+                else:               # the parent's first turn: two collaboration calls
+                    data=sse([dict(type='reasoning',id='rs_parent',summary=[],encrypted_content='fixture-opaque-parent')]+
+                        [dict(type='function_call',id='fc_spawn_'+n,call_id='call_spawn_'+n,name='spawn_agent',namespace='collaboration',
+                              arguments=json.dumps(dict(task_name=n,message='fixture-sealed-'+n))) for n in ('alpha','beta')],'resp_parent')
+                handler.send_response(200);handler.send_header('Content-Type','text/event-stream')
+                handler.send_header('Content-Length',str(len(data)));handler.end_headers();handler.wfile.write(data)
+        upstream=ThreadingHTTPServer(('127.0.0.1',0),Upstream)
+        thread=threading.Thread(target=upstream.serve_forever);thread.start()
+        def stop():upstream.shutdown();upstream.server_close();thread.join(timeout=3)
+        self.addCleanup(stop)
+        self.cfg.codex_url='http://127.0.0.1:%d'%upstream.server_port
+        token=self.t.keys.mint('', 'parent',86400,capacity=True)
+        def request(body):
+            conn=p.http.client.HTTPConnection('127.0.0.1',proxy.server_port,timeout=5)
+            try:
+                conn.request('POST','/codex/responses',json.dumps(body).encode(),{'Authorization':'Bearer '+token,'Content-Type':'application/json'})
+                answer=conn.getresponse();return answer.status,answer.read()
+            finally:conn.close()
+        status,raw=request(first)
+        self.assertEqual(status,200,raw);self.assertIn(b'spawn_agent',raw)
+        source=self.t.picks['codex','parent']
+        child=vectors['native-subagent-spawn']
+        def child_body(name):
+            body=copy.deepcopy(child)
+            msg=body['input'][-1];msg['recipient']='/root/'+name;msg['id']='amsg_client_spawn_'+name
+            msg['content'][-1]['encrypted_content']='fixture-sealed-'+name
+            return body
+        answers={}
+        def run(name):answers[name]=request(child_body(name))
+        children=[threading.Thread(target=run,args=(n,)) for n in ('alpha','beta')]
+        for c in children:c.start()
+        for c in children:c.join(timeout=10)
+        for name in ('alpha','beta'):
+            status,raw=answers[name]
+            self.assertEqual(status,200,(name,raw));self.assertIn((name.upper()+'_OK').encode(),raw)
+        history=[dict(type='reasoning',id='rs_parent',summary=[],encrypted_content='fixture-opaque-parent')]
+        for n in ('alpha','beta'):
+            history+= [dict(type='function_call',id='fc_spawn_'+n,call_id='call_spawn_'+n,name='spawn_agent',namespace='collaboration',
+                            arguments=json.dumps(dict(task_name=n,message='fixture-sealed-'+n))),
+                       dict(type='function_call_output',id='fco_client_'+n,call_id='call_spawn_'+n,output='{"task_name":"/root/%s"}'%n),
+                       dict(type='agent_message',id='amsg_client_final_'+n,author='/root/'+n,recipient='/root',
+                            content=[dict(type='input_text',text='Message Type: FINAL_ANSWER\nPayload:\n'+n.upper()+'_OK')])]
+        status,raw=request(dict(first,input=first['input']+history))
+        self.assertEqual(status,200,raw);self.assertIn(b'BOTH_OK',raw)
+        # one subscription for the whole family: the children came back to the parent's
+        self.assertEqual(len(attempts),4)
+        self.assertEqual({a for a,_ in attempts},{'fixture-'+source})
+        # proven exactly, not vouched: the parent's collaboration call recorded
+        # each sealed message (as a hash — never the ciphertext on disk)
+        known=self.t.codex_state['sessions']['parent']['refs']
+        for n in ('alpha','beta'):
+            self.assertTrue(known.get(p.codex_ref('encrypted','fixture-sealed-'+n)),n)
+        self.assertNotIn('fixture-sealed',Path(self.tmp.name,'codex-routing.json').read_text())
+
     def test_standalone_search_http(self):
         proxy, attempts = self.native_http_fixture()
         token = self.t.keys.mint('', 'native-search', 86400, capacity=True)
@@ -472,16 +558,19 @@ class Capacity(unittest.TestCase):
         self.assertEqual((got['account'],got['reason'],got['expected_source']),('a','sole_origin_unseen_ref',src))
         self.assertEqual(self.t.codex_pick('one',False,[lost],pin='a')['expected_source'],src)
         with self.assertRaises(ValueError):self.t.codex_pick('one',False,[lost],pin='b')
-        # unparseable fields alongside: kept conservative
-        with self.assertRaises(ValueError):self.t.codex_pick('one',False,[lost],True)
+        # A shape this proxy cannot read whole (T1381: Codex multi-agent v2's
+        # agent_message before it was known) hides nothing but this one origin.
+        got=self.t.codex_pick('one',False,[lost],True)
+        self.assertEqual((got['account'],got['reason'],got['expected_source']),('a','sole_origin_unknown_shape',src))
         # Preview stays read-only; the decision writes no binding.
         self.assertEqual(self.t.codex_pick('one',False,[lost],preview=True)['account'],'a')
         self.t.codex_limits['a']=time.time()+60
         with self.assertRaises(ValueError):self.t.codex_pick('one',False,[lost])
         self.t.codex_limits.clear()
         def refused(sid,refs=(lost,)):
-            with self.assertRaises(ValueError) as e:self.t.codex_pick(sid,False,list(refs))
-            self.assertIn('continuation',str(e.exception))
+            for unknown in (False,True):  # an unreadable shape is held to the same rule
+                with self.assertRaises(ValueError) as e:self.t.codex_pick(sid,False,list(refs),unknown)
+                self.assertIn('continuation',str(e.exception))
         # A session that switched subscriptions has no single origin to vouch.
         self.install((.5,3)); self.t.codex_pick('moved')
         self.t.codex_record('moved','b',[seen],p.codex_ref('account','source-b'))

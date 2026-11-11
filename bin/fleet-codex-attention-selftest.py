@@ -388,6 +388,24 @@ class MonitorEvents(unittest.TestCase):
         self.tick()
         self.assertNotIn('@claude_state',self.writes[-1][-1])
 
+    def test_failed_turn_in_system_error_leaves_working(self):
+        # T1381: a turn the credential proxy refused on every retry ends in
+        # systemError with no Stop hook; the row must not read working forever.
+        self.options='working|||17'
+        self.native.codex.threads[SID]['status']={'type':'systemError','activeFlags':[]}
+        self.native.codex._turns[SID]=[dict(id='t1',clientId='c1',status='failed')]
+        self.native.events.append(self.status('systemError'))
+        self.tick()
+        self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertIn('#{==:#{@claude_state},working}',self.writes[-1][-2])
+        # an unsettled (or not failed) last turn, or a person's blocker, writes nothing
+        for turn,options in (('inProgress','working|||17'),('failed','needs|blocked||17')):
+            self.writes.clear();self.options=options
+            self.native.codex._turns[SID]=[dict(id='t1',clientId='c1',status=turn)]
+            self.native.events.append(self.status('systemError'))
+            self.tick()
+            self.assertFalse(any('@claude_state ' in w[-1] for w in self.writes),(turn,options))
+
     def test_malformed_or_excessive_events_drop_connection_without_state_changes(self):
         for backlog in ([{'method':'thread/status/changed','params':{'threadId':SID,'status':'invalid'}}],
                         [self.status('active',['waitingOnApproval'])]*129):

@@ -160,6 +160,20 @@ func codexRoute(r *http.Request, body []byte) CodexRoute {
 		}
 		switch typ {
 		case "", "message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "additional_tools", "local_shell_call", "web_search_call", "tool_search_call", "tool_search_output", "reasoning", "compaction", "item_reference":
+		case "agent_message":
+			// Codex multi-agent v2 (T1381): one thread's message to another. Its
+			// id is client-minted; a sealed payload is the provider's ciphertext
+			// (the parent's collaboration call argument) and stays affinity.
+			if !codexAgentMessage(m) {
+				route.Unknown = true
+			}
+			if content, ok := m["content"].([]any); ok {
+				for _, part := range content {
+					if p, ok := part.(map[string]any); ok && p["type"] == "encrypted_content" {
+						add("encrypted", p["encrypted_content"])
+					}
+				}
+			}
 		default:
 			route.Unknown = true
 		}
@@ -188,7 +202,8 @@ func codexRoute(r *http.Request, body []byte) CodexRoute {
 			route.Unknown = true
 		}
 		for key := range m {
-			if !contains(strings.Fields("type role content id call_id name namespace arguments input output status summary encrypted_content phase tools action execution"), key) {
+			if !contains(strings.Fields("type role content id call_id name namespace arguments input output status summary encrypted_content phase tools action execution"), key) &&
+				!(typ == "agent_message" && (key == "author" || key == "recipient")) {
 				route.Unknown = true
 			}
 		}
@@ -216,6 +231,10 @@ func codexRoute(r *http.Request, body []byte) CodexRoute {
 							route.Unknown = true
 						}
 					}
+				case "encrypted_content":
+					if typ != "agent_message" {
+						route.Unknown = true
+					} // else checked and collected above (codexAgentMessage)
 				default:
 					route.Unknown = true
 				}
@@ -273,6 +292,9 @@ func codexClientInputID(m map[string]any) bool {
 	if m["type"] == "additional_tools" {
 		return m["role"] == "developer" && only([]string{"type", "id", "role", "tools"}, m) && codexToolsIndependent(m["tools"])
 	}
+	if m["type"] == "agent_message" {
+		return codexAgentMessage(m)
+	}
 	typ, ok := m["type"].(string)
 	if _, present := m["type"]; present && !ok {
 		return false
@@ -309,6 +331,66 @@ func codexClientInputID(m map[string]any) bool {
 	return true
 }
 
+// codexAgentMessage recognizes a whole Codex multi-agent v2 message (T1381):
+// client-minted id, the two agent paths, and parts that are client text or one
+// sealed provider payload. Anything else keeps the request unknown. Keep it
+// aligned with codex_agent_message in fleet-cred-proxy.py.
+func codexAgentMessage(m map[string]any) bool {
+	if m["type"] != "agent_message" {
+		return false
+	}
+	for key := range m {
+		if !contains([]string{"type", "id", "author", "recipient", "content"}, key) {
+			return false
+		}
+	}
+	for _, key := range []string{"id", "author", "recipient"} {
+		if s, ok := m[key].(string); !ok || s == "" {
+			return false
+		}
+	}
+	content, ok := m["content"].([]any)
+	if !ok || len(content) == 0 {
+		return false
+	}
+	for _, value := range content {
+		part, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		switch part["type"] {
+		case "input_text":
+			if _, ok := part["text"].(string); !ok || len(part) != 2 {
+				return false
+			}
+		case "encrypted_content":
+			if s, ok := part["encrypted_content"].(string); !ok || s == "" || len(part) != 2 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// codexCollabSealed returns the sealed message a provider's collaboration call
+// carries, else "". Codex multi-agent v2 hands it to the child as an
+// agent_message's encrypted_content; it is provider ciphertext, so it is
+// recorded like one. The only tool argument ever read, and only this key.
+func codexCollabSealed(m map[string]any) string {
+	args, ok := m["arguments"].(string)
+	if m["type"] != "function_call" || m["namespace"] != "collaboration" || !ok {
+		return ""
+	}
+	var parsed map[string]any
+	if json.Unmarshal([]byte(args), &parsed) != nil {
+		return ""
+	}
+	msg, _ := parsed["message"].(string)
+	return msg
+}
+
 // Called on provider JSON only, never on user input or a tool schema. Missing
 // or oversized events leave references unknown, which resolution refuses.
 func codexOutputReferences(v map[string]any) ([]string, error) {
@@ -317,6 +399,9 @@ func codexOutputReferences(v map[string]any) ([]string, error) {
 	visit = func(value any) {
 		switch x := value.(type) {
 		case map[string]any:
+			if sealed := codexCollabSealed(x); sealed != "" {
+				refs[CodexReference("encrypted", sealed)] = true
+			}
 			for k, v := range x {
 				kind := ""
 				if k == "id" || k == "call_id" || k == "conversation" {
@@ -339,7 +424,8 @@ func codexOutputReferences(v map[string]any) ([]string, error) {
 		}
 	}
 	// Skip arbitrary tool arguments, text and metadata. Only response/item
-	// envelopes supply references; nested textual JSON is never decoded.
+	// envelopes supply references; nested textual JSON is never decoded but
+	// for a collaboration call's sealed message (codexCollabSealed).
 	if response, ok := v["response"].(map[string]any); ok {
 		v = response
 	}

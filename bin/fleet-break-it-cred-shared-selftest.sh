@@ -34,6 +34,9 @@
 #                       only the paths Codex CLI uses go on; every other path, spelling or
 #                       method is a 403 that never reaches chatgpt.com (the hub's half:
 #                       go test github.com/verkyyi/claude-fleet/tokenledger/shared/credproxy TestCodexPathAllowList)
+#   cred-codex-subagent bin/fleet-cred-proxy.py codex_context / codex_agent_message /
+#                       codex_collab_sealed / codex_pick (T1381), bin/fleet-codex-attention.py:
+#                       Codex multi-agent v2 children continue on the parent's subscription
 #   cred-codex-handoff  bin/fleet-cred-proxy.py codex_sync / codex_merge / save_codex_state /
 #                       codex_sole_vouches: a restart's old process keeps recording refs the
 #                       new one would overwrite; a never-switched session's unseen ref stays put
@@ -99,6 +102,23 @@ drill_cred_codex_handoff() {
     || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT="重启交接时旧进程记下的引用合并进新进程、不再被覆盖；只用过一个订阅的会话查不到的引用回原订阅，换过订阅/来源/冲突照旧拒绝；每个 409 都记 deny"
+}
+
+# T1381: a Codex multi-agent v2 parent spawns two children at once; their first
+# request carries the parent's sealed task as an agent_message, the parent's
+# next one their answers — each was 409 «continuation source unknown».
+drill_cred_codex_subagent() {
+  CAP=10
+  local t0 out
+  t0=$(now)
+  out=$(python3 -W ignore::ResourceWarning "$BIN/fleet-cred-capacity-selftest.py" \
+    Capacity.test_native_context_shared_vectors Capacity.test_native_subagents_parallel_through_http_proxy \
+    Capacity.test_unseen_ref_routes_only_a_never_switched_session 2>&1) \
+    || { WHY="$out"; return 1; }
+  out=$(python3 "$BIN/fleet-codex-attention-selftest.py" MonitorEvents.test_failed_turn_in_system_error_leaves_working 2>&1) \
+    || { WHY="$out"; return 1; }
+  SECS=$(since "$t0")
+  WHAT="父会话 + 两个并行子 agent 的 agent_message 续接按精确来源回原订阅；认不出的形状只在单一来源会话里回原源；失败的一轮不再停在 working"
 }
 
 drill_cred_codex_reopen() {
