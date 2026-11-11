@@ -515,7 +515,7 @@ def caller_fid():
 
 def caller_agent():
     """The calling session's coding agent — its window's @cc_agent (claude | codex,
-    stamped by fleet-claude.sh / fleet-codex.sh at every launch); "" otherwise."""
+    stamped by each agent's launcher at every launch); "" otherwise."""
     if not (os.environ.get("TMUX") and os.environ.get("TMUX_PANE")):
         return ""
     try:
