@@ -41,7 +41,7 @@ def board(live_fid=LIVE):
                 name="活页 MCP v2：修体检四个 P1", text="活页 MCP v2：修体检四个 P1", archived=False, state="done")
     gone = dict(fid=GONE, board=GONE, worker_id="", code="HZWX", task="T1378", gone=True, archived=False,
                 name="活页 MCP v2：工具说明去掉 v1 旧名", text="活页 MCP v2：工具说明去掉 v1 旧名",
-                state="ended_no_result", machine="macmini", repo="r")
+                state="ended_no_result", machine="mac-a", repo="r")
     return {"x": [live]}, [gone]
 
 
@@ -50,7 +50,7 @@ class Archive(unittest.TestCase):
         self.m = load()
         self.writes, self.stops = [], []
         qo = type("QO", (), {"full_rows": staticmethod(lambda sess, timeout=8: [live_row()])})
-        line = ["wid:%s/o-r:scratch-118" % FU, "macmini", "online", "", "o/r", "done", "claude", "x", "", "", "1", "@175"]
+        line = ["wid:%s/o-r:scratch-118" % FU, "mac-a", "online", "", "o/r", "done", "claude", "x", "", "", "1", "@175"]
         self.p = [
             patch.dict(os.environ, {"FLEET_SESSION": "fleet"}),
             patch.object(self.m, "lib", return_value=qo),
