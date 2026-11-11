@@ -106,8 +106,8 @@ deliver() { out=$(printf '%s' "$1" | env -u TMUX bash "$BIN/fleet-hub-node.sh" d
 FOP="$F/operator@alice"
 queued_with() { grep -l -F "$1" "$FLEET_CONF_DIR/fleets/$L/peer-queue/"*.json 2>/dev/null | wc -l | tr -d ' '; }
 deliver "$(relay 1 message "$FOP" "$U/issue-7" '{"text":"from the operator"}')"
-st_count; [ "$rc" = 0 ] && [ "$(queued_with 'from operator@alice on mac-a')" = 1 ] \
-  || st_miss "D: an operator message reaches the worker, labelled operator@<login>" "rc=$rc $err"
+st_count; [ "$rc" = 75 ] && [ "$(queued_with 'from operator@alice on mac-a')" = 0 ] \
+  || st_miss "D: an operator message waits at the hub, without a local queue copy" "rc=$rc $err"
 deliver "$(relay 2 child_report "$FOP" "$U/issue-7" '{"child":"issue-42","state":"MERGED"}')"
 st_count; [ "$rc" = 1 ] || st_miss "D: an operator child report is refused" "rc=$rc $err"
 deliver "$(python3 -c 'import json,sys; t=sys.argv[1]; rid=t+"#1"; print(json.dumps(dict(id=rid, kind="receipt", **{"from": sys.argv[2]}, to=t, payload=dict(rid=rid, kind="message", to=sys.argv[2], status="delivered", detail="sent"))))' "$OP" "$F/issue-42")"
@@ -118,7 +118,7 @@ st_count; [ "$rc" = 0 ] && grep -q "\"rid\": \"$OP#1\".*\"state\": \"DELIVERED\"
 deliver "$(relay 3 message "$FOP" "$U/issue-7" '{"text":"wrong repo","repo":"other/app"}')"
 st_count; [ "$rc" = 1 ] && [ "$(queued_with 'wrong repo')" = 0 ] || st_miss "E: another repo's #7 is refused for good" "rc=$rc $err"
 deliver "$(relay 4 message "$FOP" "$U/issue-7" '{"text":"right repo","repo":"acme/app"}')"
-st_count; [ "$rc" = 0 ] && [ "$(queued_with 'right repo')" = 1 ] || st_miss "E: the named repo matches ⇒ delivered" "rc=$rc $err"
+st_count; [ "$rc" = 75 ] && [ "$(queued_with 'right repo')" = 0 ] || st_miss "E: the named repo matches ⇒ hub retries, no local queue" "rc=$rc $err"
 
 # --- F: an older machine's issue-bridge forward is refused for good (#4899) -----------------
 FW=$(relay bridge-900002 message "$FOP" "$U/issue-7" '{"text":"[issue #7 — comment from @bob]\n\nship it","repo":"acme/app","bridge":{"issue":7,"cid":900002}}')

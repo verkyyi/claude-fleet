@@ -11,7 +11,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-relay.XXXXXX")" || exit 2
 L="hrel$$"
 export FLEET_SKIP_GLOBAL_CONF=1
 # no agent takes the outbox here: every send is queued — after 0 s, not the 3 s wait
-export FLEET_HUB_SENT_WAIT=0
+export FLEET_HUB_SENT_WAIT=0 FLEET_PEER_RECEIPT_SECS=0
 export FLEET_CONF_DIR="$WORK/conf"; mkdir -p "$FLEET_CONF_DIR/fleets/$L"
 export FLEET_CC_SESSIONS_DIR="$WORK/sessions"; mkdir -p "$FLEET_CC_SESSIONS_DIR"
 : > "$FLEET_CONF_DIR/fleets/$L/conf"
@@ -92,13 +92,58 @@ ok; [ "$rc" = 0 ] && [ ! -d "$OUTBOX" ] && cmp -s "$LEDGER" "$WORK/history" \
   || st_miss 'old hook is inert, history retained' "rc=$rc $out $err"
 run bash "$BIN/fleet-await.sh" "wid:$F/issue-42" -L "$L" --parent issue-7 --timeout 20
 ok; [ "$rc" = 2 ] && case "$out" in *RETIRED*) true ;; *) false ;; esac || st_miss 'old await returns retirement immediately' "rc=$rc $out"
+# Bare remote identities also route before the inventory has seen a new window.
+RF=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+export FLEET_PEER_ROUTE="$WORK/route.py" ROUTE_FULL="$F/$RF"
+cat > "$FLEET_PEER_ROUTE" <<'PYROUTE'
+import os, sys
+if os.environ.get("ROUTE_FAIL"):
+    print(os.environ["ROUTE_FAIL"], file=sys.stderr)
+    sys.exit(1)
+print(os.environ["ROUTE_FULL"] + "\tu-test")
+PYROUTE
+# The short is already known, exactly as after a remote task's spawn receipt.
+mkdir -p "$FLEET_CONF_DIR/ids"
+printf '%s\n' "$RF" > "$FLEET_CONF_DIR/ids/.known"
+short=$(python3 "$BIN/fleet_id.py" short "$RF")
+for cache_state in fresh empty stale; do
+  case "$cache_state" in
+    fresh) printf '%s\tu-test\n' "$F/$RF" > "$CACHE" ;;
+    empty) : > "$CACHE" ;;
+    stale) touch -t 202001010000 "$CACHE" ;;
+  esac
+  for target in "wid:$RF" "$short"; do
+    run bash "$BIN/fleet-peer-send.sh" -L "$L" "$target" 'remote identity probe'
+    st_eq "remote $target with $cache_state map is queued" 3 "$rc"
+    f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
+    st_eq 'remote identity retains fleet UUID' "$F/$RF" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["to"])' "$f" 2>/dev/null)"
+    rm -f "$OUTBOX"/*.json
+  done
+done
+for reason in 'NOT_FOUND: no known recipient' 'UNAVAILABLE: hub route lookup failed' 'AMBIGUOUS: identity has conflicting routes'; do
+  run env ROUTE_FAIL="$reason" bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$RF" refused
+  st_eq 'route lookup refuses visibly' 1 "$rc"
+  st_has 'route lookup explains the actual failure' "$err" "$reason"
+  st_eq 'refused route leaves no relay' '' "$(ls "$OUTBOX"/*.json 2>/dev/null)"
+done
+# Local ambiguity is a refusal, never permission to route to the hub.
+for window in "$wp" "$wc"; do tf set-window-option -t "$window" @fleet_id "$RF"; done
+for target in "wid:$RF" "$short"; do
+  run bash "$BIN/fleet-peer-send.sh" -L "$L" "$target" 'must not route'
+  st_has 'duplicate local identities refuse' "$err" 'ambiguous'
+  st_eq 'duplicate identities leave no relay' '' "$(ls "$OUTBOX"/*.json 2>/dev/null)"
+done
+for window in "$wp" "$wc"; do tf set-window-option -u -t "$window" @fleet_id; done
+unset FLEET_PEER_ROUTE ROUTE_FULL
+printf '%s/issue-7\tmac-a\t\n' "$F" > "$CACHE"
+
 # --- E: peer-send to a worker elsewhere ---------------------------------------------------
 sockpath=$(tf display-message -p '#{socket_path}')
 pane=$(tf display-message -p -t "$wc" '#{pane_id}')
 out=$(TMUX="$sockpath,1,0" TMUX_PANE="$pane" bash "$BIN/fleet-peer-send.sh" "wid:$F/issue-7" 'ping from mac-b' 2>"$WORK/err"); rc=$?; err=$(cat "$WORK/err")
 f=$(ls "$OUTBOX"/*.json 2>/dev/null | head -1)
 ok; [ "$rc" = 3 ] && [ -n "$f" ] && case "$out" in *"queued → issue-7 on mac-a"*) true ;; *) false ;; esac \
-  && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["kind"]=="message" and r["from"]==sys.argv[2] and r["to"]==sys.argv[3] and r["payload"]["text"]=="ping from mac-b" else 1)' "$f" "$U/acme-app:issue-20" "$F/issue-7" \
+  && python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["kind"]=="message" and r["from"]==sys.argv[2] and r["to"]==sys.argv[3] and r["payload"]["text"]=="ping from mac-b" else 1)' "$f" "$U/$(lib fleet_window_fid "$L" "$wc")" "$F/issue-7" \
   || st_miss "E: a message relay from the pane's worker_id" "rc=$rc out=$out err=$err $(cat "$f" 2>/dev/null)"
 rm -f "$OUTBOX"/*.json
 run bash "$BIN/fleet-peer-send.sh" -L "$L" "wid:$F/issue-7" hi

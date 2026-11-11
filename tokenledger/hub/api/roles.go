@@ -45,7 +45,8 @@ const (
 // A console page keeps its row at its old path: app_mount.go serves it under
 // /app (claude-fleet#3583) and TestAppPagesAreRoutes holds the two together.
 var routeAccess = map[string]string{
-	SchedulesPath: accessUser, NodeSchedulesPath: accessSelf, NodeSchedulesPath + "/": accessSelf,
+	NodeWorkerRoutePath: accessSelf, // node token and relay-owner scope
+	SchedulesPath:       accessUser, NodeSchedulesPath: accessSelf, NodeSchedulesPath + "/": accessSelf,
 	previewAuthorize: accessSelf, previewAPI: accessSelf, nodePreviewAPI: accessSelf, control.PreviewDataPath: accessSelf,
 	AttachmentPath:                 accessUser,
 	control.AttachmentDataPath:     accessSelf,

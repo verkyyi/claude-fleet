@@ -4,7 +4,7 @@
 #
 #   RAILS   no fleet ⇒ ABORT(2), nothing bound ⇒ FAIL(4): never a guessed repo.
 #   TASK    @task T<n>: the record off the hub (the FLEET_TASK_RECORD seam), the
-#           flow ending in `report merged`, the directive; an unreadable record ⇒ 5.
+#           flow ending in a result summary, the directive; an unreadable record ⇒ 5.
 #   ISSUE   @issue N (or an issue-<N> worktree): the words are already the first
 #           turn — no claim line, `Closes #N` in the flow.
 #   NO GH   neither shape ever runs gh.
@@ -93,7 +93,9 @@ has 'task=T42'                 || st_fail "TASK the fleet block names the record
 has 'RECORD-TITLE 修风扇'       || st_fail "TASK the record's title" "$OUT"
 has 'RECORD-WORDS 为什么一直转'  || st_fail "TASK the record's words" "$OUT"
 has 'dispatched by: T7'        || st_fail "TASK the dispatcher" "$OUT"
-has 'report (state: merged'    || st_fail "TASK the flow ends with report merged" "$OUT"
+has 'Summarize the result, PR and validation' || st_fail "TASK the flow ends with a summary" "$OUT"
+has 'use send to the explicit session ID and check its delivery outcome' || st_fail "TASK requested replies use explicit send" "$OUT"
+has 'Legacy report calls save only your own result history' || st_fail "TASK legacy result recording does not promise delivery" "$OUT"
 has 'merge=rebase'             || st_fail "TASK the merge method" "$OUT"
 has 'DIRECTIVE-MARKER for T42' || st_fail "TASK the directive" "$OUT"
 has 'origin: none'             || st_fail "TASK the origin line, none included" "$OUT"
@@ -127,6 +129,7 @@ has 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo' || st_fail "
 has 'issue=77'          || st_fail "ISSUE @issue wins over the worktree's number" "$OUT"
 has 'Closes #77'        || st_fail "ISSUE the flow carries Closes #N" "$OUT"
 has 'origin: scratch-4' || st_fail "ISSUE the origin" "$OUT"
+has 'requested replies use send' || st_fail 'ISSUE origin does not promise retired report delivery' "$OUT"
 FAKE_AT_ISSUE='' run "$WORK/widgets-issue-12"
 has 'issue=12' || st_fail "ISSUE the issue-<N> worktree is the fallback" "$OUT"
 st_pass "ISSUE words-only: Closes #N, @issue first, worktree fallback"

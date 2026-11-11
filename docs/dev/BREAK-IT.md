@@ -97,6 +97,9 @@
 | Claude 会话恢复时 transcript 没有保存标题，启动又没传显示名 | 窗口列表有名字，Claude 底栏却只剩 `@主机` | 统一 Claude 启动层把窗口名作为 `--name` 传入，新建、恢复、fork 都生效；显式名字优先，Codex 不带此参数（T1334 / D7QD） | `session-footer-unnamed` |
 | 会话创建没名称，或命名只改窗口后被回收 | 已结束列表出现空白行，人工标题丢失 | 创建持久缺省名；正式 `named` 事件，人工名优先；共享 Board 按身份取标题及短码兜底 | `session-title-lost` |
 | 新会话用短码绑定任务，首句改名却只同步旧式 T 数字编号（T979） | 顶部已是首句，面板仍显示 New Session / 新会话 | 非空任务地址交给任务记录入口统一校验、解析和改名，保留占位标题比较与一次性命名 | `session-title-placeholder` |
+| 收件端 inbox 暂不可用，本地入队却向 hub 提前确认 delivered | 本地补送后发件端仍停在 QUEUED，无法确认最终送达 | hub 保留唯一持久队列；收件端返回可重试，不另建本地副本，真正入 inbox 后再确认 | `cross-send-queued-receipt` |
+| hub 已接收消息，收件节点回 FAILED / EXPIRED 后发送端仍显示 queued | 调用方误以为会补送，最后一条账本被排队状态覆盖 | 发送端保留终态回执并输出其失败原因，返回非零，不再写 QUEUED | `cross-send-terminal-receipt` |
+| 远端任务刚启动，短码解析成裸 fid，但窗口还没有进入本机 hub 缓存 | send 误报本机没有 worker，远端回发也失去稳定地址 | hub 按身份查任务放置记录或窗口清单，补齐完整 worker_id；未送达明确排队或失败，发送者携带稳定 fid | `cross-send-bare-fid` |
 | 编排会话给别的机器上的 worker 发话（`fleet-peer-send.sh`；当时还有评论转达，#4898 去掉） | relay 的 `from` 是 `<uuid>/orchestrator`，入口按 worker_id 语法拒收（INVALID_ARGUMENT），agent 挪进 outbox 的 `refused/` ；发送端只看见文件不见了，报「queued · not delivered yet」，账本永远 QUEUED——2026-10-09 编排对 mac-d 的四个 worker 发了几小时没一条送到 | 没有自己键的会话（当年的编排 / 管家窗口）用身份 `<uuid>/<fleet_id>` 发——它的键就是身份（#2729、#4341），入口认、worker 断言也对得上；被拒的 relay 由 `fleet_hub_refused` 读出原因：退出 1、原因上 stderr、账本记 FAILED；仍在排队的，`FLEET_PEER_RECEIPT_SECS`（60 s）后没回执就在发送会话里说出来 | `cross-send-refused-unseen` |
 | 旧跨机回报积压或迟到回执（T756） | 升级后继续排队、补送或提醒，恢复已删除的 Parent 协调 | 回报永久结算 FAILED，保留完整原文；迟到回执不能复活，不转无主提醒，重复清理不重复结算 | `cross-report-queued-unseen` |
 | 派单 `--as <name>` 指的 agent 文件写坏（frontmatter 读不出）或找不到（项目 `.claude/agents`、`~/.claude/agents`、已装插件里都没有） | 自定义会话就是一份标准 agent 文件（#3122）：照开的话，Claude Code 要么悄悄退回默认会话、要么开出一个没有说明的执行会话——不是你要的那种，也没人知道 | 派单在开任何窗口之前就拒（exit 1），stderr 写出是哪个文件、或在哪几处找过（`fleet-agent-def.py`）；没写 `--as`、自带的 `fleet-worker` 又被你删了不算错：照常开一个收到单子的普通会话 | `agent-file-broken` |

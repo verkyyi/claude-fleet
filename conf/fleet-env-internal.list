@@ -935,3 +935,6 @@ FLEET_PS_COMMAND                    seam: bounded numeric ps snapshot producer f
 FLEET_JOB_LOCK_DIR                  path: periodic job lock directory; defaults to this login's conf/job-locks
 FLEET_JOB_PID                       handoff: PID holding periodic entrypoint descriptor 198 across exec
 FLEET_JOB_KEY                       handoff: name of periodic entrypoint held by FLEET_JOB_PID
+
+FLEET_PEER_RELAY_RETRY            handoff: hub-node retains this relay for retry; peer-send must not create a second local queue (T1380)
+FLEET_PEER_ROUTE                  seam: Python route resolver used by the cross-machine send selftest (T1380)

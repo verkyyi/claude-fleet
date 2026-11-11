@@ -289,10 +289,12 @@ if [ "$KIND" = message ]; then
   # bridge is gone (issue #4899) — refused for good, never re-sent.
   [ -s "$WORK/bridge" ] && die 1 "no issue bridge here (removed, claude-fleet#4899) — the comment was not delivered"
   text="[from $fkey on ${NODE:-another machine}]"$'\n'"$(cat "$WORK/msg")"
-  out=$(env -u TMUX FLEET_PEER_DELIVERY_ID="$RID" bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
+  out=$(env -u TMUX FLEET_PEER_DELIVERY_ID="$RID" FLEET_PEER_RELAY_RETRY=1 bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
   case "$rc" in
     0) printf '%s\n' "$out" >&2; exit 0 ;;
-    3) printf 'queued at %s: %s\n' "$(hostname -s 2>/dev/null)" "${out##*$'\n'}" >&2; exit 0 ;;
+    # The hub owns retry/expiry. Do not acknowledge an unavailable inbox or
+    # create a second local queue; a retry carries the same admission RID.
+    3) printf 'queued at %s: %s\n' "$(hostname -s 2>/dev/null)" "${out##*$'\n'}" >&2; exit 75 ;;
     1|2) die 1 "${out##*$'\n'}" ;;         # refused (ambiguous, bad target) or ended: for good
     *) die 75 "${out##*$'\n'}" ;;
   esac

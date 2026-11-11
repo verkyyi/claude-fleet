@@ -7,7 +7,7 @@
 #   G  fleet-peer-send.sh from the ORCHESTRATOR's pane: the relay's `from` is the
 #      window's identity `<fleet UUID>/<fleet_id>` — a worker_id the hub accepts —
 #      never `<fleet UUID>/orchestrator` (refused INVALID_ARGUMENT, unseen, on
-#      2026-10-09); a worker pane still sends as its key.
+#      2026-10-09); a worker pane also sends as its stable identity.
 #   H  a relay the hub REFUSED (the agent moved it to refused/ with its reason):
 #      exit 1, the reason on stderr, a FAILED row in the delivery book — never
 #      `queued`.
@@ -81,7 +81,7 @@ from_pane() {
 # The hub's worker_id grammar, the claude-fleet copy of fleetid.workerIDRE.
 hub_ok() { (cd "$BIN" && python3 -c 'import sys, fleet_hub_common as h; sys.exit(0 if h.WORKER_ID_RE.fullmatch(sys.argv[1]) else 1)' "$1"); }
 
-# --- G: a keyless session sends as its identity (its key, issue #4341) ----------------------------------------------
+# --- G: every session sends as its stable identity ---------------------------------------
 export FLEET_PEER_RECEIPT_SECS=0
 # No agent takes the outbox file in G or I, so a send's wait for it (3 s) only
 # ever times out — the same «not handed over yet» queue either way; 0 skips the
@@ -99,8 +99,9 @@ st_count; ! hub_ok "$U/orchestrator" || st_miss "G: (premise) <uuid>/orchestrato
 rm -f "$OUTBOX"/*.json
 from_pane "$p7" "wid:$F/issue-42" 'hello from a worker'
 f=$(outbox | head -1)
-st_count; [ "$rc" = 3 ] && [ -n "$f" ] && [ "$(jget "$f" from)" = "$U/acme-app:issue-7" ] \
-  || st_miss "G: a worker pane still sends as its key" "rc=$rc $(cat "$f" 2>/dev/null)"
+worker_fid=$(lib fleet_window_fid "$L" "$w7" "$L")
+st_count; [ "$rc" = 3 ] && [ -n "$f" ] && [ "$(jget "$f" from)" = "$U/$worker_fid" ] \
+  || st_miss "G: a worker pane sends as its stable identity" "rc=$rc $(cat "$f" 2>/dev/null)"
 rm -f "$OUTBOX"/*.json
 
 # --- H: the hub refused it ----------------------------------------------------------------
@@ -124,6 +125,33 @@ st_count; case "$err" in *"refused"*"INVALID_ARGUMENT: from: worker_id must be"*
 st_count; tail -1 "$BOOK" 2>/dev/null | grep -q '"state": "FAILED".*refused by the hub: INVALID_ARGUMENT' \
   || st_miss "H: the delivery book says FAILED, with the reason" "$(tail -1 "$BOOK" 2>/dev/null)"
 rm -rf "$OUTBOX"/*.json "$OUTBOX/refused"
+
+# --- H2: a terminal receipt during the synchronous wait is never overwritten as queued ----
+for receipt_state in FAILED EXPIRED; do
+  # Stand-in agent: the hub has already answered the relay. Record that final
+  # receipt before acknowledging/removing the outbox file, so send reads it.
+  ( for _ in $(seq 1 80); do
+      g=$(outbox | head -1)
+      if [ -n "$g" ]; then
+        bash "$BIN/fleet-peer-queue.sh" note -L "$L" --rid "$(jget "$g" id)" \
+          --state "$receipt_state" --to "$F/issue-42" --kind message --via hub \
+          --detail "fixture terminal $receipt_state: recipient unavailable" || exit 1
+        rm -f "$g"
+        exit 0
+      fi
+      sleep 0.1
+    done
+    exit 1 ) &
+  agent=$!
+  from_pane "$po" "wid:$F/issue-42" "terminal $receipt_state reply"
+  wait "$agent" 2>/dev/null || st_miss "H2: agent must persist the terminal receipt" "$receipt_state"
+  st_count; [ "$rc" = 1 ] && [ -z "$out" ] \
+    || st_miss "H2: $receipt_state returns failure, never queued" "rc=$rc out=$out err=$err"
+  st_count; case "$err" in *"fixture terminal $receipt_state: recipient unavailable"*) true ;; *) false ;; esac \
+    || st_miss "H2: $receipt_state includes the recipient failure reason" "$err"
+  st_count; tail -1 "$BOOK" | grep -q "\"state\": \"$receipt_state\"" \
+    || st_miss "H2: $receipt_state remains terminal in the delivery book" "$(tail -1 "$BOOK")"
+done
 
 # --- I: a send still queued after the receipt window is told to its sender -------------------
 export FLEET_HUB_SENT_WAIT=0

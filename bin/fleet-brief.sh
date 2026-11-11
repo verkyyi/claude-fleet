@@ -10,9 +10,9 @@
 #
 # It prints, in order:
 #   fleet     — session / repo / base / base checkout / merge (or land) method,
-#               and the window's `@origin`: WHO spawned it, owed a report
+#               and the window's `@origin`: WHO spawned it; explicit replies use send
 #   task      — the record (title · state · the request), read off the hub
-#   flow      — implement → PR → pr_verdict / pr_merge → report
+#   flow      — implement → PR → pr_verdict / pr_merge → summarize
 #   directive — fleet_worker_prompt_body: the per-fleet HOW-to guidance (#234)
 #   language  — the one-language rule (#620), LAST: the latest instruction wins
 #
@@ -100,9 +100,9 @@ else
   printf 'issue=%s  (a GitHub issue, read as words only: the fleet never claims, comments on or closes it — the PR'"'"'s `Closes #%s` does)\n' "$at_issue" "$at_issue"
 fi
 if [ -n "$at_remote" ]; then
-  printf 'origin: %s on another machine (worker_id %s — the report tool carries it through the hub)\n' "$at_origin" "$at_owid"
+  printf 'origin: %s on another machine (requested replies: send to wid:%s; check delivery)\n' "$at_origin" "$at_owid"
 elif [ -n "$at_origin" ]; then
-  printf 'origin: %s (report to it when you ship: the report tool)\n' "$at_origin"
+  printf 'origin: %s (requested replies use send to its explicit session identity; check delivery)\n' "$at_origin"
 else
   printf 'origin: none (opened by a person — nothing to report back to)\n'
 fi
@@ -131,10 +131,8 @@ print(words.strip() or "(only the title — the first message is the person\x27s
     rc=5
   fi
   names="the body names $tname, no \`Closes #N\`"
-  closes="it closes $tname and tells the dispatcher"
 else
   names="the body carries \`Closes #$at_issue\`"
-  closes="it tells whoever spawned you"
 fi
 
 printf '\n===== flow =====\n'
@@ -143,8 +141,9 @@ printf '%s\n' \
   "1. Implement in this worktree and verify per the repo's rules (CI is the verdict)." \
   "2. Commit, push this branch, open the PR ($_gh_create); $names." \
   "3. pr_verdict (wait: true while PENDING) → pr_merge on READY. Never merge red." \
-  "4. report (state: merged, pr, summary) right after the merge — $closes." \
-  "   Blocked: ask, then report (state: blocked). Then stop."
+  "4. Summarize the result, PR and validation for the person." \
+  "   Parent reports are retired. If a reply was requested, use send to the explicit session ID and check its delivery outcome." \
+  "   Legacy report calls save only your own result history; they do not deliver a reply. Blocked: ask for the missing decision."
 
 printf '%s\n' 'Never claim, comment on or close a GitHub issue yourself, and never file one (issue #4898).' 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository.'
 

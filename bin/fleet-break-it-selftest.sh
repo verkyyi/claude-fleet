@@ -4749,6 +4749,30 @@ drill_epic_driver_unknown_command() {
 # refused/<file> + .why, any other is "stored" (deleted). A keyless session's send
 # (its key is its identity, issue #4341) must be stored; a refusal must come back as
 # exit 1 + FAILED in the book.
+drill_cross_send_queued_receipt() {
+  CAP=120; local started
+  started=$(now)
+  python3 "$BIN/fleet-return-message-selftest.py" >"$WORK/queued-receipt.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/queued-receipt.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='pending inbox retries the same relay; final receipt follows native delivery'
+}
+
+drill_cross_send_terminal_receipt() {
+  CAP=120; local started
+  started=$(now)
+  bash "$BIN/cross-send-selftest.sh" >"$WORK/terminal-receipt.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/terminal-receipt.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='FAILED and EXPIRED stay terminal; sender receives the reason'
+}
+
+drill_cross_send_bare_fid() {
+  CAP=120; local started
+  started=$(now)
+  bash "$BIN/hub-relay-selftest.sh" >"$WORK/bare-fid.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/bare-fid.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='bare remote fid and short code route before inventory; refusal stays visible'
+}
+
 drill_cross_send_refused_unseen() {
   CAP=10; BREAK_SOCK="$WORK/sock-xs"; local t0 c="$WORK/xs" u po rc ob
   mkdir -p "$c/conf/fleets/xs" "$c/conf/control"

@@ -107,8 +107,8 @@ except OSError:
 print(d)' "$(fleet_state_dir "$rc_sess")/delivery.ndjson" "$rc_rid" 2>/dev/null)
   msg="[delivery] 发给 ${rc_to} 的消息 ${rc_secs} 秒内没有送达（${st:-QUEUED}${det:+：$det}）「${rc_ex}」"
   case "$st" in
-    FAILED|EXPIRED) msg="$msg —— 不会再送了，换条路（对方 issue 的 to-worker 评论，或入口的 worker_message）。" ;;
-    *) msg="$msg —— 仍在排队，对方能接时补送；急的话换条路（对方 issue 的 to-worker 评论，或入口的 worker_message）。" ;;
+    FAILED|EXPIRED) msg="$msg —— 不会再送了，请核对目标会话和失败原因后重试。" ;;
+    *) msg="$msg —— 仍在排队，对方能接时补送；请检查目标会话是否在线。" ;;
   esac
   exec bash "$BIN/fleet-peer-send.sh" "$rc_pane" "$msg" >/dev/null 2>&1
 fi
@@ -145,10 +145,10 @@ if [ $# -eq 0 ] || [ "$1" = "-" ]; then text=$(cat); else text="$*"; fi
 # unless the target window works that repo (a bare `issue:<N>` matched by number).
 HUB_REPO=''
 hub_send() {
-  local full="$1" node="$2" where me='' mysess='' payload suf f how why qn
+  local full="$1" node="$2" where me='' mysess='' payload suf f how why qn receipt secs
   where=${node%:lost}; where=${where:-another machine}
   [ -n "${TMUX:-}" ] && mysess=$(fleet_current_session 2>/dev/null)
-  [ -n "${TMUX_PANE:-}" ] && [ -n "$mysess" ] && me=$(fleet_worker_id_key "$mysess" "$TMUX_PANE" 2>/dev/null)
+  [ -n "${TMUX_PANE:-}" ] && [ -n "$mysess" ] && me=$(fleet_worker_id "$mysess" "$TMUX_PANE" 2>/dev/null)
   if [ -z "$me" ]; then
     [ -n "$mysess" ] || mysess=$(fleet_sender_session "$SOCK" 2>/dev/null)
     me=$(fleet_operator_sender "$mysess" 2>/dev/null)
@@ -168,15 +168,35 @@ hub_send() {
         --kind message --via hub --detail "refused by the hub: $why" 2>/dev/null || :
       die 1 "'$tgt' on $where — the hub refused the message: $why; nothing waits"
     fi
+    secs=0
     case "$node" in
       '') how='its machine is not in a fresh hub map' ;;
       *:lost) how='its machine is offline' ;;
-      *) if bash "$BIN/fleet-peer-queue.sh" wait -L "$mysess" --rid "$me#$suf" \
-              --secs "${FLEET_HUB_RECEIPT_WAIT:-10}" >/dev/null 2>&1; then
-           printf 'sent → %s on %s (delivered)\n' "${full#*/}" "$node"
-           exit 0
-         fi
-         how='not delivered yet' ;;
+      *) secs=${FLEET_HUB_RECEIPT_WAIT:-10}; how='not delivered yet' ;;
+    esac
+    receipt=$(bash "$BIN/fleet-peer-queue.sh" wait -L "$mysess" --rid "$me#$suf" --secs "$secs" 2>/dev/null)
+    case "$receipt" in
+      DELIVERED)
+        printf 'sent → %s on %s (delivered)\n' "${full#*/}" "$where"
+        exit 0 ;;
+      FAILED|EXPIRED|HANDED)
+        why=$(python3 - "$(fleet_state_dir "$mysess")/delivery.ndjson" "$me#$suf" <<'PYDETAIL'
+import json, sys
+detail = ""
+try:
+    for line in open(sys.argv[1], encoding="utf-8"):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if row.get("rid") == sys.argv[2] and row.get("detail"):
+            detail = row["detail"]
+except OSError:
+    pass
+print(detail)
+PYDETAIL
+)
+        die 1 "'$tgt' on $where — delivery $receipt${why:+: $why}; nothing waits" ;;
     esac
   else
     how='the hub is not reachable from here; this machine sends it when it is'
@@ -307,8 +327,10 @@ case "$idcode" in
     w=''
     while IFS= read -r s; do
       [ -n "$s" ] || continue
-      if [ "$s" = "-" ]; then w=$(fleet_win_for_fid "$fid" '' 2>/dev/null) || w=''
-      else w=$(fleet_win_for_fid "$fid" "$s" 2>/dev/null) || w=''; fi
+      if [ "$s" = "-" ]; then w=$(fleet_win_for_fid "$fid" '' 2>/dev/null); wrc=$?
+      else w=$(fleet_win_for_fid "$fid" "$s" 2>/dev/null); wrc=$?; fi
+      [ "$wrc" -eq 2 ] && die 1 "identity '$fid' is ambiguous locally; nothing sent"
+      [ "$wrc" -eq 0 ] || w=''
       [ -n "$w" ] && { [ "$s" = "-" ] || SOCK=$s; break; }
     done <<EOF_IDS
 $socks
@@ -357,8 +379,16 @@ case "$tgt" in
         elif [ "$rc" -ne 2 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ]; then
           case "${tgt#wid:}" in ?*/?*) fleet_wid_home "$tgt" >/dev/null 2>&1 || full=${tgt#wid:} ;; esac
         fi
+        # A short code resolves to a bare identity. Inventory is only a cache:
+        # a task placement already knows the full address before its first tick.
+        # Ask the hub rather than declaring a remote identity absent locally.
+        if [ -z "$full" ] && [ "$rc" -ne 2 ] && [ "${CCQUOTA_FLEET:-0}" = 1 ] && fleet_is_fid "${tgt#wid:}"; then
+          route=$(python3 "${FLEET_PEER_ROUTE:-$BIN/fleet-peer-route.py}" "${tgt#wid:}" 2>&1) \
+            || die 1 "'$tgt' — $route"
+          full=${route%%$'\t'*}; node=${route#*$'\t'}
+        fi
         if [ -z "$full" ]; then
-          [ "$rc" -eq 2 ] && die 2 "bad worker id '$tgt' (want wid:<fleet UUID>/<fleet_id>, wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
+          [ "$rc" -eq 2 ] && die 2 "invalid or ambiguous worker id '$tgt' (want wid:<fleet UUID>/<fleet_id>, wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
           # Ended? Only this machine's history can say, and only for its own fleet's
           # key: another fleet's `#7` is not ours.
           sp=$(_fleet_wid_split "$tgt"); u=${sp%%$'\t'*}
@@ -460,6 +490,13 @@ delivery_id="${FLEET_PEER_DELIVERY_ID:-local:peer#$(date +%s).$$.${RANDOM:-0}}"
 queue_here() {
   local s fid
   case "$tgt" in @*|%*) ;; *) die 1 "$1" ;; esac
+  # A hub relay already has a durable queue and retries this same delivery ID.
+  # Do not create a second local copy whose later drain cannot acknowledge the
+  # hub. Only an actual inbox delivery ends the hub's retry.
+  if [ "${FLEET_PEER_RELAY_RETRY:-0}" = 1 ]; then
+    echo "queued → ${who:-$tgt}${label:+ ($label)} — $1; retained by the hub for retry"
+    exit 3
+  fi
   s=$("${tm[@]}" display-message -p -t "$tgt" "$FLEET_SESSION_FMT" 2>/dev/null)
   [ -n "$s" ] || die 1 "$1"
   fid=$(fleet_window_fid "$s" "$tgt" "$SOCK" 2>/dev/null) || die 1 "$1"

@@ -40,8 +40,8 @@ import (
 // The same channel carries the other half routing needs: after heartbeats the
 // hub pushes the node owner's worker map (TypeWorkers) — every worker on every
 // machine of that owner, with its machine and its parent — which the agent
-// keeps as claude-fleet's local cache. claude-fleet never asks the network
-// where a worker is; it reads that file.
+// keeps as claude-fleet's local cache. A missing identity can be resolved via
+// /v1/node/worker-route before the next inventory push arrives.
 
 // relayResendAfter is how long a pushed, unanswered relay waits before the
 // hub pushes it again (a lost frame, a node that restarted mid-apply).

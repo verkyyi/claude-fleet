@@ -6986,7 +6986,7 @@ fleet_hub_move() {
 #   remote <node>              not here; the hub last saw it on <node>
 #   unknown                    neither — never live here, and the hub can't place it
 # rc 0 for every verdict above; rc 2 (and `unknown`) for a target that is no
-# worker_id, key or window. A window target (@id / %pane / sess:idx / sess:name)
+# worker_id, key or window, or is ambiguous locally. A window target (@id / %pane / sess:idx / sess:name)
 # is local or unknown, nothing else — which is why a repo-qualified key
 # (`<slug>:issue-<N>`, the same shape as `sess:name`) needs its `wid:` prefix. A worker_id of a fleet configured HERE never asks the hub:
 # its fleet is this machine, so not-live-here is `unknown`.
@@ -7017,7 +7017,7 @@ fleet_worker_locate() {
       # An identity (issue #1646) resolves through fleet_win_for_fid, same rails.
       w=$(fleet_win_for_addr "$k" "$(fleet_socket "$home")"); rc=$?
       [ "$rc" -eq 0 ] && [ -n "$w" ] && { printf 'local %s %s\n' "$w" "$home"; return 0; }
-      [ "$rc" -eq 2 ] && { echo unknown; return 0; }
+      [ "$rc" -eq 2 ] && { echo unknown; return 2; }
       [ -n "$u" ] && { echo unknown; return 0; }
     fi
     if node=$(_fleet_hub_node "$u" "$k"); then printf 'remote %s\n' "$node"; else echo unknown; fi
