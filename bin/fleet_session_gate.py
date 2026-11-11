@@ -482,6 +482,13 @@ def legacy_deliver(a):
         work_changed_locked(a.fid, w.get("task", ""))
         r = dict(fid=a.fid, delivery=delivery, at=now(), state="native", legacy=True,
                  sid=w["sid"], agent=w["agent"], text=text, images=[], why="legacy-admission")
+        if known:
+            # A returned admission retries the same receipt. A second file
+            # would leave find() reading the earlier returned state forever,
+            # causing every replay after success to inject the words again.
+            r["_path"] = known["_path"]
+            r["at"] = known["at"]
+            text = r["text"] = known["text"]
         save(r)
         p = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; words=$(cat); '
                             '_fleet_agent_deliver_native "$2" "$3" "$words" "$4"; rc=$?; '
