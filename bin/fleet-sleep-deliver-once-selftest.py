@@ -9,7 +9,7 @@ deliver. That step used to call the WHOLE fleet_agent_deliver — back into the 
 a second admission under a fresh id, blocked on the lock the first one held until
 its 20 s bound ran out: the first came back «returned» (the hub retried it) and the
 second went in when the lock freed — the same words twice, in the field from
-mini2 → macmini and macmini → mini2. Its put-in is now the adapter's own
+one machine to another, both ways. Its put-in is now the adapter's own
 (_fleet_agent_deliver_native): one admission, one copy.
 Drives: bin/fleet_worker_life.py, bin/fleet-lib.sh."""
 import os
