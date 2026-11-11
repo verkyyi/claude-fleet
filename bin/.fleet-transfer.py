@@ -23,6 +23,7 @@ import time
 # The agent adapter table (T620, C4): every agent difference this helper honours
 # is a column there (C7's transfer_* columns), never a test of the agent's name.
 ADAPTER = runpy.run_path(str(Path(__file__).with_name('fleet_agent_adapter.py')))['get']
+DIALOG = runpy.run_path(str(Path(__file__).with_name('fleet_exit_dialog.py')))
 SEP = '\x1f'   # the source line's separator: never whitespace, so an empty field stays a field
 
 
@@ -570,10 +571,12 @@ def process_check(mode, pid):
 def loop_exit_confirmation(screen, bundle=None):
     """Recognize only Claude's selected exit choice for ONE self-paced timer.
 
-    Other background jobs, multiple timers, a different selection, truncated
-    dialogs and ordinary transcript text must never receive a blind Enter.
+    Other background jobs, multiple timers, a different selection and ordinary
+    transcript text must never receive a blind Enter. A task row is read as
+    Claude draws it — wrapped in a narrow pane, its prompt cut with `…`
+    (T1385, fleet_exit_dialog).
     """
-    lines = [line.strip() for line in screen.splitlines() if line.strip()]
+    items = DIALOG['parse'](screen)
     if bundle:
         manifest = json.loads((bundle / 'manifest.json').read_text())
         replacement = manifest.get('quota_loop_replacement')
@@ -583,30 +586,16 @@ def loop_exit_confirmation(screen, bundle=None):
             # this is still the exact authorized prompt, not another task.
             match = re.fullmatch(r'/loop [1-9][0-9]*[smhd] ([^\r\n]+)', invocation)
             labels = replacement.get('native_exit_invocations') or ([invocation] + (['/loop ' + match[1]] if match else []))
-            label = '(?:' + '|'.join(re.escape(x) for x in labels) + ')'
-            return (len(lines) >= 7
-                    and lines[-7:-5] == ['Background work is running', 'The following will stop when you exit:']
-                    and re.fullmatch(r'scheduled task · Runs once in .+ · ' + label, lines[-5]) is not None
-                    and lines[-4:] == ['❯ 1. Exit and stop tasks', '2. Move to background and exit',
-                                       '3. Stay', 'Enter to confirm · Esc to cancel'])
+            return DIALOG['matches'](items, [labels], lambda labels, item: (
+                item['kind'] == 'scheduled' and item['desc'].startswith('Runs once in ')
+                and sum(DIALOG['prompt_shown'](label, item['prompt'], item['cut']) for label in labels) >= 1))
         if manifest.get('native_cron'):
             jobs = [j for j in json.loads(Path(manifest['loop_spec_path']).read_text())['jobs']
                     if j['id'] not in manifest.get('durable_ids', [])]  # deleted natively already
-            n = len(jobs)
-            if not n:
-                return False
-            if len(lines) < n+6 or lines[-n-6:-n-4] != ['Background work is running', 'The following will stop when you exit:']:
-                return False
-            tasks = lines[-n-4:-4]
-            if lines[-4:] != ['❯ 1. Exit and stop tasks', '2. Move to background and exit', '3. Stay', 'Enter to confirm · Esc to cancel']:
-                return False
-            return (all(re.match(r'(?:scheduled|cron) task · ', line) for line in tasks)
-                    and all(sum(job['cron'] in line or job['prompt'] in line for line in tasks) == 1 for job in jobs))
-    return (len(lines) >= 7
-            and lines[-7:-5] == ['Background work is running', 'The following will stop when you exit:']
-            and re.fullmatch(r'scheduled task · Runs once in .+ · /loop(?: .*)?', lines[-5]) is not None
-            and lines[-4:] == ['❯ 1. Exit and stop tasks', '2. Move to background and exit',
-                              '3. Stay', 'Enter to confirm · Esc to cancel'])
+            return DIALOG['matches'](items, jobs, lambda job, item: DIALOG['job_fits'](job['prompt'], job['cron'])(item))
+    return DIALOG['matches'](items, ['/loop'], lambda _, item: (
+        item['kind'] == 'scheduled' and item['desc'].startswith('Runs once in ')
+        and re.match(r'/loop(?=\s|$)', item['prompt']) is not None))
 
 
 def launcher(bundle, launch):
@@ -928,6 +917,7 @@ def main():
     c.add_argument("mode", choices=("shell", "codex", "claude"))
     c.add_argument("pid", type=int)
     c = sub.add_parser("loop-exit-confirmation"); c.add_argument("--bundle", type=Path)
+    sub.add_parser("exit-dialog-open")
     c = sub.add_parser("rollback-cron"); c.add_argument("bundle", type=Path)
     c = sub.add_parser('launcher'); c.add_argument('bundle', type=Path); c.add_argument('launch')
     c = sub.add_parser('target-ready'); c.add_argument('bundle', type=Path); c.add_argument('socket'); c.add_argument('pane')
@@ -952,6 +942,8 @@ def main():
         return process_check(a.mode, a.pid)
     elif a.command == "loop-exit-confirmation":
         return 0 if loop_exit_confirmation(sys.stdin.read(), a.bundle) else 1
+    elif a.command == "exit-dialog-open":
+        return 0 if DIALOG['open_dialog'](sys.stdin.read()) else 1
     elif a.command == "rollback-cron":
         rollback_cron(a.bundle)
     elif a.command == 'launcher':

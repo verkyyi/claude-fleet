@@ -24,10 +24,10 @@ spec.loader.exec_module(fixture)
 
 
 class Timers(fixture.Park):
-    def setup_timer(self, cron=False, agent='claude'):
+    def setup_timer(self, cron=False, agent='claude', prompt=None):
         self.fake(agent)
         self.env['FLEET_WAKE_NATIVE_HOME'] = str(self.root)
-        self.prompt = 'Check the batch; preserve "quotes" and\nthis second line.'
+        self.prompt = prompt or 'Check the batch; preserve "quotes" and\nthis second line.'
         self.env['FLEET_CC_PROJECTS_DIR'] = str(self.root / 'projects')
         project = self.root / 'projects/example'
         project.mkdir(parents=True)
@@ -220,6 +220,44 @@ class Timers(fixture.Park):
             for altered in (screen.replace('❯ 1.', '1.'), screen.replace('cron task', 'background task'),
                             screen.replace('* * * * *', '*/5 * * * *'), screen + 'normal prompt\n'):
                 self.assertFalse(wake.exit_confirmation(self.fid, altered))
+
+    LONG = ('检查一下仓库里所有未合并的拉取请求，逐个阅读评审意见并修复失败的检查项，确认门禁全部变绿之后再合并，'
+            '最后把结果整理成一份简短的中文摘要发给操作者，摘要里要包括每个拉取请求的编号、标题、处理结果以及遗留问题。')
+
+    @staticmethod
+    def narrow_dialog(shown):
+        """Claude Code 2.1.322's own drawing at 45 columns (T1385, captured)."""
+        return ('▔' * 45 + '\n   Background work is running\n   The following will stop when you exit:\n\n'
+                '   scheduled   · Runs once in 20m ·\n'
+                '   task       ' + shown[:14] + '\n'
+                '              ' + shown[14:] + '\n\n'
+                '   ❯ 1. Exit and stop tasks\n     2. Move to background and exit\n     3. Stay\n\n'
+                '   Enter to confirm · Esc to cancel\n')
+
+    def test_long_prompt_in_narrow_exit_dialog_parks(self):
+        # G6WA: a ~250-character /loop prompt in a 45-column window, cut + wrapped.
+        self.setup_timer(prompt=self.LONG)
+        (self.root / 'exit-dialog').write_text(self.narrow_dialog(self.LONG[:24] + '…'))
+        with patch.dict(os.environ, self.env):
+            result = fixture.gate.park(self.fid)
+        self.assertTrue(result.get('ok'), result)
+        self.assertTrue(self.opt('@parked'))
+        self.assertFalse((self.root / 'exit-dialog-esc').exists())
+
+    def test_unconfirmed_exit_dialog_is_dismissed_before_rollback(self):
+        # Same prefix, other words: never confirmed; Esc'd, not left open.
+        self.setup_timer(prompt=self.LONG)
+        (self.root / 'exit-dialog').write_text(self.narrow_dialog(self.LONG[:18] + '逐个处理别的事情…'))
+        self.env['FLEET_GATE_PARK_SECS'] = '2'
+        with patch.dict(os.environ, self.env):
+            result = fixture.gate.park(self.fid)
+        self.assertEqual(result.get('why'), 'exit_failed', result)
+        self.wait(lambda: (self.root / 'exit-dialog-esc').exists())
+        self.assertFalse(self.opt('@parked'))
+        self.assertNotIn('Background work is running', self.tm('capture-pane', '-p', '-t', self.win))
+        with patch.dict(os.environ, self.env):
+            # The relay offers itself again at once, not after its stale window.
+            self.assertTrue(fixture.gate.relay_request(fixture.gate.window(self.fid), dict(op='status')).get('ok'))
 
     def test_existing_loop_ledger_keeps_one_dispatcher_and_owner_commands(self):
         self.check_existing_loop_ledger('claude')

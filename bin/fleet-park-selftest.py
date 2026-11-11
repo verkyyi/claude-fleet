@@ -84,6 +84,17 @@ while True:
  if not c: break
  b+=c
  if (b'\x1b[200~/exit\x1b[201~\r' if agent=='codex' else b'/exit\r') in b:
+  dialog=Path(sys.argv[2]).with_name('exit-dialog')
+  if dialog.exists():
+   # Claude's native exit dialog for pending timers (T1385): Enter = exit,
+   # Esc = stay at an empty prompt.
+   os.write(1,b'\x1b[2J\x1b[H'+dialog.read_text().replace('\n','\r\n').encode())
+   k=os.read(0,16)
+   if k.startswith(b'\x1b'):
+    os.write(1,b'\x1b[2J\x1b[Hstayed\r\n\xe2\x80\xba ')
+    Path(sys.argv[2]).with_name('exit-dialog-esc').write_text('1')
+    b=b''
+    continue
   print('\x1b[2J\x1b[Hagent exit screen',flush=True)
   break
  os.write(1,c)

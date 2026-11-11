@@ -179,6 +179,8 @@
 #                                                   and goes the ordinary road), fleet-session-wrap.sh
 #   park-while-watched / wake-timeout / park-gate-killed  bin/fleet_session_gate.py (park · wake: task HHV0),
 #                                                   fleet-session-wrap.sh (park_hold), fleet-cleanup-idle.py web_park
+#   park-loop-exit-dialog                           bin/fleet_exit_dialog.py (T1385: the timer exit dialog as
+#                                                   drawn), fleet_park_wake.py, fleet_session_gate.py (cancel-exit)
 #   epic-member-dead-record                         bin/fleet-epic-tick.py (a member by its ID chain:
 #                                                   batons_of, fleet-id.sh family)
 #   task-many-ids                                   bin/fleet_id.py (take_task_id, next_attempt, the reopen
@@ -7020,6 +7022,16 @@ drill_wake_fail_silent() {
   out=$(python3 "$BIN/fleet-park-selftest.py" Park.test_park_screen_and_keyboard_sentence Park.test_wake_failure_keeps_sentence_for_new_chat 2>&1) || { WHY="$out"; return 1; }
   SECS=$(since "$t0")
   WHAT='停放保留原屏，回车前不醒；接回失败原句仍在，n 的新会话首轮带上它'
+}
+
+drill_park_loop_exit_dialog() {
+  CAP=20; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-exit-dialog-selftest.py" 2>&1) || { WHY="$out"; return 1; }
+  grep -q "op='cancel-exit'" "$BIN/fleet_session_gate.py" \
+    || { WHY="fleet_session_gate.py park leaves Claude's exit dialog open on a failed park again"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='开着 Loop 的会话停放：退出确认框里截断、折行的长提示词照样认得出；认不出就按 Esc 关掉再回滚'
 }
 
 drill_wake_timeout() {

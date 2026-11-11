@@ -308,24 +308,16 @@ def _cancel_all(fid):
 
 def exit_confirmation(fid, screen):
     """Only the native exit dialog for exactly the timers staged by this park.
-    Its selected action, footer and every listed task must match. The relay
-    rechecks the screen fingerprint and keyboard generation before one Enter.
+    Its selected action, footer and every listed task must match, each staged
+    job to exactly one task as drawn — wrapped, or cut with `…` (T1385,
+    fleet_exit_dialog). The relay rechecks the screen fingerprint and keyboard
+    generation before one Enter.
     """
+    import fleet_exit_dialog as dialog
     r = durable.read(path_for(fid))
     jobs = r.get('native', []) if r and r.get('phase') == 'prepared' else []
-    n = len(jobs)
-    lines = [line.strip() for line in screen.splitlines() if line.strip()]
-    if not n or len(lines) < n + 6:
-        return False
-    if lines[-n-6:-n-4] != ['Background work is running', 'The following will stop when you exit:']:
-        return False
-    if lines[-4:] != ['❯ 1. Exit and stop tasks', '2. Move to background and exit',
-                      '3. Stay', 'Enter to confirm · Esc to cancel']:
-        return False
-    tasks = lines[-n-4:-4]
-    return (all(re.match(r'(?:scheduled|cron) task · ', line) for line in tasks)
-            and all(sum((j['expr'] and j['expr'] in line) or j['prompt'] in line for line in tasks) == 1
-                    for j in jobs))
+    return dialog.matches(dialog.parse(screen), jobs,
+                          lambda j, item: dialog.job_fits(j['prompt'], j['expr'])(item))
 
 
 def restore(fid, sid, owned=False):

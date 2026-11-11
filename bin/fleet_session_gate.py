@@ -1294,6 +1294,14 @@ def park_locked(fid, why, force):
                                                          screen=hashlib.sha256(screen.encode()).hexdigest()))
                     confirmed = bool(confirmation.get('ok'))
             time.sleep(.1)
+        if not seam:
+            # Never leave Claude's exit dialog open on a session that stays
+            # (T1385): Esc it on the screen judged here, then roll back.
+            import fleet_exit_dialog
+            screen = tmux(w['sock'], 'capture-pane', '-p', '-t', w['pane']) or ''
+            if fleet_exit_dialog.open_dialog(screen):
+                relay_request(w, dict(op='cancel-exit', generation=generation.get('generation'),
+                                      screen=hashlib.sha256(screen.encode()).hexdigest()))
     for option in ("@parked", "@park_since", "@park_why", "@park_saved_mb"):
         tmux(w["sock"], "set-option", "-wu", "-t", w["win"], option)
     fleet_park_wake.abort(fid)
