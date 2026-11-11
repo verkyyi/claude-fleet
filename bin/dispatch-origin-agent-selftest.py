@@ -3,7 +3,7 @@
 """A task with no coding agent asked for runs what its ASKER runs (T1381).
 
 A Claude session's `task` / `spawn` opened Codex sessions on a machine whose
-fleet.conf said FLEET_AGENT=codex (mini2: T1369, T1378, T1379). The order now:
+fleet.conf said FLEET_AGENT=codex (T1369, T1378, T1379). The order now:
 explicit > the agent file's > the issue label's > the asking session's own >
 the fleet's FLEET_AGENT > claude.
 
