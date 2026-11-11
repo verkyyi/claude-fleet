@@ -1465,8 +1465,13 @@ fleet_wid_stamp "$win" "$SOCK" >/dev/null 2>&1 || :
 # helper waits for the agent's input to settle, then pastes WITHOUT Enter. Pin a
 # pane id now so a later split/focus change cannot redirect the draft elsewhere.
 # Explicit --prompt keeps its existing seeded behavior and takes precedence.
+# A RESUMED conversation (--resume: a cold park's wake, `fleet-id.sh reopen` /
+# continue) is never prefilled (task MB2A): its --name is only the title it
+# already had, and typing it in either landed in a resumed agent's input or, the
+# agent already working, raised the yellow «session is already in use» notice.
 INPUT_DRAFT=${DRAFT:-$NAME}
 [ "$PLACEHOLDER" = 1 ] && INPUT_DRAFT=$DRAFT   # a placeholder name is never typed in (T652)
+[ -n "$RESUME_SID" ] && INPUT_DRAFT=''
 if [ -n "${INPUT_DRAFT//[[:space:]]/}" ] && [ -z "$PROMPT" ]; then
   df=$(mktemp "${TMPDIR:-/tmp}/scratch-draft.XXXXXX")
   pane=$(TM display-message -p -t "$win" '#{pane_id}' 2>/dev/null)

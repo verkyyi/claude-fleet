@@ -479,6 +479,18 @@ reset_scratch
 WINS=plan FLEET_MAX_SESSIONS=0 run_raw --name label --prompt 'explicit seed'
 [ -s "$PREFILL_LOG" ] && fail "P an explicit --prompt takes precedence over the name draft"
 
+# A resumed conversation (a cold park's wake: fleet-id.sh reopen hands --resume +
+# its title as --name) is never prefilled — the title is not words to type (MB2A).
+reset_scratch
+sid=33333333-4444-4555-8666-777777777777
+export CLAUDE_PROJECTS_DIR="$WORK/claude-projects-p"
+hproj=$(bash -c '. "$1/fleet-lib.sh"; fleet_transcript_dir "$HOME"' _ "$BIN")
+mkdir -p "$hproj"; printf '{"sessionId":"%s"}\n' "$sid" > "$hproj/$sid.jsonl"
+WINS=plan FLEET_MAX_SESSIONS=0 run_raw --no-repo --agent claude --resume "$sid" --strict-resume --name '活页日报引流产品'
+grep -q -- "--resume $sid" "$NEWWIN_LOG" || fail "P the resumed window did not open" "$(cat "$NEWWIN_LOG") $(cat "$WORK/err")"
+[ -s "$PREFILL_LOG" ] && fail "P a resumed conversation must not get its title typed in" "$(cat "$PREFILL_LOG")"
+unset CLAUDE_PROJECTS_DIR
+
 # ============== A2: the finish gate reserves nothing ==========================
 # A repo under task authority: --finish asks the person's mode only (EPIC T497
 # C8) — whatever an older hub answers, no reservation rides the launch line.
@@ -493,7 +505,7 @@ FLEET_TASK_AUTHORITY=legacy FLEET_HUB_AUTHORITY_CMD="$WORK/fakebin/fake-authorit
 grep -q 'FLEET_AUTHORITY_START' "$NEWWIN_LOG" && fail "A2 a reservation rode the launch line" "$(cat "$NEWWIN_LOG")"
 ok "A2 the finish gate reserves nothing; the launch line carries no reservation"
 
-ok "P cold/--bg/Codex names prefill the full draft; unnamed and seeded spawns do not"
+ok "P cold/--bg/Codex names prefill the full draft; unnamed, seeded and resumed spawns do not"
 
 reset_scratch
 # Q: a Claude `--worktree` creation was admitted by the launch proof / the start
