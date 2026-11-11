@@ -93,6 +93,8 @@ open identity's registered endpoint. Missing, closed and conflicting routes
 refuse explicitly. Remote senders carry their full lifelong worker ID, so the
 recipient can reply with `send` to the sender's fid after a rename or move.
 `sent` means the recipient acknowledged delivery; `queued` is still waiting.
+If the native inbox is unavailable, the hub retains the relay and retries the
+same delivery ID, without a second local queue. Final failures remain failures.
 A requested reply uses explicit `send` and its delivery result. Saving a result
 to the task's ID history closes the task through the existing hub sync; it does
 not automatically send that result to the dispatching session.

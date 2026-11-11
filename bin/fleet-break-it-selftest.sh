@@ -4747,6 +4747,14 @@ drill_epic_driver_unknown_command() {
 # refused/<file> + .why, any other is "stored" (deleted). A keyless session's send
 # (its key is its identity, issue #4341) must be stored; a refusal must come back as
 # exit 1 + FAILED in the book.
+drill_cross_send_queued_receipt() {
+  CAP=120; local started
+  started=$(now)
+  python3 "$BIN/fleet-return-message-selftest.py" >"$WORK/queued-receipt.out" 2>&1 \
+    || { WHY="$(tail -8 "$WORK/queued-receipt.out" | tr '\n' ' ')"; return 1; }
+  SECS=$(since "$started"); WHAT='pending inbox retries the same relay; final receipt follows native delivery'
+}
+
 drill_cross_send_terminal_receipt() {
   CAP=120; local started
   started=$(now)

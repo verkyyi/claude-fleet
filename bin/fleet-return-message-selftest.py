@@ -71,14 +71,26 @@ class ReturnMessage(unittest.TestCase):
     def test_unready_inbox_is_queued_then_replayed(self):
         self.r.inbox.close()
         p = self.deliver(self.message("held"))
-        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(p.returncode, 75, p.stdout + p.stderr)
         self.assertIn("queued at ", p.stderr)
-        p = self.receipt("held", "delivered", p.stderr.strip())
-        self.assertEqual((p.returncode, p.stdout.strip()), (3, "QUEUED"))
+        # The hub is the durable queue. Retries must not create a second local
+        # queue whose expiry and delivery would disagree with the hub's receipt.
+        p = self.deliver(self.message("held"))
+        self.assertEqual(p.returncode, 75, p.stdout + p.stderr)
+        queue = self.r.conf / "fleets" / self.r.label / "peer-queue"
+        self.assertEqual(list(queue.glob("*.json")), [])
         self.r.inbox = fixture.Inbox(str(self.r.root / "inbox.sock"))
-        p = self.r.drain()
+        p = self.deliver(self.message("held"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("sent →", p.stderr)
         self.assertTrue(self.r.landed("return result evidence"))
+        # A lost acknowledgment permits another hub replay, but not another
+        # native inbox injection. Only this final result produces DELIVERED.
+        p = self.deliver(self.message("held"))
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(len(self.r.inbox.got), 1)
+        p = self.receipt("held", "delivered", p.stderr.strip())
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, "DELIVERED"))
 
     def test_failed_and_expired_receipts_are_not_success(self):
         for status in ("failed", "expired"):

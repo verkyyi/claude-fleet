@@ -126,6 +126,14 @@ for reason in 'NOT_FOUND: no known recipient' 'UNAVAILABLE: hub route lookup fai
   st_has 'route lookup explains the actual failure' "$err" "$reason"
   st_eq 'refused route leaves no relay' '' "$(ls "$OUTBOX"/*.json 2>/dev/null)"
 done
+# Local ambiguity is a refusal, never permission to route to the hub.
+for window in "$wp" "$wc"; do tf set-window-option -t "$window" @fleet_id "$RF"; done
+for target in "wid:$RF" "$short"; do
+  run bash "$BIN/fleet-peer-send.sh" -L "$L" "$target" 'must not route'
+  st_has 'duplicate local identities refuse' "$err" 'ambiguous'
+  st_eq 'duplicate identities leave no relay' '' "$(ls "$OUTBOX"/*.json 2>/dev/null)"
+done
+for window in "$wp" "$wc"; do tf set-window-option -u -t "$window" @fleet_id; done
 unset FLEET_PEER_ROUTE ROUTE_FULL
 printf '%s/issue-7\tmac-a\t\n' "$F" > "$CACHE"
 

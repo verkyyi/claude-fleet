@@ -10,9 +10,9 @@
 #
 # It prints, in order:
 #   fleet     — session / repo / base / base checkout / merge (or land) method,
-#               and the window's `@origin`: WHO spawned it, owed a report
+#               and the window's `@origin`: WHO spawned it; explicit replies use send
 #   task      — the record (title · state · the request), read off the hub
-#   flow      — implement → PR → pr_verdict / pr_merge → report
+#   flow      — implement → PR → pr_verdict / pr_merge → summarize
 #   directive — fleet_worker_prompt_body: the per-fleet HOW-to guidance (#234)
 #   language  — the one-language rule (#620), LAST: the latest instruction wins
 #
@@ -100,9 +100,9 @@ else
   printf 'issue=%s  (a GitHub issue, read as words only: the fleet never claims, comments on or closes it — the PR'"'"'s `Closes #%s` does)\n' "$at_issue" "$at_issue"
 fi
 if [ -n "$at_remote" ]; then
-  printf 'origin: %s on another machine (worker_id %s — the report tool carries it through the hub)\n' "$at_origin" "$at_owid"
+  printf 'origin: %s on another machine (requested replies: send to wid:%s; check delivery)\n' "$at_origin" "$at_owid"
 elif [ -n "$at_origin" ]; then
-  printf 'origin: %s (report to it when you ship: the report tool)\n' "$at_origin"
+  printf 'origin: %s (requested replies use send to its explicit session identity; check delivery)\n' "$at_origin"
 else
   printf 'origin: none (opened by a person — nothing to report back to)\n'
 fi

@@ -327,8 +327,10 @@ case "$idcode" in
     w=''
     while IFS= read -r s; do
       [ -n "$s" ] || continue
-      if [ "$s" = "-" ]; then w=$(fleet_win_for_fid "$fid" '' 2>/dev/null) || w=''
-      else w=$(fleet_win_for_fid "$fid" "$s" 2>/dev/null) || w=''; fi
+      if [ "$s" = "-" ]; then w=$(fleet_win_for_fid "$fid" '' 2>/dev/null); wrc=$?
+      else w=$(fleet_win_for_fid "$fid" "$s" 2>/dev/null); wrc=$?; fi
+      [ "$wrc" -eq 2 ] && die 1 "identity '$fid' is ambiguous locally; nothing sent"
+      [ "$wrc" -eq 0 ] || w=''
       [ -n "$w" ] && { [ "$s" = "-" ] || SOCK=$s; break; }
     done <<EOF_IDS
 $socks
@@ -386,7 +388,7 @@ case "$tgt" in
           full=${route%%$'\t'*}; node=${route#*$'\t'}
         fi
         if [ -z "$full" ]; then
-          [ "$rc" -eq 2 ] && die 2 "bad worker id '$tgt' (want wid:<fleet UUID>/<fleet_id>, wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
+          [ "$rc" -eq 2 ] && die 2 "invalid or ambiguous worker id '$tgt' (want wid:<fleet UUID>/<fleet_id>, wid:<fleet UUID>/issue-<N>, wid:issue-<N> or wid:scratch-<N>)"
           # Ended? Only this machine's history can say, and only for its own fleet's
           # key: another fleet's `#7` is not ours.
           sp=$(_fleet_wid_split "$tgt"); u=${sp%%$'\t'*}
@@ -488,6 +490,13 @@ delivery_id="${FLEET_PEER_DELIVERY_ID:-local:peer#$(date +%s).$$.${RANDOM:-0}}"
 queue_here() {
   local s fid
   case "$tgt" in @*|%*) ;; *) die 1 "$1" ;; esac
+  # A hub relay already has a durable queue and retries this same delivery ID.
+  # Do not create a second local copy whose later drain cannot acknowledge the
+  # hub. Only an actual inbox delivery ends the hub's retry.
+  if [ "${FLEET_PEER_RELAY_RETRY:-0}" = 1 ]; then
+    echo "queued → ${who:-$tgt}${label:+ ($label)} — $1; retained by the hub for retry"
+    exit 3
+  fi
   s=$("${tm[@]}" display-message -p -t "$tgt" "$FLEET_SESSION_FMT" 2>/dev/null)
   [ -n "$s" ] || die 1 "$1"
   fid=$(fleet_window_fid "$s" "$tgt" "$SOCK" 2>/dev/null) || die 1 "$1"
