@@ -806,6 +806,8 @@ for ((i=0; i<EXIT_WAIT; i++)); do
 done
 if fleet_pid_alive "$PID"; then
   TM capture-pane -p -t "$PANE" > "$BUNDLE/pane-exit-timeout.txt" 2>/dev/null || :
+  # Never leave Claude's exit dialog open on the source that stays (T1385).
+  if python3 "$HELPER" exit-dialog-open < "$BUNDLE/pane-exit-timeout.txt" 2>/dev/null; then SK Escape || :; fi
   die "source did not exit; no replacement $TO was launched"
 fi
 if [ -n "$QUOTA_LOOP_REPLACEMENT" ]; then

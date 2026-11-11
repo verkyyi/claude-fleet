@@ -495,6 +495,21 @@ class ParkRelay:
                         reply = dict(ok=True)
                     else:
                         reply = dict(ok=False, why='dialog_changed')
+                elif (op == 'cancel-exit' and self.exiting and not pending_input and not buffer
+                      and request.get('generation') == self.generation):
+                    # The park gave up with Claude's exit dialog still open
+                    # (T1385): one Esc ("Esc to cancel" = Stay) on exactly the
+                    # screen the gate judged, and this relay offers itself again.
+                    import hashlib
+                    screen = subprocess.check_output(['tmux', 'capture-pane', '-p', '-t', pane()],
+                                                     text=True, timeout=3)
+                    if request.get('screen') == hashlib.sha256(screen.encode()).hexdigest():
+                        buffer.extend(b'\x1b')
+                        self.exiting = self.exit_confirmed = False
+                        self.generation += 1
+                        reply = dict(ok=True)
+                    else:
+                        reply = dict(ok=False, why='dialog_changed')
                 else:
                     reply = dict(ok=False, why="input_changed")
                 client.sendall((json.dumps(reply) + "\n").encode())
