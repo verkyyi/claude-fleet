@@ -510,7 +510,7 @@ def inventory_row(parts):
 REAP_WHY_RE = re.compile(r"[a-z-]{1,16}(?::[0-9]{1,11})?")
 
 # @claude_needs subtype → the OSC 7501 kind it says (issue #2538)
-NEEDS_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
+NEEDS_KIND = {"perm": "permission", "ask": "question", "auth": "auth", "error": "error"}
 
 
 def fields(value, required, optional=()):

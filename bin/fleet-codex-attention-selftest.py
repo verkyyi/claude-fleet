@@ -139,6 +139,7 @@ class MonitorEvents(unittest.TestCase):
         self.options='done||'
         self.writes=[]
         self.monitor=a.Monitor(DATA['remote'],{'TMUX_PANE':'%fixture','FLEET_CODEX_LAUNCHER_PID':'123'})
+        self.tmp=tempfile.mkdtemp();self.addCleanup(shutil.rmtree,self.tmp,True)
         def tmux(arguments):
             if arguments[0]=='display-message':return self.options
             self.writes.append(arguments)
@@ -391,12 +392,15 @@ class MonitorEvents(unittest.TestCase):
     def test_failed_turn_in_system_error_leaves_working(self):
         # T1381: a turn the credential proxy refused on every retry ends in
         # systemError with no Stop hook; the row must not read working forever.
+        # T1392: it reads as a visible failure (needs/error), never done.
         self.options='working|||17'
         self.native.codex.threads[SID]['status']={'type':'systemError','activeFlags':[]}
         self.native.codex._turns[SID]=[dict(id='t1',clientId='c1',status='failed')]
         self.native.events.append(self.status('systemError'))
         self.tick()
-        self.assertIn('@claude_state done',self.writes[-1][-1])
+        self.assertIn('@claude_state needs',self.writes[-1][-1])
+        self.assertIn('@claude_needs error',self.writes[-1][-1])
+        self.assertNotIn('@claude_state done',self.writes[-1][-1])
         self.assertIn('#{==:#{@claude_state},working}',self.writes[-1][-2])
         # an unsettled (or not failed) last turn, or a person's blocker, writes nothing
         for turn,options in (('inProgress','working|||17'),('failed','needs|blocked||17')):
@@ -405,6 +409,100 @@ class MonitorEvents(unittest.TestCase):
             self.native.events.append(self.status('systemError'))
             self.tick()
             self.assertFalse(any('@claude_state ' in w[-1] for w in self.writes),(turn,options))
+
+    def failed(self,error,state='systemError',options='working|||17'):
+        self.writes.clear();self.options=options
+        self.native.codex.threads[SID]['status']={'type':state,'activeFlags':[]}
+        self.native.codex._turns[SID]=[dict(id='t0',status='completed'),dict(id='t1',status='failed',error=error)]
+        self.native.events.append(self.status(state))
+        self.tick()
+        return self.writes[-1][-1] if self.writes else ''
+
+    def test_t1392_retryable_failure_is_visible_and_books_one_resume(self):
+        # the GW7F case: `■ unexpected status 409 …` with the row at «working» for two days
+        e409={'message':'unexpected status 409 Conflict: {"error":"Codex continuation source unknown"}','codexErrorInfo':None}
+        before=int(a.time.time())
+        with patch.dict(os.environ,{'FLEET_CODEX_TURN_RETRY_SECS':'30','FLEET_CODEX_TURN_RETRY_MAX':'2','FLEET_CONF_DIR':self.tmp}):
+            for state in ('systemError',):
+                w=self.failed(e409,state)
+                self.assertIn('@claude_state needs',w);self.assertIn('@claude_needs error',w)
+                self.assertIn('unexpected status 409 Conflict',w)
+                self.assertIn('自动重试 1/2，30 秒后',w)
+                at=int(w.split('@turn_retry_at ')[1].split()[0].strip("'"))
+                self.assertTrue(before+30<=at<=int(a.time.time())+30,w)
+                self.assertRegex(w,r"@turn_retry '1 \d+'")
+            # inside the window, a second failure books the second resume at twice the wait
+            w=self.failed(e409,options='working|||17||1 %d'%before)
+            self.assertIn('自动重试 2/2，60 秒后',w)
+            # the budget spent: left for a person, no resume booked
+            w=self.failed(e409,options='working|||17||2 %d'%before)
+            self.assertIn('已自动重试 2 次仍失败，等你处理',w);self.assertIn("@turn_retry_at ''",w)
+            # an old book (past the window) starts again
+            w=self.failed(e409,options='working|||17||2 %d'%(before-4000))
+            self.assertIn('自动重试 1/2',w)
+            # FLEET_CODEX_TURN_RETRY=0: shown, never resumed
+            with patch.dict(os.environ,{'FLEET_CODEX_TURN_RETRY':'0'}):
+                w=self.failed(e409)
+            self.assertIn('不会自动重试，等你处理',w);self.assertIn("@turn_retry_at ''",w)
+        self.assertIn('booked 1/2',Path(self.tmp,'logs','codex-turn-retry.log').read_text())
+
+    def test_t1392_final_failure_is_shown_never_resumed(self):
+        with patch.dict(os.environ,{'FLEET_CONF_DIR':self.tmp}):
+            for error in ({'message':'unexpected status 403 Forbidden: person_budget_exceeded','codexErrorInfo':None},
+                          {'message':'You have hit your usage limit','codexErrorInfo':'usageLimitExceeded'},
+                          {'message':'unexpected status 429 Too Many Requests','codexErrorInfo':None},
+                          {'message':'bad request','codexErrorInfo':'badRequest'}):
+                w=self.failed(error)
+                self.assertIn('@claude_needs error',w);self.assertIn('不会自动重试，等你处理',w);self.assertIn("@turn_retry_at ''",w)
+
+    def test_t1392_due_resume_is_sent_once_over_the_inbox(self):
+        sent=[];values={'#{@turn_retry_at}':'100','#{@turn_error}':'unexpected status 409 Conflict'}
+        def tmux(arguments):
+            if arguments[0]=='display-message':
+                return values.get(arguments[-1],self.options)
+            if arguments[0]=='if-shell' and '#{==:#{@turn_retry_at},100}' in arguments[-2] and values['#{@turn_retry_at}']=='100':
+                values['#{@turn_retry_at}']='sent:100'
+            self.writes.append(arguments);return ''
+        self.native.codex.threads[SID]['status']={'type':'systemError','activeFlags':[]}
+        with patch.dict(a.session,tmux=tmux),patch.object(a,'resume_send',side_effect=lambda *x:sent.append(x)),\
+             patch.dict(os.environ,{'FLEET_CONF_DIR':self.tmp}):
+            self.options='needs|error||17|100|1 17'
+            self.tick()
+            self.assertEqual(len(sent),1);self.assertEqual(sent[0][0],'%fixture')
+            self.assertIn('unexpected status 409 Conflict',sent[0][1]);self.assertIn('Continue the task',sent[0][1])
+            self.assertIn('已自动续一轮',self.writes[-1][-1])
+            self.assertIn('#{==:#{@claude_state_ts},17}',self.writes[-1][-2])
+            self.options='needs|error||17|sent:100|1 17'
+            for _ in range(3):self.tick()
+            self.assertEqual(len(sent),1)
+            # not due yet: nothing sent
+            values['#{@turn_retry_at}']=str(int(a.time.time())+600);self.options='needs|error||17|%s|1 17'%values['#{@turn_retry_at}']
+            self.tick();self.assertEqual(len(sent),1)
+
+    def test_t1392_running_again_ends_the_error_row(self):
+        self.native.codex.threads[SID]['status']={'type':'active','activeFlags':[]}
+        self.options='needs|error||17|sent:100|1 17'
+        self.native.events.append(self.status('active'))
+        self.tick()
+        w=self.writes[-1]
+        self.assertIn('@claude_state working',w[-1]);self.assertIn("@claude_needs ''",w[-1])
+        self.assertIn('#{==:#{@claude_needs},error}',w[-2])
+
+    def test_t1392_turn_error_classification(self):
+        for error,retry in (({'message':'unexpected status 409 Conflict'},True),
+                            ({'message':'unexpected status 502 Bad Gateway'},True),
+                            ({'message':'stream disconnected before completion: Transport error'},True),
+                            ({'message':'x','codexErrorInfo':{'responseTooManyFailedAttempts':{'httpStatusCode':503}}},True),
+                            ({'message':'x','codexErrorInfo':{'responseTooManyFailedAttempts':{'httpStatusCode':401}}},False),
+                            ({'message':'x','codexErrorInfo':{'responseStreamDisconnected':{'httpStatusCode':None}}},True),
+                            ({'message':'x','codexErrorInfo':'serverOverloaded'},True),
+                            ({'message':'unexpected status 401 Unauthorized','codexErrorInfo':'unauthorized'},False),
+                            ({'message':'context window exceeded','codexErrorInfo':'contextWindowExceeded'},False),
+                            ({'message':'something odd'},False),(None,False)):
+            self.assertEqual(a.turn_error({'status':'failed','error':error})[1],retry,error)
+        summary=a.turn_error({'error':{'message':'unexpected status 409: Authorization: Bearer abcdefghijklmnop\nsecond line'}})[0]
+        self.assertNotIn('abcdefghijklmnop',summary);self.assertNotIn('second line',summary)
+        self.assertLessEqual(len(a.error_summary('x'*500)),160)
 
     def test_malformed_or_excessive_events_drop_connection_without_state_changes(self):
         for backlog in ([{'method':'thread/status/changed','params':{'threadId':SID,'status':'invalid'}}],

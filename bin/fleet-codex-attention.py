@@ -202,6 +202,83 @@ def idle_secs():
     return _env_secs('FLEET_CODEX_ATTENTION_IDLE_SECS', 6)
 
 
+# A failed turn (T1392). Codex has no StopFailure hook: a turn the provider
+# failed (`■ unexpected status 409 …`, a 5xx, a cut stream) leaves the TUI at its
+# prompt while the row kept reading «working» — once for two days. The monitor
+# reads the settled failed turn's TurnError, shows it as needs/error with its
+# words, and for a TRANSIENT kind books one «carry on» over the session's own
+# inbox after a backoff (the Claude half is fleet-stream-resume.sh, #4714).
+RETRY_INFO = {'internalServerError', 'serverOverloaded', 'httpConnectionFailed',
+              'responseStreamConnectionFailed', 'responseStreamDisconnected',
+              'responseTooManyFailedAttempts'}
+FINAL_INFO = {'contextWindowExceeded', 'usageLimitExceeded', 'unauthorized', 'badRequest',
+              'sandboxError', 'threadRollbackFailed'}
+TRANSIENT_WORDS = re.compile(r'stream disconnected|connection (?:reset|closed|lost|refused)|'
+                             r'timed out|timeout|overloaded|server error|bad gateway|service unavailable', re.I)
+SECRET = re.compile(r'(?i)(bearer\s+|sk-[a-z0-9_-]*|(?:token|key|secret|password)["\'=: ]+)[A-Za-z0-9._~+/=-]{8,}')
+RESUME_TEXT = ('Your last turn failed with an upstream error ({why}) before it finished. '
+               'Continue the task from where it stopped — re-check anything that may not have completed.')
+
+
+def error_summary(message):
+    """The error's first line, one row's worth: no control bytes, no credential."""
+    line = next((l.strip() for l in str(message or '').splitlines() if l.strip()), '')
+    line = SECRET.sub(lambda m: m.group(1) + '…', re.sub(r'[\x00-\x1f\x7f]', ' ', line))
+    return line[:157] + '…' if len(line) > 160 else line
+
+
+def turn_error(turn):
+    """(summary, retryable) of a failed Turn's TurnError {message, codexErrorInfo}.
+    Retryable: a cut stream / connection, a 5xx, a 408/409 (the credential proxy's
+    continuation refusal). Never a quota (429, usageLimitExceeded), auth, budget
+    (403) or a request the provider refused as such."""
+    err = turn.get('error') if isinstance(turn.get('error'), dict) else {}
+    message = str(err.get('message') or '')
+    info, status = err.get('codexErrorInfo'), None
+    if isinstance(info, dict) and len(info) == 1:
+        info, body = next(iter(info.items()))
+        if isinstance(body, dict) and isinstance(body.get('httpStatusCode'), int):
+            status = body['httpStatusCode']
+    found = re.search(r'\bstatus (\d{3})\b', message)
+    if status is None and found:
+        status = int(found.group(1))
+    if info in FINAL_INFO:
+        retry = False
+    elif status is not None:
+        retry = status in (408, 409) or 500 <= status <= 599
+    elif info in RETRY_INFO:
+        retry = True
+    else:
+        retry = bool(TRANSIENT_WORDS.search(message))
+    return error_summary(message) or (str(info) if isinstance(info, str) else '') or 'turn failed', retry
+
+
+def _env_int(name, default):
+    try:
+        return max(0, int(os.environ.get(name, '') or default))
+    except ValueError:
+        return default
+
+
+def retry_log(pane, text):
+    d = Path(os.environ.get('FLEET_CONF_DIR') or os.path.expanduser('~/.config/claude-fleet')) / 'logs'
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        with open(d / 'codex-turn-retry.log', 'a') as fh:
+            fh.write('%s %s %s\n' % (time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()), pane, text))
+    except OSError:
+        pass
+
+
+def resume_send(pane, text):
+    """The session's own inbox (fleet-peer-send.sh %<pane> — the one delivery road,
+    held and replayed when the server cannot take it), detached from the tick."""
+    cmd = os.environ.get('FLEET_CODEX_TURN_RETRY_SEND_CMD')
+    argv = shlex.split(cmd) + [pane, text] if cmd else ['bash', str(BIN / 'fleet-peer-send.sh'), pane, text]
+    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
 class Monitor:
     def __init__(self, remote, env):
         self.remote, self.pane = remote, env.get('TMUX_PANE', '')
@@ -279,6 +356,66 @@ class Monitor:
                 self.settings_changed = True
         raise ValueError('native event backlog exceeds monitor budget')
 
+    def failed_turn(self, data):
+        """The thread's last turn when it settled FAILED and the thread sits in
+        systemError (where a provider-failed turn leaves it — an idle thread is
+        the plain idle branch's, and reading every turn end's history is not
+        worth it); None otherwise (or when the turns cannot be read)."""
+        try:
+            latest = thread_read(self.client, data, include_turns=True)
+        except ValueError:
+            return None
+        turns = latest.get('turns') or []
+        if (latest.get('status', {}).get('type') != 'systemError' or not turns
+                or not isinstance(turns[-1], dict) or turns[-1].get('status') != 'failed'):
+            return None
+        return turns[-1]
+
+    def failure(self, turn, book):
+        """The values a failed turn writes: needs/error with its words, and — a
+        transient kind inside the window's budget — one resume booked."""
+        summary, retry = turn_error(turn)
+        now = int(time.time())
+        top = _env_int('FLEET_CODEX_TURN_RETRY_MAX', 2)
+        span = _env_int('FLEET_CODEX_TURN_RETRY_WINDOW', 1800)
+        base = max(1, _env_int('FLEET_CODEX_TURN_RETRY_SECS', 30))
+        on = os.environ.get('FLEET_CODEX_TURN_RETRY', '1') != '0'
+        parts = book.split()
+        n = int(parts[0]) if len(parts) == 2 and parts[0].isdigit() else 0
+        since = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else now
+        if now - since >= span:
+            n, since = 0, now
+        values = {'@claude_state': 'needs', '@claude_needs': 'error', '@claude_state_ts': str(now),
+                  '@turn_error': summary, '@turn_retry_at': ''}
+        if retry and on and n < top:
+            delay = base * 2 ** n
+            values.update({'@turn_retry': '%d %d' % (n + 1, since), '@turn_retry_at': str(now + delay)})
+            values['@claude_needs_detail'] = '%s · 自动重试 %d/%d，%d 秒后' % (summary, n + 1, top, delay)
+            retry_log(self.pane, 'booked %d/%d in %ds: %s' % (n + 1, top, delay, summary))
+        else:
+            why = ('已自动重试 %d 次仍失败' % n) if retry and on else '不会自动重试'
+            values['@claude_needs_detail'] = '%s · %s，等你处理' % (summary, why)
+            retry_log(self.pane, 'left for a person (%s): %s' % (why, summary))
+        return values
+
+    def fire(self, data, state_ts, retry_at):
+        """A booked resume is due: claim it (one tmux compare-and-set, so it is
+        sent once), then hand the words to the session's inbox."""
+        thread = thread_read(self.client, data)
+        if thread.get('status', {}).get('type') == 'active':
+            return thread   # the session moved on by itself: the active branch ends the row
+        claim = ('#{&&:#{==:#{@turn_retry_at},%s},#{&&:#{==:#{@claude_needs},error},#{==:#{@claude_state_ts},%s}}}'
+                 % (retry_at, state_ts))
+        tm = session['tmux']
+        why = tm(['display-message', '-p', '-t', self.pane, '#{@turn_error}']) or 'upstream error'
+        cmds = [['set-option', '-w', '-t', self.pane, '@turn_retry_at', 'sent:' + retry_at],
+                ['set-option', '-w', '-t', self.pane, '@claude_needs_detail', why + ' · 已自动续一轮，等它回话']]
+        tm(['if-shell', '-F', '-t', self.pane, claim, ' ; '.join(shlex.join(c) for c in cmds)])
+        if tm(['display-message', '-p', '-t', self.pane, '#{@turn_retry_at}']) != 'sent:' + retry_at:
+            return
+        retry_log(self.pane, 'sent: ' + why)
+        resume_send(self.pane, RESUME_TEXT.format(why=why))
+
     def tick(self):
         if not self.pane or not self.owner or time.monotonic() < self.next_at: return
         self.next_at = time.monotonic() + 2
@@ -289,8 +426,9 @@ class Monitor:
                 return
             tm = session['tmux']
             observed_state = tm(['display-message', '-p', '-t', self.pane,
-                                 '#{@claude_state}|#{@claude_needs}|#{@codex_attention}|#{@claude_state_ts}']).split('|', 3)
-            state, why, before, state_ts = (observed_state + [''] * 4)[:4]
+                                 '#{@claude_state}|#{@claude_needs}|#{@codex_attention}|#{@claude_state_ts}'
+                                 '|#{@turn_retry_at}|#{@turn_retry}']).split('|', 5)
+            state, why, before, state_ts, retry_at, book = (observed_state + [''] * 6)[:6]
             if (state == 'done' and not why and not before and state_ts.isdigit()
                     and time.time() - int(state_ts) >= idle_after()):
                 # A long-idle session asks nothing: its next turn's start is the
@@ -337,9 +475,12 @@ class Monitor:
                         self.pending_usage = None
                         self.settings_changed = False
                     self.meter.keep_native(data)
+            if (state, why) == ('needs', 'error') and retry_at.isdigit() and time.time() >= int(retry_at):
+                thread = self.fire(data, state_ts, retry_at)
             if thread is None:
                 return
             subtype = kind(thread)
+            stype = thread.get('status', {}).get('type')
             cmds = []
             if subtype:
                 if (state, why, before) == ('needs', subtype, subtype): return
@@ -352,16 +493,20 @@ class Monitor:
                           '@claude_state_ts':str(int(time.time()))}
             elif before:
                 values = {'@codex_attention':''}
-            elif not why and state == 'working' and thread.get('status', {}).get('type') == 'systemError':
+            elif (state, why) == ('needs', 'error') and stype == 'active':
+                # The failed session runs again (the booked resume, or a person's
+                # words the hooks did not stamp): the error row ends.
+                values = {'@claude_state': 'working', '@claude_needs': '', '@claude_needs_detail': '',
+                          '@turn_retry_at': '', '@claude_state_ts': str(int(time.time()))}
+            elif not why and state == 'working' and stype == 'systemError':
                 # A turn the provider failed (T1381: every retry refused) leaves
                 # the thread in systemError with no Stop hook: the row read
                 # «working» over an idle prompt. Only a settled FAILED last turn
-                # ends it — as done (the person's turn), never as success.
-                latest = thread_read(self.client, data, include_turns=True)
-                turns = latest.get('turns') or []
-                if latest.get('status', {}).get('type') != 'systemError' or not turns or turns[-1].get('status') != 'failed':
+                # ends it — as a visible failure (T1392), never as success.
+                failed = self.failed_turn(data)
+                if failed is None:
                     return
-                values = {'@claude_state': 'done', '@claude_state_ts': str(int(time.time()))}
+                values = self.failure(failed, book)
             elif not why and state in ('working', 'done') and thread.get('status', {}).get('type') in ('active', 'idle'):
                 # Interrupts may emit native idle without a Stop hook. Project
                 # the loaded thread directly; this says nothing about Task completion.
