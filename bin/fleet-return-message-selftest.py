@@ -73,6 +73,9 @@ class ReturnMessage(unittest.TestCase):
         p = self.deliver(self.message("held"))
         self.assertEqual(p.returncode, 75, p.stdout + p.stderr)
         self.assertIn("queued at ", p.stderr)
+        gate = self.r.conf / "session-gate" / self.fid
+        admission = next(f for f in gate.glob("*.json") if json.loads(f.read_text()).get("legacy"))
+        first = json.loads(admission.read_text())
         # The hub is the durable queue. Retries must not create a second local
         # queue whose expiry and delivery would disagree with the hub's receipt.
         p = self.deliver(self.message("held"))
@@ -80,7 +83,9 @@ class ReturnMessage(unittest.TestCase):
         queue = self.r.conf / "fleets" / self.r.label / "peer-queue"
         self.assertEqual(list(queue.glob("*.json")), [])
         self.r.inbox = fixture.Inbox(str(self.r.root / "inbox.sock"))
-        p = self.deliver(self.message("held"))
+        retried = self.message("held")
+        retried["payload"]["text"] = "changed replay must not replace the original words"
+        p = self.deliver(retried)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("sent →", p.stderr)
         self.assertTrue(self.r.landed("return result evidence"))
@@ -89,6 +94,12 @@ class ReturnMessage(unittest.TestCase):
         p = self.deliver(self.message("held"))
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertEqual(len(self.r.inbox.got), 1)
+        self.assertNotIn("changed replay", self.r.inbox.got[0])
+        receipts = [f for f in gate.glob("*.json") if json.loads(f.read_text()).get("legacy")]
+        self.assertEqual(receipts, [admission])
+        final = json.loads(admission.read_text())
+        self.assertEqual((final["at"], final["text"]), (first["at"], first["text"]))
+        self.assertEqual(final["state"], "sent")
         p = self.receipt("held", "delivered", p.stderr.strip())
         self.assertEqual((p.returncode, p.stdout.strip()), (0, "DELIVERED"))
 
