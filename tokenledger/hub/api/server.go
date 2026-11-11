@@ -756,6 +756,7 @@ func (s *Server) routes() *routeMux {
 		// The hub's mirror of every window's ID (EPIC T497 C2).
 		mux.HandleFunc(NodeIDsPath, s.handleNodeIDs)
 		mux.HandleFunc(NodeIDsPath+"/", s.handleNodeIDs)
+		mux.HandleFunc(NodeWorkerRoutePath, s.handleNodeWorkerRoute)
 		// A throwaway Job for a session in a person's pod (claude-fleet#3552).
 		mux.HandleFunc(NodeJobsPath, s.handleNodeJobs)
 		mux.HandleFunc(NodeJobsPath+"/", s.handleNodeJobs)
