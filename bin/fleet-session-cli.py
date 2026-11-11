@@ -451,8 +451,8 @@ def bus_local(keys):
 
 
 # @claude_needs subtype → the kind the agent says (issue #2538)
-ASK_KIND = {"perm": "permission", "ask": "question", "auth": "auth"}
-ASK_SAY = {"permission": "权限", "question": "问题", "auth": "登录"}
+ASK_KIND = {"perm": "permission", "ask": "question", "auth": "auth", "error": "error"}
+ASK_SAY = {"permission": "权限", "question": "问题", "auth": "登录", "error": "出错"}
 ASK_COL = 40
 
 

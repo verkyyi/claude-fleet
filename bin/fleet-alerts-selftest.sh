@@ -193,32 +193,41 @@ T="$(printf '\t')"
 cat > "$WORK/shim/tmux" <<EOF
 #!/bin/sh
 case "\$1" in list-windows) cat <<'ROWS'
-s1${T}@1${T}plan${T}-${T}needs${T}ask${T}$(( $(now) - 120 ))${T}演练放在 mac-b 还是只在 mac-a？ 两个都 要
-s1${T}@2${T}issue-7${T}7${T}needs${T}perm${T}$(( $(now) - 60 ))${T}Bash: git push
+s1${T}@1${T}plan${T}-${T}needs${T}ask${T}$(( $(now) - 120 ))${T}0${T}演练放在 mac-b 还是只在 mac-a？ 两个都 要
+s1${T}@2${T}issue-7${T}7${T}needs${T}perm${T}$(( $(now) - 60 ))${T}0${T}Bash: git push
 s1${T}@3${T}issue-8${T}8${T}needs${T}blocked${T}0
 s1${T}@4${T}issue-9${T}9${T}failed${T}-${T}0
 s1${T}@5${T}issue-10${T}10${T}needs${T}-${T}0
 s1${T}@6${T}dash${T}-${T}needs${T}-${T}0
 s1${T}@7${T}issue-11${T}11${T}working${T}-${T}0
+s1${T}@8${T}issue-12${T}12${T}working${T}-${T}$(( $(now) - 7200 ))${T}$(( $(now) - 60 ))
+s1${T}@9${T}issue-13${T}13${T}needs${T}error${T}$(( $(now) - 30 ))${T}0${T}unexpected status 409 Conflict · 不会自动重试，等你处理
+s1${T}@10${T}issue-14${T}14${T}working${T}-${T}$(( $(now) - 7200 ))${T}$(( $(now) - 3600 ))
 ROWS
 ;; esac
 EOF
 chmod +x "$WORK/shim/tmux"
 TMUX=/tmp/fake,1,0 PATH="$WORK/shim:$PATH" fa write
 out=$(fa list --plain)
-eq "7: five needs rows (dash panel + a working window excluded)" "0 0 5" "$(fa counts)"
+eq "7: seven needs rows (dash panel + a working window + a drawing long turn excluded)" "0 0 7" "$(fa counts)"
 case "$out" in *"●  plan · question"*) st_count ;; *) st_fail "7: a window with no @issue is named by its window" "$out" ;; esac
 case "$out" in *"●  #7 · permission"*"↵ go to window"*) st_count ;; *) st_fail "7: perm → permission + jump" "$out" ;; esac
 case "$out" in *"●  #8 · blocked"*) st_count ;; *) st_fail "7: blocked" "$out" ;; esac
 case "$out" in *"●  #9 · failed"*) st_count ;; *) st_fail "7: failed" "$out" ;; esac
 case "$out" in *"●  #10 · waiting"*) st_count ;; *) st_fail "7: undifferentiated needs → waiting" "$out" ;; esac
+# T1392: a Codex turn that failed upstream (needs/error) → failed, with its words
+case "$out" in *"●  #13 · failed"*) st_count ;; *) st_fail "7: needs/error → failed" "$out" ;; esac
+# T1392: working with the stamp AND the pane still for an hour → stalled; a long
+# turn whose pane still draws (@8, output a minute ago) is not
+case "$out" in *"●  #14 · stalled · 1h"*) st_count ;; *) st_fail "7: working, no output past 30 min → stalled" "$out" ;; esac
+case "$out" in *"#12"*) st_fail "7: a long turn that still draws is not stalled" "$out" ;; *) st_count ;; esac
 case "$(cat "$G/alerts.ndjson")" in *'"target":"s1:@2"'*) st_count ;; *) st_fail "7: jump target" "$(cat "$G/alerts.ndjson")" ;; esac
 nd=$(cat "$G/alerts.ndjson")
 case "$nd" in *'"target":"s1:@1","detail":"演练放在 mac-b 还是只在 mac-a？ 两个都 要"'*) st_count ;; *) st_fail "7: a question's words ride in detail (#1951)" "$nd" ;; esac
 case "$nd" in *'"target":"s1:@2","detail":"Bash: git push"'*) st_count ;; *) st_fail "7: a permission's command rides in detail" "$nd" ;; esac
 case "$nd" in *'"target":"s1:@3","detail":""'*) st_count ;; *) st_fail "7: no question → an empty detail (never the window name)" "$nd" ;; esac
 fa write                                                      # no $TMUX: the quota watch's view
-eq "7: a writer that cannot see tmux keeps the needs rows" "0 0 5" "$(fa counts)"
+eq "7: a writer that cannot see tmux keeps the needs rows" "0 0 7" "$(fa counts)"
 # ------------------------------------------------------------- 8. degenerate ----
 rm -f "$G"/*
 fa write

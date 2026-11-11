@@ -8463,6 +8463,21 @@ drill_stream_cut_stays() {
   WHAT='StopFailure(unknown) 20 s 后经会话收件箱发「继续」；人已发话或又失败一次就不发；每窗口 3 次/30 分钟，超了留给人；配额/认证/请求错误不管'
 }
 
+# codex-turn-failed-working (T1392): a Codex turn an upstream error failed reads
+# needs/error with its words, a transient kind is resumed once after a backoff,
+# and a working row whose pane stands still is raised as stalled — the monitor
+# against the fake Codex app-server, the alert on a canned window list.
+drill_codex_turn_failed_working() {
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-codex-attention-selftest.py" -k t1392 -k failed_turn_in_system_error 2>&1) \
+    || { WHY="$(printf '%s' "$out" | grep -E 'FAIL|Error' | head -3)"; return 1; }
+  grep -q 'error) cond=failed' "$BIN/fleet-alerts.sh" && grep -q 'cond=stalled' "$BIN/fleet-alerts.sh" \
+    || { WHY='fleet-alerts.sh no longer raises needs/error as failed, or working-without-output as stalled'; return 1; }
+  SECS=$(since "$t0")
+  WHAT='Codex 一轮 409 失败：working → needs/error（带错误首行），30 s 后经收件箱续一轮、只发一次；每窗口 2 次/30 分钟，配额/认证/额度不续；再跑起来回 working；working 30 分钟没输出提醒 stalled'
+}
+
 # T580's three Codex-only breaks of opening a session (T620, EPIC T580 C4) — each
 # now one road for both agents (bin/fleet-launch-lib.sh + the adapter table), and
 # each recovery is a leg of bin/fleet-launch-lib-selftest.sh that runs once per

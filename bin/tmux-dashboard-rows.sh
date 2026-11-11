@@ -963,7 +963,7 @@ while IFS=$US read -r sess idx name path state state_ts wid iss origin wt agent 
   # kind a frame (fleet_ui_t forks), cached in ND_<kind>.
   ndet=''
   case "$state" in
-    needs)  case "$nsub" in ask|perm|auth|blocked|restore) _nk=$nsub ;; *) _nk=other ;; esac ;;
+    needs)  case "$nsub" in ask|perm|auth|blocked|restore) _nk=$nsub ;; error) _nk=failed ;; *) _nk=other ;; esac ;;
     failed) _nk=failed ;;
     exited) _nk=exited ;;
     *)      _nk='' ;;

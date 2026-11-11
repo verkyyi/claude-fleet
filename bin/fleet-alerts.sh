@@ -571,20 +571,34 @@ EOF
     # `detail` is the question's own words (@claude_needs_detail, issue #1951 —
     # set-claude-state.sh / fleet-codex-attention.py): the client's bar and its
     # notification say WHAT is asked. Last, so a space in it survives the read.
-    local s w n i st sub ts dt cond subj
-    while IFS=$'\t' read -r s w n i st sub ts dt; do
+    # A `working` row whose state stamp AND pane output both stand still past
+    # FLEET_STALE_WORKING_SECS (30 min) is `stalled` (T1392): an agent whose turn
+    # died without a hook (a Codex turn failed upstream) read «working» for two
+    # days. A long turn still draws (a spinner, a timer), so its pane moves.
+    local s w n i st sub ts act dt cond subj value stale
+    stale=${FLEET_STALE_WORKING_SECS:-1800}
+    case "$stale" in ''|*[!0-9]*) stale=1800 ;; esac
+    while IFS=$'\t' read -r s w n i st sub ts act dt; do
       case "$n" in dash|backlog) continue ;; esac
+      value=''
+      case "$act" in ''|*[!0-9]*) act=0 ;; esac
       case "$st" in
-        needs) case "$sub" in ask) cond=question ;; perm) cond=permission ;; blocked) cond=blocked ;; *) cond=waiting ;; esac ;;
+        working)
+          case "$ts" in ''|*[!0-9]*) continue ;; esac
+          [ "$stale" -gt 0 ] && [ "$ts" -gt 0 ] && [ $(( now - ts )) -ge "$stale" ] \
+            && [ "$act" -gt 0 ] && [ $(( now - act )) -ge "$stale" ] || continue
+          cond=stalled; value=$(fleet_usage_human_secs $(( now - (act > ts ? act : ts) )))
+          dt='working with no output — look at the session' ;;
+        needs) case "$sub" in ask) cond=question ;; perm) cond=permission ;; blocked) cond=blocked ;; error) cond=failed ;; *) cond=waiting ;; esac ;;
         failed) cond=failed ;;
         *) continue ;;
       esac
       case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
       subj="$n"; [ "$i" != - ] && subj="#$i"
       [ "$dt" = - ] && dt=''
-      _fa_row "needs-$s-$w" needs "$subj" "$cond" '' "$ts" jump 0 "$s:$w" "$(_fa_detail "$dt")"
+      _fa_row "needs-$s-$w" needs "$subj" "$cond" "$value" "$ts" jump 0 "$s:$w" "$(_fa_detail "$dt")"
     done <<EOF
-$(_fa_lw '#{session_name}	#{window_id}	#{window_name}	#{?@issue,#{@issue},-}	#{?@claude_state,#{@claude_state},-}	#{?@claude_needs,#{@claude_needs},-}	#{?@claude_state_ts,#{@claude_state_ts},0}	#{?@claude_needs_detail,#{@claude_needs_detail},-}')
+$(_fa_lw '#{session_name}	#{window_id}	#{window_name}	#{?@issue,#{@issue},-}	#{?@claude_state,#{@claude_state},-}	#{?@claude_needs,#{@claude_needs},-}	#{?@claude_state_ts,#{@claude_state_ts},0}	#{?window_activity,#{window_activity},0}	#{?@claude_needs_detail,#{@claude_needs_detail},-}')
 EOF
   else
     printf '#carry-needs\n'

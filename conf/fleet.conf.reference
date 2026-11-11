@@ -788,6 +788,32 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 # @label=Resume: the budget's window (seconds) @group=spawn @tier=internal @scope=global @edit=int
 #FLEET_STREAM_RESUME_WINDOW=1800
 
+# FLEET_CODEX_TURN_RETRY — a Codex turn an upstream error failed (T1392). Codex has
+# no StopFailure hook: `■ unexpected status 409 …` left the TUI at its prompt while
+# the row read «working» for two days. bin/fleet-codex-attention.py shows a settled
+# failed turn as needs/error with the error's first line, and for a transient kind
+# (408/409/5xx, a cut stream) tells the session over its own inbox to continue —
+# FLEET_CODEX_TURN_RETRY_SECS after the failure, doubled for each next one; at most
+# FLEET_CODEX_TURN_RETRY_MAX per FLEET_CODEX_TURN_RETRY_WINDOW seconds per window,
+# then it is left for a person. Never for a quota, auth, budget or request error.
+# 0 = shown, never resumed. Read by the session's own monitor at each failure.
+# @label=Resume a Codex turn an upstream error failed @group=spawn @tier=internal @scope=global @edit=bool
+#FLEET_CODEX_TURN_RETRY=1
+# @label=Codex resume: first wait (seconds, doubled each time) @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_CODEX_TURN_RETRY_SECS=30
+# @label=Codex resume: at most N per window @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_CODEX_TURN_RETRY_MAX=2
+# @label=Codex resume: the budget's window (seconds) @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_CODEX_TURN_RETRY_WINDOW=1800
+
+# FLEET_STALE_WORKING_SECS — a session that reads «working» while its state stamp
+# AND its pane's output both stood still this long is raised as `● <subject> ·
+# stalled` (bin/fleet-alerts.sh, T1392): a turn that died without a hook is seen
+# in half an hour, not two days. A long turn still draws, so it is not raised.
+# 0 = off.
+# @label=Working with no output: raise it after (seconds) @group=spawn @tier=internal @scope=global @edit=int
+#FLEET_STALE_WORKING_SECS=1800
+
 # A session's agent configuration, fixed at launch (issue #1782, EPIC #1776 C6):
 # bin/fleet-claude.sh / fleet-codex.sh compose fleet default < team < local at
 # every launch (bin/fleet-agent-team.py session), hand what the login's files lack
