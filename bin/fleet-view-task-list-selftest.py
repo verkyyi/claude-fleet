@@ -556,7 +556,8 @@ class SessionArchive(unittest.TestCase):
                     patch.object(v, "act_env", return_value={}), patch.object(v, "say", side_effect=lambda key, *args: key):
                 self.assertEqual(v.act_run(qo, "view", "fleet", v.ACTION["archive"], idle, "", wait=False)[0], 1)
                 self.assertEqual(calls, [], "a stop that fails archives nothing")
-        live_row = dict(key="@3", name="w3", state="working", running=True, board="fid-c", archived=False)
+        # archive sends an identity (a UUID, the hub's IsFleetID) — task M6WH
+        live_row = dict(key="@3", name="w3", state="working", running=True, board="0000000c-0000-4000-8000-00000000000c", archived=False)
         with patch.object(cli, "rows", return_value=[live_row]), patch.object(cli, "one", return_value=(live_row, 0)), \
                 patch.object(cli, "stop_row", return_value=0) as stop, patch.object(cli, "hub_write", return_value=(True, "ok")) as write, \
                 patch.object(cli, "hub_freshen"), contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
@@ -566,10 +567,10 @@ class SessionArchive(unittest.TestCase):
             with patch.object(cli, "ask", return_value=None):
                 self.assertEqual(cli.cmd_archive(["w3"]), 2, "no terminal: --yes")
             self.assertEqual(cli.cmd_archive(["--yes", "w3"]), 0)
-            stop.assert_called_once(); write.assert_called_once_with("session_archive", {"id": "fid-c", "archived": True})
+            stop.assert_called_once(); write.assert_called_once_with("session_archive", {"id": "0000000c-0000-4000-8000-00000000000c", "archived": True})
 
     def test_cli_archives_are_explicit_and_use_stable_identity(self):
-        board = {"rows": [{"id":"fid-a", "code":"AB12", "title":"Old archive", "group":"gone", "archived":True, "state":"exited"}]}
+        board = {"rows": [{"id":"0000000a-0000-4000-8000-00000000000a", "code":"AB12", "title":"Old archive", "group":"gone", "archived":True, "state":"exited"}]}
         with patch.object(v, "board_read", return_value=board):
             rs = cli.pending_rows([])
         self.assertEqual(rs[0]["state"], "exited")
@@ -582,7 +583,7 @@ class SessionArchive(unittest.TestCase):
                 self.assertEqual(len(json.loads(out.getvalue())), want)
             with patch.object(cli, "hub_write", return_value=(True,"ok")) as write, contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.cmd_archive(["AB12"], False), 0)
-                write.assert_called_once_with("session_archive", {"id":"fid-a", "archived":False})
+                write.assert_called_once_with("session_archive", {"id":"0000000a-0000-4000-8000-00000000000a", "archived":False})
             with patch.object(cli, "hub_write", return_value=(False,"offline")), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.cmd_archive(["AB12"]), 1)
 
