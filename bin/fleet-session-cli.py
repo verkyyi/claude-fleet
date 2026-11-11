@@ -279,10 +279,11 @@ def own_ids(rs):
             if k.startswith("@") and not is_fid(r["fleet_id"]):
                 # a keyed window's hub row carries its worker_id's key alias
                 # (`<fleet UUID>/<slug>:scratch-N`), not an identity (task M6WH):
-                # its fleet_id is the window's own @fleet_id
+                # its fleet_id is the window's own @fleet_id (none: the alias
+                # stays, and archive refuses it as no identity)
                 if fids is None:
                     fids = window_fids()
-                r["fleet_id"] = fids.get(k, "")
+                r["fleet_id"] = fids.get(k) or r["fleet_id"]
         elif k.startswith("@"):
             if fids is None:
                 fids = window_fids()
