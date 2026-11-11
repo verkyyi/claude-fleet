@@ -1199,7 +1199,12 @@ def check_direct(script, tool, masked_cmd, cwd):
 # never touched.
 _SSH_ARG_OPTS = set("bcDEeFIiJLlmOoPpQRSWw")
 # `fleet quit` / `fleet status` (issue #2349) stop or read the client, never start one
-_FLEET_NOT_CLIENT = {"-h", "--help", "help", "doctor", "quit", "status"}
+_FLEET_NOT_CLIENT = {"-h", "--help", "help", "doctor", "quit", "status",
+                     # bin/fleet-session-cli.py's verbs (bin/fleet dispatches them):
+                     # a read or a hub write, no client, no lease (task M6WH).
+                     # `open` / `continue` move a screen and stay guarded.
+                     "ls", "show", "rename", "archive", "unarchive", "close", "reap",
+                     "answer", "notices", "service", "task"}
 # fleet-shell.sh's modes that start no client (issue #2349): `quit` stops it,
 # `running` reads it, `solo` needs one up and starts none
 _SHELL_NOT_CLIENT = {"quit", "running", "solo"}

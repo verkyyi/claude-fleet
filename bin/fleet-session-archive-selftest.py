@@ -103,5 +103,43 @@ class Archive(unittest.TestCase):
         self.assertEqual((self.stops, self.writes), ([], []))
 
 
+class RemoteAlias(Archive):
+    """Another machine's keyed session (a parked one in the field, R29E): the cache
+    row is `wid:<fleet UUID>/<slug>:scratch-N`, the list's `<fleet UUID>/<fid>` —
+    joined by the fleet and the title the cache clipped."""
+    def setUp(self):
+        super().setUp()
+        far = dict(key="wid:%s/o-r:scratch-118" % FU, name="活页 MCP v2：修体检四个", title="活页 MCP v2：修体检…",
+                   state="done", issue="", node="mac-b", pr="", reap="", group="", repo="o/r", ended="", task="", code="")
+        twin = dict(far, key="wid:%s/o-r:scratch-119" % FU, name="别的会话", title="别的会话")
+        qo = type("QO", (), {"full_rows": staticmethod(lambda sess, timeout=8: [far, twin])})
+        for p in (patch.object(self.m, "lib", return_value=qo), patch.object(self.m, "cache_lines", return_value=[]),
+                  patch.object(self.m, "window_fids", return_value={})):
+            p.start()
+            self.p.append(p)
+
+    def test_alias_row_gets_window_identity(self):
+        r = [x for x in self.m.rows() if x["key"].endswith("scratch-118")][0]
+        self.assertEqual((r["fleet_id"], r["board"], r["code"]), (LIVE, LIVE, "R29E"))
+        other = [x for x in self.m.rows() if x["key"].endswith("scratch-119")][0]
+        self.assertFalse(other.get("board"), "a title that is not the list's joins nothing")
+
+    def test_archive_by_name_sends_identity(self):
+        self.assertEqual(self.m.cmd_archive(["活页 MCP v2：修体检四个", "--yes"]), 0)
+        self.assertEqual(self.writes, [("session_archive", {"id": LIVE, "archived": True})])
+
+    def test_two_candidates_join_nothing(self):
+        dup = [dict(key="wid:%s/o-r:scratch-%d" % (FU, n), name="活页 MCP v2", title="活页 MCP v2",
+                    state="done", issue="", node="", pr="", reap="", group="", repo="", ended="", task="", code="")
+               for n in (1, 2)]
+        with patch.object(self.m, "lib", return_value=type("QO", (), {"full_rows": staticmethod(lambda s, timeout=8: dup)})):
+            self.assertFalse(any(x.get("board") for x in self.m.rows()), "never a guess")
+
+    def test_no_identity_refused_before_stop(self):
+        with patch.object(fleet_view, "board_apply", side_effect=lambda *a: ({"x": []}, [])):
+            self.assertEqual(self.m.cmd_archive(["活页 MCP v2：修体检四个", "--yes"]), 1)
+        self.assertEqual((self.stops, self.writes), ([], []))
+
+
 if __name__ == "__main__":
     unittest.main()

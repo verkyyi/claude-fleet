@@ -170,7 +170,11 @@ def pending_rows(rs, gone_too=False):
         for r in group:
             matched = next((x for x in rs if (r.get('fid') and x.get('fleet_id') == r['fid'])
                            or (r.get('worker_id') and x.get('worker_id') == r['worker_id'])), None)
+            if matched is None:
+                matched = alias_match(rs, r)
             if matched is not None:
+                if r.get('fid') and not is_fid(matched.get('fleet_id')):
+                    matched['fleet_id'] = r['fid']
                 matched.update(archived=r.get("archived", False), board=r.get("board"), code=r.get("code") or matched.get("code") or "", cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
                                task=r.get('task') or matched.get('task') or '',
                                execution_endpoint=r.get('execution_endpoint') or matched.get('execution_endpoint') or '')
@@ -189,6 +193,30 @@ def pending_rows(rs, gone_too=False):
                            fleet_id=r.get("fid") or "",
                            code=r.get("code") or ""))
     return rs
+
+
+def alias_match(rs, entry):
+    """Another machine's keyed session (task M6WH): the hub cache names it by its
+    worker_id's key alias (`<fleet UUID>/<slug>:scratch-N`), the hub's list by its
+    identity (`<fleet UUID>/<fid>`), so neither id joins them. The one row of the
+    same fleet whose title the list's title begins with (the cache clips it with
+    «…») is that session; none or several ⇒ None, never a guess."""
+    wid = str(entry.get("worker_id") or "")
+    if "/" not in wid or not entry.get("fid"):
+        return None
+    fleet = wid.split("/", 1)[0] + "/"
+    full = str(entry.get("text") or entry.get("name") or "").strip()
+    if not full:
+        return None
+    hits = []
+    for x in rs:
+        xw = str(x.get("worker_id") or "")
+        if not xw.startswith(fleet) or is_fid(xw[len(fleet):]) or x.get("board"):
+            continue
+        t = str(x.get("title") or x.get("name") or "").strip().rstrip("…").rstrip()
+        if t and full.startswith(t):
+            hits.append(x)
+    return hits[0] if len(hits) == 1 else None
 
 
 def hub_ok_age():
