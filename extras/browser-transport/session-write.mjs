@@ -18,6 +18,10 @@ try {
         if (kind === 'delayed' || kind === 'starting') await page.clock.install()
         let capability = kind === 'starting' ? false : kind === 'delayed' ? null : kind === 'old' ? undefined : true
         let identityReads = 0
+        // identity: the retry after the first 503 runs on the page's real timer,
+        // so its answer waits here until the test has seen the checking state.
+        let releaseIdentity = () => {}
+        const identityRetry = new Promise(resolve => { releaseIdentity = resolve })
         const sent = []
         // route.fulfill ends the response immediately. Use a real open stream:
         // a completed SSE response must now disable sending until reconnect.
@@ -47,6 +51,7 @@ try {
           if (path === '/v1/me') {
             identityReads++
             if (kind === 'identity' && identityReads === 1) return route.fulfill({ status: 503, json: { error: 'temporary identity failure' } })
+            if (kind === 'identity') await identityRetry
             return json({ person: 'test-person', name: 'Alice', role: 'user', read_only: kind === 'ticket' })
           }
           if (path === '/v1/fleet/tasks') return json({ tasks: [] })
@@ -71,6 +76,11 @@ try {
         const input = page.locator('textarea.aui-composer-input')
         await input.waitFor()
         if (kind === 'delayed' || kind === 'starting') {
+          // install() alone lets time flow, and the reconnect waits a random
+          // 0-1 s: on real time it could reconnect before capability flips, or
+          // end an offline spell before the test sees it. Stop the clock here;
+          // from now on only runFor / fastForward move it.
+          await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1))
           await input.fill('draft survives discovery')
           assert.match(await input.getAttribute('placeholder'), /Connecting|正在连接/)
           await input.press('Enter')
@@ -108,6 +118,7 @@ try {
           assert.equal(await page.locator('[data-testid=session-view]').getAttribute('data-access'), 'checking')
           await input.press('Enter')
           assert.equal(sent.length, 0, 'a writable stream cannot substitute for unknown sign-in permissions')
+          releaseIdentity()
           await page.locator('[data-testid=session-view][data-talk]').waitFor({ timeout: 5000 })
           assert(identityReads >= 2, 'temporary identity failure must be retried')
           assert.equal(await input.inputValue(), 'draft survives identity failure')
