@@ -295,3 +295,32 @@ func TestNodeIdentityLoginCodeNamesItsLogin(t *testing.T) {
 		t.Fatalf("redeemed as carol: %d %s", c, raw)
 	}
 }
+
+// A machine name that moved after an operator's code enrolled the endpoint
+// (the join named it mac-a; the agent reports its real hostname) keeps its
+// report, as before — its login is still held to the enrollment; the same
+// move to a trusted machine's name does not.
+func TestNodeIdentityOperatorJoinKeepsItsHostname(t *testing.T) {
+	h := newFleetHarness(t)
+	now := time.Now()
+	code, _ := MintJoinCode()
+	if err := h.srv.Store.CreateJoinCode(HashToken(code), "", now, JoinCodeTTL); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.RedeemJoinCode(HashToken(code), now, "ep_op", "op", HashToken("tok-op"), "mac-a", "runner"); err != nil {
+		t.Fatal(err)
+	}
+	ep := mustEndpoint(t, h, "ep_op")
+	if id := h.srv.nodeSelfFrom(ep, "runnervm1", "runner"); id.Host != "runnervm1" || id.User != "runner" || id.drift() {
+		t.Fatalf("renamed: %+v; want its report", id)
+	}
+	if id := h.srv.nodeSelfFrom(ep, "runnervm1", "frank"); id.User != "runner" || !id.UserDrift {
+		t.Fatalf("another login: %+v; want runner, held", id)
+	}
+	if err := h.srv.Store.SetFleetSetting(trustKey("mac-z"), TrustTrusted, now); err != nil {
+		t.Fatal(err)
+	}
+	if id := h.srv.nodeSelfFrom(ep, "mac-z", "runner"); id.Host != "mac-a" || !id.HostDrift {
+		t.Fatalf("a trusted name it did not join as: %+v; want mac-a, held", id)
+	}
+}

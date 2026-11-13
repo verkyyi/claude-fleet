@@ -19,6 +19,11 @@ import (
 // stays what the roster shows; when it disagrees with the enrollment the
 // enrollment decides, and each connection writes one node_identity audit row.
 //
+// A machine NAME that moved is held to the enrollment when the endpoint is a
+// member's device or the new name is a trusted machine it did not join as; an
+// endpoint an operator's or the hub's code enrolled keeps a renamed host's
+// report, as before (its login is held either way).
+//
 // One kind of endpoint keeps its report: a machine's own node program
 // (enrolled as root — `fleet node install` — by an operator's or the hub's
 // code, never a member's device road). It speaks for its machine whatever
@@ -100,7 +105,7 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 		switch {
 		case host == "":
 			id.Host = id.EnrolledHost // it never said: the enrollment's, as before
-		case !id.Machine:
+		case !id.Machine && (s.memberDevice(ep.ID) || s.nameBorrowed(host, et)):
 			id.Host, id.HostDrift = id.EnrolledHost, true
 		}
 	}
@@ -113,6 +118,20 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 		}
 	}
 	return id
+}
+
+// nameBorrowed: host is a trusted machine the endpoint did not enroll as
+// (nodeTrust's name_borrowed). A machine name that merely moved since an
+// operator's or the hub's code enrolled the endpoint — a renamed Mac, a join
+// that named the machine differently — is not borrowed and keeps its report,
+// as before; a member's device is held to its enrollment either way.
+func (s *Server) nameBorrowed(host string, et store.EndpointTrust) bool {
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return true // unreadable: the enrollment decides
+	}
+	_, src := nodeTrust(host, et, settings)
+	return src == TrustSourceNameBorrowed
 }
 
 // deviceEnrolled is who enrolled endpointID by a device's road
