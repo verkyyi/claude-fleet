@@ -105,13 +105,18 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = dev.Name
 	}
-	out, what, err := s.deviceNode(r, fp, host, req.OSUser, now)
+	out, what, err := s.deviceNode(r, pid, fp, host, req.OSUser, now)
 	var tn *trustedNameErr
 	var mm *machineManagedErr
+	var rl *reservedLoginErr
 	switch {
 	case errors.As(err, &tn):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
 		refuseJSON(w, http.StatusConflict, "trusted_name", err.Error())
+		return
+	case errors.As(err, &rl):
+		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
+		refuseJSON(w, http.StatusConflict, "reserved_login", err.Error())
 		return
 	case errors.As(err, &mm):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
@@ -135,6 +140,15 @@ type trustedNameErr struct{ name string }
 
 func (e *trustedNameErr) Error() string {
 	return fmt.Sprintf("a machine named %s is trusted on this hub; a login cannot register under its name — on that machine run: fleet node join", e.name)
+}
+
+// reservedLoginErr: a device road asked to enroll the admin role account — a
+// login only the hub issues a token for (POST /v1/node/admin-token, its
+// machine's root) — for a person who is not one of the hub's admins.
+type reservedLoginErr struct{ login string }
+
+func (e *reservedLoginErr) Error() string {
+	return fmt.Sprintf("%s is the machine's admin role account; its node token comes only from that machine's own install (fleet node install), never from a login", e.login)
 }
 
 // ReissueTokenGrace is how long a reissued node token's predecessor still
@@ -180,7 +194,7 @@ func (s *Server) machineServing(id string) string {
 //     and its token handed back unchanged — never a second node;
 //   - the device's live endpoint: the same endpoint with a fresh token;
 //   - none yet: a new fixed-kind enrollment tagged with the device.
-func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now time.Time) (*NodeJoinResponse, string, error) {
+func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, now time.Time) (*NodeJoinResponse, string, error) {
 	if tok := bearer(r); tok != "" {
 		// The token is handed back, so only a bearer can say it — and not one
 		// its node turned off (claude-fleet#3710).
@@ -231,7 +245,7 @@ func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now ti
 			return nil, "", &trustedNameErr{host}
 		}
 	}
-	out, err := s.enrollDeviceNode(r, fp, hostname, osUser)
+	out, err := s.enrollDeviceNode(r, pid, fp, hostname, osUser)
 	if err != nil {
 		return nil, "", err
 	}
@@ -244,7 +258,27 @@ func (s *Server) deviceNode(r *http.Request, fp, hostname, osUser string, now ti
 // enrollDeviceNode enrolls a fixed-kind node through a code the hub mints and
 // spends at once, tagged with the device that asked (fp) — the login's road
 // and the `fleet node join` scan alike, so either finds the other's node.
-func (s *Server) enrollDeviceNode(r *http.Request, fp, hostname, osUser string) (*NodeJoinResponse, error) {
+//
+// The device road enrolls a person's own terminal (task MPCX). For a person
+// who is not one of the hub's admins (pid) it refuses the admin role account
+// and a machine name the hub trusts (the scan's half of trusted_name; the
+// login road refuses that name for everyone before it gets here); any other
+// login — root, or a name on the admin list that is also a person's own
+// login — enrolls, as an ordinary node: memberDevice keeps it from ever being
+// an admin node or a machine's program, and the audit says so.
+func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser string) (*NodeJoinResponse, error) {
+	login := sanitizeJoinField(osUser)
+	if !s.isOperator(pid) {
+		if adminRoleLogins[login] {
+			return nil, &reservedLoginErr{login}
+		}
+		if host := sanitizeJoinField(hostname); host != "" {
+			settings, _ := s.trustSettings(time.Now())
+			if s.machineTrusted(host, settings) {
+				return nil, &trustedNameErr{host}
+			}
+		}
+	}
 	code, err := MintJoinCode()
 	if err != nil {
 		return nil, err
@@ -252,15 +286,24 @@ func (s *Server) enrollDeviceNode(r *http.Request, fp, hostname, osUser string) 
 	if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
 		return nil, err
 	}
-	return s.redeemJoin(r, code, hostname, osUser)
+	out, err := s.redeemJoin(r, code, hostname, osUser)
+	if err == nil && (login == "root" || s.isFleetAdmin(login)) && !s.isOperator(pid) {
+		_ = s.Store.FleetAudit("device:"+fp, "node_identity", "endpoint:"+out.EndpointID,
+			"ENROLLED AS AN ORDINARY NODE — "+login+" by a member's device: never an admin node or a machine's program", "", time.Now())
+	}
+	return out, err
 }
 
 // principalOnNode is the person behind login on a node: the machine's
 // account (PrincipalForLogin), else the login row 登录即认人 bound to this
 // very endpoint — the computer's name is the agent's own word and may not be
 // the one it registered under.
+//
+// The machine's account answers only for this endpoint (nodeLoginPrincipal, task
+// MPCX): never another computer's 登录即认人 row, and on an endpoint a device
+// road enrolled, only that device's person.
 func (s *Server) principalOnNode(endpointID, host, login string) (string, error) {
-	p, err := s.Store.PrincipalForLogin(host, login)
+	p, err := s.nodeLoginPrincipal(endpointID, host, login)
 	if errors.Is(err, store.ErrNoPrincipal) {
 		return s.Store.PrincipalForEndpointLogin(endpointID, login)
 	}
@@ -322,10 +365,12 @@ func (s *Server) leaseInFlight(endpointID, host, login string, now time.Time) (s
 	if err != nil || ep.RetiredAt != nil {
 		return "", false
 	}
-	if ep.OSUser != "" && ep.OSUser != login {
+	// The login and machine it enrolled as (task MPCX), not its report.
+	self := s.nodeSelfFrom(ep, ep.Hostname, ep.OSUser)
+	if self.User != "" && self.User != login {
 		return "", false
 	}
-	if h := s.endpointHost(*ep); h == "" || !sameMachine(a.Hostname, h) && !sameMachine(h, a.Hostname) {
+	if h := self.Host; h == "" || !sameMachine(a.Hostname, h) && !sameMachine(h, a.Hostname) {
 		return "", false
 	}
 	switch a.Op {

@@ -404,7 +404,7 @@ func (s *Server) handleNodeClientActions(w http.ResponseWriter, r *http.Request)
 		httpError(w, http.StatusBadRequest, "kind must be open_url, show_file or notify")
 		return
 	}
-	owner, err := s.Store.PrincipalForLogin(host, user)
+	owner, err := s.nodeLoginPrincipal(ep.ID, host, user)
 	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -103,7 +103,7 @@ func (s *Server) handleFleetPersonBundle(w http.ResponseWriter, r *http.Request)
 		if ep, _ := s.nodeAuthOpt(r); ep != nil { // claude-fleet#3710
 			host, user := s.peerSelf(ep)
 			id, ok = sshRelayIdentity{Actor: "node:" + user + "@" + host}, true
-			owner, err := s.Store.PrincipalForLogin(host, user)
+			owner, err := s.nodeLoginPrincipal(ep.ID, host, user)
 			switch {
 			case errors.Is(err, store.ErrNoPrincipal) || (err == nil && owner == ""):
 				httpError(w, http.StatusNotFound, "no person for this login")
@@ -374,7 +374,7 @@ func (s *Server) nodePerson(endpointID string) string {
 		return ""
 	}
 	host, user := s.peerSelf(ep)
-	owner, err := s.Store.PrincipalForLogin(host, user)
+	owner, err := s.nodeLoginPrincipal(ep.ID, host, user)
 	if err != nil || owner == "" {
 		return ""
 	}

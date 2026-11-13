@@ -453,7 +453,7 @@ func TestReissueKeepsTheMachineLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("POST", control.LoginNodePath, nil)
-	_, _, err := h.srv.deviceNode(req, fp, "mac-c", "beta", time.Now())
+	_, _, err := h.srv.deviceNode(req, "", fp, "mac-c", "beta", time.Now())
 	var mm *machineManagedErr
 	if !errors.As(err, &mm) || !strings.Contains(err.Error(), "account adopt beta --rejoin") || !strings.Contains(err.Error(), "mac-c") {
 		t.Fatalf("reissue for a machine-served login: %v; want machine_managed naming mac-c and the fix", err)

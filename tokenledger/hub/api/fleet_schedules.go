@@ -73,7 +73,7 @@ func (s *Server) handleNodeSchedules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host, login := s.nodeIdentity(ep)
-	owner, e := s.Store.PrincipalForLogin(host, login)
+	owner, e := s.nodeLoginPrincipal(ep.ID, host, login)
 	if e != nil || owner == "" {
 		httpError(w, 403, "this login has no Tokenman owner")
 		return

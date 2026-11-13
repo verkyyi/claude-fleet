@@ -873,8 +873,11 @@ func (s *Server) nodePrincipal(ep *store.Endpoint, fl store.FleetRow) (fleetPrin
 	if user == "" {
 		user = ep.OSUser
 	}
+	// The fleet row is the node's own word: held to its enrollment (task MPCX).
+	self := s.nodeSelfFrom(ep, host, user)
+	host, user = self.Host, self.User
 	actor := "node:" + user + "@" + host
-	person, err := s.Store.PrincipalForLogin(host, user)
+	person, err := s.nodeLoginPrincipal(ep.ID, host, user)
 	switch {
 	case err == nil && person != "":
 		scope, err := s.scopeFor(person)

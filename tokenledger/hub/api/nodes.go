@@ -228,6 +228,23 @@ type nodeConn struct {
 	pending pendingReads
 	// host is the machine as the roster names it, refreshed by heartbeats.
 	host atomic.Value // string
+	// driftAudited: this connection already wrote its node_identity row.
+	driftAudited atomic.Bool
+}
+
+// privileged says the hub routes account ops or refreshes to this link — the
+// links held to their enrolled machine and login (task MPCX).
+func (c *nodeConn) privileged() bool { return c.accountNode() || c.canOAuthRefresh }
+
+// withoutCap is caps less one.
+func withoutCap(caps []string, drop string) []string {
+	out := make([]string, 0, len(caps))
+	for _, c := range caps {
+		if c != drop {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // accountNode says the hub may send this link account ops (and take their
@@ -656,7 +673,11 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		return
 	}
 
-	nc := &nodeConn{wire: wire, admin: hp.Admin && s.isFleetAdmin(ep.OSUser), canRead: hp.HasCap(control.CapRead),
+	// Admin is two-sided: the hello says admin:true, and the hub's half is
+	// the login the endpoint ENROLLED as, on the admin list, not enrolled by
+	// a member's device road (nodeAdminOK, task MPCX) — never the login a
+	// report names.
+	nc := &nodeConn{wire: wire, admin: hp.Admin && s.nodeAdminOK(ep), canRead: hp.HasCap(control.CapRead),
 		canChatAttachment: hp.HasCap(control.CapChatAttachment), canAttachment: hp.HasCap(control.CapAttachment), canTermController: hp.HasCap(control.CapTermController), canTermRenew: hp.HasCap(control.CapTermRenew), canTermVia: hp.HasCap(control.CapTermVia), attachmentGeneration: hp.AttachmentGeneration,
 		canWrite: hp.HasCap(control.CapWrite), canRelay: hp.HasCap(control.CapRelay),
 		canMove: hp.HasCap(control.CapMove), canSSHRelay: hp.HasCap(control.CapSSHRelay), canPodRelay: hp.HasCap(control.CapPodRelay), canEntryRelay: hp.HasCap(control.CapEntryRelay), canRelayVia: hp.HasCap(control.CapRelayVia),
@@ -678,12 +699,26 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		canClusterReading: hp.HasCap(control.CapClusterReading),
 		helloAt:           time.Now().UTC(), agentVersion: hp.AgentVersion}
 	// The refresh relay is an ADMIN role: a node that offers it without
-	// being on the hub's admin list is never handed a refresh token's form.
+	// being an admin (nodeAdminOK above — its enrolled login, task MPCX) is
+	// never handed a refresh token's form.
 	nc.canOAuthRefresh = nc.admin && hp.HasCap(control.CapOAuthRefresh)
-	nc.machineOpener = nc.machineLink && nc.canLoginJoin
+	self := s.nodeSelfFrom(ep, ep.Hostname, ep.OSUser)
+	// Only a machine's own program opens its logins: the endpoint that
+	// enrolled as root (task MPCX), not any link whose hello says machine.
+	nc.machineOpener = nc.machineLink && nc.canLoginJoin && (self.Machine || self.machineByLegacy(true))
 	nc.osUser.Store(ep.OSUser)
 	nc.proto.Store(int64(hello.Proto))
 	nc.host.Store(ep.Hostname)
+	if nc.privileged() {
+		// An account / refresh link is routed to by its machine and login:
+		// the ones it enrolled as, whatever it reports (task MPCX).
+		nc.osUser.Store(self.User)
+		nc.host.Store(self.Host)
+	}
+	if self.drift() {
+		nc.driftAudited.Store(true)
+		s.auditIdentityDrift(ep, self, time.Now())
+	}
 	if hp.Admin && !nc.admin {
 		log.Printf("node %s (%s@%s) claims admin but is not on the hub's admin list; no account ops will be sent to it",
 			ep.ID, ep.OSUser, ep.Hostname)
@@ -700,8 +735,14 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		go s.redeliverTaskStops(ep)
 	}
 	defer s.nodes.drop(ep.ID, nc)
-	// Where this link ends, for the other replicas (claude-fleet#2124).
-	defer s.claimLink(ep.ID, nc, hp.Capabilities)()
+	// Where this link ends, for the other replicas (claude-fleet#2124) —
+	// the refresh relay listed only when the hub granted it here (task MPCX),
+	// so another replica never offers it a refresh this one would refuse.
+	caps := hp.Capabilities
+	if !nc.canOAuthRefresh && hp.HasCap(control.CapOAuthRefresh) {
+		caps = withoutCap(caps, control.CapOAuthRefresh)
+	}
+	defer s.claimLink(ep.ID, nc, caps)()
 	s.auditComputeForce(*ep, nc, hp.ComputeForce, hp.Probe, time.Now())
 	if nc.canRelay {
 		// Relays that waited for this node while it was away go now
@@ -786,8 +827,19 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 			if hb.OSUser == "" {
 				hb.OSUser = ep.OSUser
 			}
-			nc.host.Store(hb.Hostname)
-			nc.osUser.Store(hb.OSUser)
+			// A report that is not its enrollment is said once per
+			// connection (task MPCX); an account / refresh link keeps being
+			// routed to as the machine and login it enrolled as.
+			self := s.nodeSelfFrom(ep, hb.Hostname, hb.OSUser)
+			if self.drift() && nc.driftAudited.CompareAndSwap(false, true) {
+				s.auditIdentityDrift(ep, self, time.Now())
+			}
+			routeHost, routeUser := hb.Hostname, hb.OSUser
+			if nc.privileged() {
+				routeHost, routeUser = self.Host, self.User
+			}
+			nc.host.Store(routeHost)
+			nc.osUser.Store(routeUser)
 			// The heartbeat carries the version too: a node that upgrades
 			// without reconnecting is re-judged on its next beat.
 			nc.proto.Store(int64(m.Proto))

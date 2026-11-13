@@ -568,6 +568,22 @@ func (s *Store) PrincipalForLogin(hostname, login string) (string, error) {
 	return id, err
 }
 
+// PrincipalForNodeLogin is PrincipalForLogin for one endpoint (task MPCX):
+// the active account row of login on hostname, except a 登录即认人 row
+// (AccountOpLogin) bound to ANOTHER endpoint — that row is that computer's
+// record, never a name any other node can answer to. managed says the row is
+// one the hub manages (not a 登录即认人 row). ErrNoPrincipal when none.
+func (s *Store) PrincipalForNodeLogin(endpointID, hostname, login string) (principal string, managed bool, err error) {
+	var op string
+	err = s.write.QueryRow(`SELECT principal_id, op FROM fleet_accounts WHERE hostname = ? AND login = ? AND state = ?
+		AND (op <> ? OR endpoint_id = ?)`,
+		hostname, login, AccountActive, AccountOpLogin, endpointID).Scan(&principal, &op)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, ErrNoPrincipal
+	}
+	return principal, op != AccountOpLogin, err
+}
+
 // SpendPoolLogin consumes one admin OAuth state across replicas until its
 // sealed expiry. Kept apart from node signature nonces, whose pruning TTL differs.
 func (s *Store) SpendPoolLogin(nonce string, expires, now time.Time) (bool, error) {

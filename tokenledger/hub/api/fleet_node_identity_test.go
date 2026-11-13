@@ -65,9 +65,12 @@ func TestTrustBorrowedNameGetsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	credsepBeat(t, h, evil, "alice", control.CredsepSeparated) // it says mac-c now
+	// Refused either way: as the machine it enrolled as (evil, where alice
+	// has no account — task MPCX), or for the name it borrows.
 	code, body := rawLease(t, h, evil)
-	if code != http.StatusForbidden || !strings.Contains(string(body), LeaseUntrusted) || !strings.Contains(string(body), "borrowed") {
-		t.Fatalf("borrowed-name lease: %d %s; want 403 untrusted_node, borrowed", code, body)
+	if code != http.StatusForbidden || !(strings.Contains(string(body), LeaseNoPrincipal) ||
+		strings.Contains(string(body), LeaseUntrusted) && strings.Contains(string(body), "borrowed")) {
+		t.Fatalf("borrowed-name lease: %d %s; want 403 no_principal, or untrusted_node borrowed", code, body)
 	}
 	if code, body := rawLease(t, h, tok); code != http.StatusOK {
 		t.Fatalf("mac-c after the impostor: %d %s", code, body)
@@ -97,7 +100,7 @@ func TestTrustBorrowedNameGetsNothing(t *testing.T) {
 	}
 	rb, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(rb), LeaseUntrusted) {
+	if resp.StatusCode != http.StatusForbidden || !(strings.Contains(string(rb), LeaseUntrusted) || strings.Contains(string(rb), LeaseNoPrincipal)) {
 		t.Fatalf("borrowed-name relay credential: %d %s", resp.StatusCode, rb)
 	}
 }

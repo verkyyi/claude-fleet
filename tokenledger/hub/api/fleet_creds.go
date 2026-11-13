@@ -187,7 +187,9 @@ func (s *Server) vaultOff(w http.ResponseWriter) bool {
 
 // nodeIdentity is the (machine, login) a node is, as the roster names it —
 // the names C4's accounts are keyed on — from its newest heartbeat, falling
-// back to the enrollment's own for a node that has never sent one.
+// back to the enrollment's own for a node that has never sent one; held to
+// the identity it enrolled with (nodeSelf, task MPCX): a report that
+// disagrees with its enrollment moves no lease, pass or ticket.
 func (s *Server) nodeIdentity(ep *store.Endpoint) (hostname, osUser string) {
 	hostname, osUser = ep.Hostname, ep.OSUser
 	if nodes, err := s.Store.Nodes(); err == nil {
@@ -202,7 +204,8 @@ func (s *Server) nodeIdentity(ep *store.Endpoint) (hostname, osUser string) {
 			}
 		}
 	}
-	return hostname, osUser
+	id := s.nodeSelfFrom(ep, hostname, osUser)
+	return id.Host, id.User
 }
 
 // handleNodeCredentials answers one node's lease.

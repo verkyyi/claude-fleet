@@ -796,7 +796,7 @@ func (s *Server) handleNodeClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	host, user := s.peerSelf(ep)
-	owner, err := s.Store.PrincipalForLogin(host, user)
+	owner, err := s.nodeLoginPrincipal(ep.ID, host, user)
 	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

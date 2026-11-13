@@ -298,8 +298,9 @@ func (s *Server) handleNodeModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// as a placement from this login judges it (nodePrincipal + its owner)
-	p := fleetPrincipal{Actor: "node:" + ep.OSUser + "@" + ep.Hostname, TaskOwner: s.nodeTaskOwner(ep)}
-	if person, err := s.Store.PrincipalForLogin(ep.Hostname, ep.OSUser); err == nil {
+	self := s.nodeSelfFrom(ep, ep.Hostname, ep.OSUser) // its enrollment, not its report (task MPCX)
+	p := fleetPrincipal{Actor: "node:" + self.User + "@" + self.Host, TaskOwner: s.nodeTaskOwner(ep)}
+	if person, err := s.nodeLoginPrincipal(ep.ID, self.Host, self.User); err == nil {
 		p.Person = person
 	} else if !errors.Is(err, store.ErrNoPrincipal) {
 		httpError(w, http.StatusInternalServerError, err.Error())
