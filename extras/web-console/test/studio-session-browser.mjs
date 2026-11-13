@@ -77,7 +77,8 @@ try {
   session.operations=[{id:'op1',action:'publish',state:'unknown',at:1,message:'结果待核实'}];
   await page.goto('http://127.0.0.1:18963/app/studio?project=page-test&version=v1');
   await page.getByRole('combobox',{name:'版本',exact:true}).waitFor();
-  await page.frameLocator('iframe').getByText('预览正文').waitFor();
+  // a renewal loads the next link hidden beside the shown one (CanvasPreview): read the shown frame
+  await page.frameLocator('div[aria-hidden="false"] > iframe').getByText('预览正文').waitFor();
   assert.equal(await page.getByRole('combobox',{name:'版本',exact:true}).inputValue(),'v1');
   assert.equal(bootstrap,0,'renewal never sends an Agent message');
   await page.getByLabel('操作记录').getByText(/结果待核实/).waitFor();
