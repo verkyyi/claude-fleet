@@ -136,6 +136,85 @@ func TestLogout_RevokesThatSignInOnTheHub(t *testing.T) {
 	}
 }
 
+// 退出 with the older value keeps the revocation past its renewal's exp too:
+// the record lives until a whole session's life from now, so no copy — the
+// one renewed just before, the one renewed later — outlives it.
+func TestLogout_RevocationOutlivesEveryRenewal(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h, pAlice)
+	phone := personCookie(pAlice, "alice-gh") // an hour left of a day
+	key := (&GitHubAuth{ClientSecret: testGitHubSecret}).sessionKey()
+	s0, _ := authz.VerifySession(phone.Value, key, time.Now())
+	if s0 == nil || s0.Sid == "" {
+		t.Fatal("no sid on the value")
+	}
+	before := time.Now()
+	if r := h.postForm(t, "/logout", map[string]string{"Cookie": phone.Name + "=" + phone.Value, "Origin": h.http.URL}); r.StatusCode != http.StatusSeeOther {
+		t.Fatalf("POST /logout = %d", r.StatusCode)
+	}
+	var exp int64
+	if err := h.srv.Store.DB().QueryRow(`SELECT expires_at FROM hub_session_revoked WHERE sid = ?`, s0.Sid).Scan(&exp); err != nil {
+		t.Fatal(err)
+	}
+	if exp <= s0.Exp || exp < before.Add(h.srv.sessionTTL()).Unix() {
+		t.Errorf("revocation until %d; want past the value's exp %d and at least now+ttl %d", exp, s0.Exp, before.Add(h.srv.sessionTTL()).Unix())
+	}
+	// revokeUntil itself: never before the presented exp, never before now+ttl
+	now := time.Unix(1_000_000, 0)
+	if got := revokeUntil(&authz.Session{Exp: now.Add(time.Hour).Unix()}, now, 24*time.Hour); !got.Equal(now.Add(24 * time.Hour)) {
+		t.Errorf("revokeUntil(short) = %v", got)
+	}
+	if got := revokeUntil(&authz.Session{Exp: now.Add(48 * time.Hour).Unix()}, now, 24*time.Hour); !got.Equal(now.Add(48 * time.Hour)) {
+		t.Errorf("revokeUntil(long) = %v", got)
+	}
+}
+
+// sameOrigin and Origin "null": an opaque origin (a sandboxed frame, a data:
+// page) is refused; the console's own sign-out form — a page under
+// Referrer-Policy: no-referrer, so "null" and no Referer — passes on the
+// browser's Sec-Fetch-Site. No Origin and no Referer (a CLI) still passes.
+func TestSameOrigin_NullOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		name, origin, referer, site string
+		want                        bool
+	}{
+		{"this host", "https://hub.example", "", "", true},
+		{"another host", "https://evil.example", "", "", false},
+		{"no origin, no referer (CLI)", "", "", "", true},
+		{"no origin, this host's referer", "", "https://hub.example/app", "", true},
+		{"no origin, another referer", "", "https://evil.example/", "", false},
+		{"null, nothing else", "null", "", "", false},
+		{"null, cross-site", "null", "", "cross-site", false},
+		{"null, same-site", "null", "", "same-site", false},
+		{"null, same-origin (a no-referrer page of this hub)", "null", "", "same-origin", true},
+		{"null, this host's referer", "null", "https://hub.example/app", "", true},
+		{"null, another referer", "null", "https://evil.example/", "", false},
+	} {
+		r, _ := http.NewRequest(http.MethodPost, "https://hub.example/logout", nil)
+		for k, v := range map[string]string{"Origin": tc.origin, "Referer": tc.referer, "Sec-Fetch-Site": tc.site} {
+			if v != "" {
+				r.Header.Set(k, v)
+			}
+		}
+		if got := sameOrigin(r); got != tc.want {
+			t.Errorf("%s: sameOrigin = %v; want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The console's sign-out form, as a browser sends it from a no-referrer page.
+func TestLogout_FromTheConsoleFormWithNullOrigin(t *testing.T) {
+	h := newFleetHarness(t)
+	enablePeople(t, h, pAlice)
+	c := personCookie(pAlice, "alice-gh")
+	if r := h.postForm(t, "/logout", map[string]string{"Cookie": c.Name + "=" + c.Value, "Origin": "null"}); r.StatusCode != http.StatusForbidden {
+		t.Errorf("POST /logout from an opaque origin = %d; want 403", r.StatusCode)
+	}
+	if r := h.postForm(t, "/logout", map[string]string{"Cookie": c.Name + "=" + c.Value, "Origin": "null", "Sec-Fetch-Site": "same-origin"}); r.StatusCode != http.StatusSeeOther {
+		t.Errorf("POST /logout from the console's form = %d; want 303", r.StatusCode)
+	}
+}
+
 // 跨站的 POST 不认：不清 cookie、不跳转。
 func TestLogout_RefusesACrossOriginPost(t *testing.T) {
 	h := newHarness(t)

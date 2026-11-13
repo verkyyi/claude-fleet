@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -155,8 +156,14 @@ func (s *Server) emailStart(w http.ResponseWriter, r *http.Request, addr string,
 	}
 	loc := s.pageLocale(w, r)
 	subject := pageT(loc, "mail.subject")
+	// The host the mail names is the link's: a configured public address when
+	// there is one, never a Host header it was not configured for.
+	base, host := s.hubURL(r), r.Host
+	if u, err := url.Parse(base); err == nil && u.Host != "" {
+		host = u.Host
+	}
 	body := i18n.Interpolate(pageT(loc, "mail.body"), map[string]string{
-		"link": s.hubURL(r) + "/auth/email/link?t=" + link, "code": code, "host": r.Host})
+		"link": base + "/auth/email/link?t=" + link, "code": code, "host": host})
 	// Off the request: a known address answers as fast as an unknown one.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

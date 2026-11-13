@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -175,6 +176,17 @@ func (s *Server) nodeEndpoint(w http.ResponseWriter, r *http.Request) (*store.En
 		return nil, false
 	}
 	return ep, true
+}
+
+// expireMoveBundles forgets every move bundle past store.FleetMoveTTL: run on
+// the alerts sweep (NodeAlertTick, one replica), so a transcript nobody moves
+// does not wait for the next upload to be deleted.
+func (s *Server) expireMoveBundles(now time.Time) {
+	if n, err := s.Store.ExpireFleetMoves(store.FleetMoveTTL, now); err != nil {
+		log.Printf("fleet move: expire bundles: %v", err)
+	} else if n > 0 {
+		log.Printf("fleet move: %d bundles expired after %s", n, store.FleetMoveTTL)
+	}
 }
 
 // handleNodeMoveBundle serves POST /v1/node/move/bundle (the source uploads)

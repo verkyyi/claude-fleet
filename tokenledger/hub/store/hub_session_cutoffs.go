@@ -30,8 +30,9 @@ func (s *Store) SessionCutoff(principal string) (int64, error) {
 	return nb, err
 }
 
-// RevokeSession refuses every session value carrying sid until exp, when it
-// would lapse anyway (task J091: 退出). Rows past their exp are swept here.
+// RevokeSession refuses every session value carrying sid until exp (task
+// J091: 退出) — the caller's latest lapse of any copy of it, renewals included
+// (api.revokeUntil). Rows past their exp are swept here.
 func (s *Store) RevokeSession(sid, principal string, exp, now time.Time) error {
 	if sid == "" {
 		return errors.New("a revocation needs a sid")

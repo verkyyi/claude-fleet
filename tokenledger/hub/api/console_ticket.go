@@ -46,8 +46,9 @@ import (
 //     page, never looks through anyone else's eyes);
 //   - reads only, whatever the route: viewAsGuard refuses every method but
 //     GET/HEAD, a websocket and the conversation's relay, exactly as a view —
-//     but for the person's own terminal session read along (ticketReadsSession,
-//     task YP39), so an acceptance session can photograph it;
+//     but for the asking session itself read along (ticketReadsSession,
+//     task YP39), so an acceptance session can photograph it — never the
+//     person's other sessions' conversations;
 //   - never renewed and never anything else's: every reader but the gate's two
 //     doors (personAdmit, sshRelayHTTPIdentity) takes it for no session.
 //
@@ -77,10 +78,13 @@ type consoleTicketClaims struct {
 	ID       string `json:"jti"`
 	Person   string `json:"pid"`
 	WorkerID string `json:"wid,omitempty"`
-	Next     string `json:"next"`
-	TTLSec   int    `json:"ttl"`
-	Iat      int64  `json:"iat"`
-	Exp      int64  `json:"exp"`
+	// WorkerKey is the same session by its key alias (<fleet>/<key>), when it
+	// had one: the id a keyed session's page names it by.
+	WorkerKey string `json:"wkey,omitempty"`
+	Next      string `json:"next"`
+	TTLSec    int    `json:"ttl"`
+	Iat       int64  `json:"iat"`
+	Exp       int64  `json:"exp"`
 }
 
 // ConsoleTicketResponse is a granted POST /v1/node/console-ticket.
@@ -289,6 +293,9 @@ func (s *Server) handleNodeConsoleTicket(w http.ResponseWriter, r *http.Request)
 	iat := now.Truncate(time.Second)
 	claims := consoleTicketClaims{V: 1, ID: "ct_" + hex.EncodeToString(rnd[:]), Person: principal, WorkerID: c.WorkerID,
 		Next: consoleTicketNext(req.Next), TTLSec: int(ttl.Seconds()), Iat: iat.Unix(), Exp: iat.Add(consoleTicketTTL).Unix()}
+	if c.Key != "" {
+		claims.WorkerKey = c.FleetUUID + "/" + c.Key
+	}
 	path := ConsoleTicketPath + "?t=" + s.signConsoleTicket(claims)
 	audit(c, fl.FleetID, "issued "+claims.ID+" to "+principal+" read-only "+claims.Next+" for "+ttl.String())
 	writeJSON(w, http.StatusOK, ConsoleTicketResponse{URL: s.hubURL(r) + path, Path: path, ID: claims.ID,
@@ -345,7 +352,7 @@ func (s *Server) handleConsoleTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     authz.CookieName,
-		Value:    authz.SignReadOnly(sub, c.Person, s.viewAsName(c.Person), roleUser, s.sessionKey(), now, ttl),
+		Value:    authz.SignReadOnlyWorkers(sub, c.Person, s.viewAsName(c.Person), roleUser, s.sessionKey(), now, ttl, c.workers()),
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -354,6 +361,18 @@ func (s *Server) handleConsoleTicket(w http.ResponseWriter, r *http.Request) {
 	})
 	s.auditConsoleTicket(c, "OK read-only "+c.Next+" for "+ttl.String(), now)
 	http.Redirect(w, r, c.Next, http.StatusFound)
+}
+
+// workers are the worker ids the ticket's session may read along: the session
+// that asked for it, nothing else.
+func (c *consoleTicketClaims) workers() []string {
+	var ws []string
+	for _, w := range []string{c.WorkerID, c.WorkerKey} {
+		if w != "" {
+			ws = append(ws, w)
+		}
+	}
+	return ws
 }
 
 func (s *Server) auditConsoleTicket(c *consoleTicketClaims, outcome string, now time.Time) {
@@ -369,7 +388,7 @@ func (s *Server) consoleTicketAdmit(w http.ResponseWriter, r *http.Request, sess
 		s.notFoundPage(w, r)
 		return nil, true, true
 	}
-	if !viewAsReadable(r) && !ticketReadsSession(r) {
+	if !viewAsReadable(r) && !ticketReadsSession(r, sess) {
 		httpError(w, http.StatusForbidden, consoleTicketRefusal)
 		return nil, true, true
 	}

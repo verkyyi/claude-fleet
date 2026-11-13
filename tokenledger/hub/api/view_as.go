@@ -82,11 +82,13 @@ func viewAsReadable(r *http.Request) bool {
 }
 
 // ticketReadsSession is a read a read-only console ticket may make beyond a
-// view's (task YP39): the person's own terminal session read along — its
+// view's (task YP39): the session that asked for the ticket read along — its
 // conversation (/v1/chat/view, never a takeover) and the files it names
-// (/v1/chat/file?worker=) — so an acceptance session can photograph it.
+// (/v1/chat/file?worker=) — so an acceptance session can photograph it. Only
+// that session (sess.ROWorkers): the person's other sessions stay listed as
+// any read lists them, their conversations and step output are not read.
 // Never the person's own chat conversation, never a write or an upgrade.
-func ticketReadsSession(r *http.Request) bool {
+func ticketReadsSession(r *http.Request, sess *authz.Session) bool {
 	if r.Method != http.MethodGet || r.Header.Get("Upgrade") != "" {
 		return false
 	}
@@ -94,10 +96,31 @@ func ticketReadsSession(r *http.Request) bool {
 	case ChatPathPrefix + "migration":
 		// Identity metadata only; the POST migrate route remains forbidden.
 		return true
-	case ChatPathPrefix + chatViewRoute:
-		return true
-	case ChatPathPrefix + "file":
-		return r.URL.Query().Get("worker") != ""
+	case ChatPathPrefix + chatViewRoute, ChatPathPrefix + "file":
+		return sess != nil && ticketWorkerOK(sess.ROWorkers, r.URL.Query().Get("worker"))
+	}
+	return false
+}
+
+// ticketWorkerOK is whether a page's worker=<id> names one of the ticket's
+// own worker ids: exactly, or as the closed-history form fid:<fid> of one.
+func ticketWorkerOK(own []string, w string) bool {
+	w = strings.TrimSpace(w)
+	if w == "" {
+		return false
+	}
+	for _, o := range own {
+		if o == "" {
+			continue
+		}
+		if w == o {
+			return true
+		}
+		if ref, ok := strings.CutPrefix(w, "fid:"); ok {
+			if i := strings.LastIndexByte(o, '/'); i >= 0 && ref == o[i+1:] {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -106,11 +129,13 @@ func ticketReadsSession(r *http.Request) bool {
 // view, before any route sees it. Nothing asked ⇒ nothing read, byte for byte.
 func (s *Server) viewAsGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !viewAsReadable(r) && !ticketReadsSession(r) && s.consoleTicketCookie(r) {
-			// A read-only console ticket's session (task T844): reads only,
-			// whatever the route — the same rule as a view.
-			httpError(w, http.StatusForbidden, consoleTicketRefusal)
-			return
+		if !viewAsReadable(r) {
+			if sess, _, ok := s.personSessionTicket(r); ok && sess.RO && !ticketReadsSession(r, sess) {
+				// A read-only console ticket's session (task T844): reads only,
+				// whatever the route — the same rule as a view.
+				httpError(w, http.StatusForbidden, consoleTicketRefusal)
+				return
+			}
 		}
 		if target := viewAsAsked(r); target != "" && !viewAsReadable(r) {
 			if _, pid, ok := s.personSession(r); ok && pid != target {

@@ -44,6 +44,11 @@ func TestChatViewReadsOwnSession(t *testing.T) {
 	if !resp.Uncompressed {
 		t.Errorf("the view went out uncompressed (task YP39: gzip, flushed per event)")
 	}
+	if sc := strings.Join(resp.Header.Values("Set-Cookie"), "\n"); strings.Contains(sc, "relay=") || resp.Header.Get("X-Content-Type-Options") != "nosniff" ||
+		resp.Header.Get("Content-Security-Policy") != "sandbox; default-src 'none'" {
+		t.Errorf("the view's headers: Set-Cookie %q, %q, %q; want none, nosniff, the sandbox policy", sc,
+			resp.Header.Get("X-Content-Type-Options"), resp.Header.Get("Content-Security-Policy"))
+	}
 	b, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(b), `"t":"state"`) || !strings.Contains(string(b), "id: 1\n") ||
 		!strings.Contains(string(b), `fid=`+fid) || !strings.Contains(string(b), `from=5`) {

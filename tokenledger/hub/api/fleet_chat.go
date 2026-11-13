@@ -69,6 +69,23 @@ var chatRoutes = map[string]string{
 	"warm": http.MethodGet,
 }
 
+// chatRelaySandbox is the policy a relayed file or session view is served
+// under on the hub's origin: no script, no same-origin access, nothing loaded.
+const chatRelaySandbox = "sandbox; default-src 'none'"
+
+// chatRelayHeaders is what a relayed answer may carry on the hub's origin:
+// never a cookie the service sets, never a type the browser guesses; a file or
+// a session view (sandbox) under chatRelaySandbox whatever the service said.
+func chatRelayHeaders(resp *http.Response, sandbox bool) {
+	resp.Header.Del("Set-Cookie")
+	resp.Header.Del("Set-Cookie2")
+	resp.Header.Set("X-Content-Type-Options", "nosniff")
+	if sandbox {
+		resp.Header.Del("Content-Security-Policy-Report-Only")
+		resp.Header.Set("Content-Security-Policy", chatRelaySandbox)
+	}
+}
+
 // chatProvider is which of the person's two conversations a request is for
 // (task R9A2): "" — Claude Code's, the one there always was — or "codex". The
 // one query besides a file's ref the service is handed; anything else is refused.
@@ -558,9 +575,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			out.URL.Scheme, out.URL.Host, out.Host = "http", "webchat", "webchat"
 			out.URL.Path, out.URL.RawPath, out.URL.RawQuery = "/api/"+name, "", ""
 			if name == "file" {
-				out.URL.RawQuery = "ref=" + pr.In.URL.Query().Get("ref")
+				out.URL.RawQuery = url.Values{"ref": {pr.In.URL.Query().Get("ref")}}.Encode()
 			} else if provider != "" {
-				out.URL.RawQuery = "provider=" + provider
+				out.URL.RawQuery = url.Values{"provider": {provider}}.Encode()
 			}
 			// Nothing of the browser's goes on but what the service reads: never
 			// its cookies, never a person it names.
@@ -580,6 +597,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// NDJSON: each line reaches the page as the service writes it.
 		FlushInterval: -1,
 		ModifyResponse: func(resp *http.Response) error {
+			chatRelayHeaders(resp, name == "file")
 			if name == "file" {
 				// an image by its content's name never changes: the page may keep it
 				w.Header().Del("Cache-Control")

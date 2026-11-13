@@ -699,3 +699,28 @@ func TestEmailFirstAdminFromList(t *testing.T) {
 		t.Fatalf("wechat → %q %q %q", p, role, why)
 	}
 }
+
+// The sign-in mail names the configured public address's host, never the
+// Host header the request came with; with none configured, the request's.
+func TestEmailMailNamesThePublicHost(t *testing.T) {
+	h := newWaysHarness(t)
+	start := func(addr, host string) sentMail {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, h.http.URL+"/auth/email/start", strings.NewReader(url.Values{"email": {addr}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Host = host
+		resp, err := newBrowser(t, "").c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return h.mail(t)
+	}
+	if m := start("erin@example.com", "other.example"); !strings.Contains(m.body, "other.example") {
+		t.Errorf("no public address: the mail reads %q; want the request's host", m.body)
+	}
+	h.srv.FleetPublicURL = "https://hub.example.org"
+	if m := start("frank@example.com", "other.example"); strings.Contains(m.body, "other.example") || !strings.Contains(m.body, "hub.example.org") {
+		t.Errorf("a public address set: the mail reads %q; want hub.example.org only", m.body)
+	}
+}
