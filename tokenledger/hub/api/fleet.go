@@ -199,6 +199,7 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 		s.fleetMachineHeld(ep, hb.MachineID, at)
 		return
 	}
+	s.machineHeld.Delete(ep.ID)
 	if err != nil {
 		log.Printf("node %s: record fleets: %v", ep.ID, err)
 		return
@@ -217,6 +218,8 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 // fleetMachineHeld logs, once a window per endpoint, a heartbeat whose
 // machine id another live node holds (store.ErrMachineHeld, task MPCX).
 func (s *Server) fleetMachineHeld(ep store.Endpoint, machineID string, at time.Time) {
+	s.machineHeld.Store(ep.ID, machineID+" is registered to another live node; retire that node (or wait "+
+		store.MachineHolderQuiet.String()+" of its silence) and this one's fleets register")
 	if ok, _ := s.logQuiet.allow("machine-held/"+ep.ID, at); !ok {
 		return
 	}

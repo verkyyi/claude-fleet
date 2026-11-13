@@ -1,11 +1,14 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -211,7 +214,7 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 		// The token is handed back, so only a bearer can say it — and not one
 		// its node turned off (claude-fleet#3710).
 		if ep, _ := s.nodeAuthOpt(r); ep != nil &&
-			(ep.OSUser == "" || ep.OSUser == sanitizeJoinField(osUser)) {
+			(ep.OSUser == "" || ep.OSUser == sanitizeJoinLogin(osUser) || ep.OSUser == deviceRoadLogin(pid, fp, osUser)) {
 			if err := s.deviceLoginAccount(pid, fp, ep.ID, osUser, now); err != nil {
 				return nil, "", err
 			}
@@ -234,7 +237,7 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 		if mach := s.machineServing(id); mach != "" {
 			// The login runs on its machine's node program, which holds
 			// the token this would replace (claude-fleet#2501).
-			return nil, "", &machineManagedErr{osUser: sanitizeJoinField(osUser), host: mach}
+			return nil, "", &machineManagedErr{osUser: sanitizeJoinLogin(osUser), host: mach}
 		}
 		if err := s.deviceLoginAccount(pid, fp, id, osUser, now); err != nil {
 			return nil, "", err
@@ -285,13 +288,10 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 // login — enrolls, as an ordinary node: memberDevice keeps it from ever being
 // an admin node or a machine's program, and the audit says so.
 func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser string) (*NodeJoinResponse, error) {
-	login := sanitizeJoinField(osUser)
-	if login == "" {
-		// No login, or none left once sanitized: the endpoint would enroll
-		// as nobody, and a login-less endpoint is read by the rules for an
-		// operator's `ccquota enroll` (task MPCX).
-		return nil, &loginAccountErr{"no_login", "this computer named no system login the hub can record — run fleet login as your own login"}
-	}
+	// The login it enrolls as (task MPCX): the OS login as reported, or the
+	// person's alias login when it runs as root or names none — never root,
+	// so a device is never a machine's program.
+	login := deviceRoadLogin(pid, fp, osUser)
 	if !s.isOperator(pid) {
 		if adminRoleLogins[login] {
 			return nil, &reservedLoginErr{login}
@@ -310,7 +310,7 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 	if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
 		return nil, err
 	}
-	out, err := s.redeemJoin(r, code, hostname, osUser)
+	out, err := s.redeemJoin(r, code, hostname, login)
 	if err != nil {
 		return nil, err
 	}
@@ -330,19 +330,72 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 	return out, nil
 }
 
-// deviceLoginAccount records osUser on endpointID's machine as pid's
-// (recordLoginAccount) and answers a loginAccountErr when it is not theirs
-// afterwards.
+// deviceLoginAccount records the device's login (deviceRoadLogin) on endpointID's
+// machine as pid's (recordLoginAccount) and answers a loginAccountErr when it
+// is not theirs afterwards.
 func (s *Server) deviceLoginAccount(pid, fp, endpointID, osUser string, now time.Time) error {
-	why := s.recordLoginAccount(pid, fp, endpointID, osUser, now)
-	if why == "" {
-		return nil
+	if why := s.recordLoginAccount(pid, fp, endpointID, deviceRoadLogin(pid, fp, osUser), now); why != "" {
+		return &loginAccountErr{"login_not_recorded", why + " — no node pass is issued for it"}
 	}
-	code := "login_not_recorded"
-	if l := sanitizeJoinField(osUser); l == "" {
-		code = "no_login"
+	return nil
+}
+
+// sanitizeJoinLogin keeps a reported OS login as the login it is (task MPCX):
+// letters (either case), digits, `_`, `-` and `.`, 32 at most — never cut at a
+// dot the way a hostname is (`john.smith` stays `john.smith`).
+func sanitizeJoinLogin(v string) string {
+	v = strings.TrimSpace(v)
+	var b strings.Builder
+	for _, c := range v {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			b.WriteRune(c)
+		}
+		if b.Len() >= 32 {
+			break
+		}
 	}
-	return &loginAccountErr{code, why + " — no node pass is issued for it"}
+	// Never one that starts with `.` / `-` (an option, a dotfile) or is
+	// punctuation alone: that is no login.
+	out := strings.TrimLeft(b.String(), ".-")
+	if strings.IndexFunc(out, func(c rune) bool {
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+	}) < 0 {
+		return ""
+	}
+	return out
+}
+
+// deviceAliasPrefix starts the login a device road records for a device that
+// runs as root or names no login: `dev-` and eight hex of its person and
+// device, stable across reissues.
+const deviceAliasPrefix = "dev-"
+
+// deviceRoadLogin is the login a device road enrolls and records (task MPCX): the
+// OS login (sanitizeJoinLogin), or — for root, or none at all — the person's
+// alias for this device, so a container or devcontainer run as root is still
+// its person's ordinary node.
+func deviceRoadLogin(pid, fp, osUser string) string {
+	l := sanitizeJoinLogin(osUser)
+	if l != "" && l != "root" {
+		return l
+	}
+	sum := sha256.Sum256([]byte(pid + "|" + fp))
+	return deviceAliasPrefix + hex.EncodeToString(sum[:4])
+}
+
+// isDeviceAlias: login is a deviceRoadLogin alias.
+func isDeviceAlias(login string) bool {
+	if len(login) != len(deviceAliasPrefix)+8 || !strings.HasPrefix(login, deviceAliasPrefix) {
+		return false
+	}
+	_, err := hex.DecodeString(login[len(deviceAliasPrefix):])
+	return err == nil
+}
+
+// deviceLoginRecordable: a device road's login the hub records as its
+// person's — any sanitized login but root and the admin role account.
+func deviceLoginRecordable(login string) bool {
+	return login != "" && login != "root" && !adminRoleLogins[login] && login == sanitizeJoinLogin(login)
 }
 
 // principalOnNode is the person behind login on a node: the machine's
@@ -447,8 +500,7 @@ func (s *Server) leaseInFlight(endpointID, host, login string, now time.Time) (s
 // login is NOT the person's afterwards — read back the way every reader reads
 // it (principalOnNode) — empty when it is (claude-fleet#2249).
 func (s *Server) recordLoginAccount(pid, fp, endpointID, osUser string, now time.Time) string {
-	osUser = sanitizeJoinField(osUser)
-	if osUser == "" || !control.ValidExistingLogin(osUser) {
+	if !deviceLoginRecordable(osUser) {
 		return fmt.Sprintf("system login %s is not one the hub records", osUser)
 	}
 	ep, err := s.Store.EndpointByID(endpointID)

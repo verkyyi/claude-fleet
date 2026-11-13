@@ -113,6 +113,7 @@ func (s *Store) LiveJoinCodes(label, machine string, cutoff, now time.Time) (int
 // RedeemJoinCode spends a code and enrolls an agent endpoint under it, in one
 // transaction. label names the endpoint when the code carries none.
 func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label, tokenHash, host, osUser string) error {
+	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
 	tx, err := s.write.Begin()
 	if err != nil {
 		return err
@@ -245,6 +246,27 @@ func (s *Store) DeviceNodeEndpoint(deviceFP string) (string, error) {
 	return id, err
 }
 
+// LiveSeatOn is LiveEndpointOn for the admin role account with the machine
+// matched by first label, any case (task MPCX): a seat an older hub issued
+// under the name `Mac-A.local` is the same machine's seat as `mac-a`'s, and is
+// reissued rather than a second one minted. ErrNoSuchEndpoint when none.
+func (s *Store) LiveSeatOn(host, login string) (string, error) {
+	machine := lowerFirstLabel(host)
+	if machine == "" {
+		return "", ErrNoSuchEndpoint
+	}
+	var id string
+	err := s.read.QueryRow(`SELECT endpoint_id FROM endpoints
+		WHERE (enrolled_user = ? OR (enrolled_user = '' AND os_user = ?)) AND retired_at IS NULL
+		  AND (LOWER(enrolled_host) = ? OR LOWER(enrolled_host) LIKE ?
+		       OR (enrolled_host = '' AND (LOWER(hostname) = ? OR LOWER(hostname) LIKE ?)))
+		ORDER BY enrolled_at DESC LIMIT 1`, login, login, machine, machine+".%", machine, machine+".%").Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "") {
+		return "", ErrNoSuchEndpoint
+	}
+	return id, err
+}
+
 // LiveEndpointOn is the newest live endpoint that ENROLLED as OS user osUser
 // on machine host (the login and the name it enrolled as — task MPCX — else,
 // for a row that never said them, the ones it reports); ErrNoSuchEndpoint when
@@ -295,6 +317,7 @@ func (s *Store) EndReissueGrace(endpointID string) error {
 // once, and from then on DeviceNodeEndpoint finds it — a used code row, the
 // same audit trail every enrollment leaves.
 func (s *Store) LinkDeviceEndpoint(codeHash, deviceFP, endpointID string, now time.Time) error {
+	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
 	ts := fmtTime(now)
 	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, used_at, endpoint_id, device_fp)
 		VALUES (?, '', ?, ?, ?, ?, ?, ?)`, codeHash, NodeKindFixed, ts, ts, ts, endpointID, deviceFP)

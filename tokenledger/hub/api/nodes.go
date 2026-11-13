@@ -1006,8 +1006,12 @@ type NodeView struct {
 	heartbeat *control.Heartbeat
 	*control.ParkMetrics
 
-	EndpointID    string     `json:"endpoint_id"`
-	Hostname      string     `json:"hostname"`
+	EndpointID string `json:"endpoint_id"`
+	Hostname   string `json:"hostname"`
+	// MachineIDHeld: this node's heartbeats name a machine id another live
+	// node holds, so its fleets are not registered (task MPCX) — the id, and
+	// what to do, on the roster.
+	MachineIDHeld string     `json:"machine_id_held,omitempty"`
 	OSUser        string     `json:"os_user"`
 	MachineID     string     `json:"machine_id,omitempty"`
 	Proto         int        `json:"proto"`
@@ -1346,6 +1350,9 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 			et, _ = s.Store.EndpointTrustOf(n.EndpointID)
 		}
 		v.Trust, v.TrustSource = s.deviceTrust(n.EndpointID, n.Hostname, et, settings)
+		if m, ok := s.machineHeld.Load(n.EndpointID); ok {
+			v.MachineIDHeld = m.(string)
+		}
 		v.Role = et.Role
 		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
 			v.Maintenance = &m

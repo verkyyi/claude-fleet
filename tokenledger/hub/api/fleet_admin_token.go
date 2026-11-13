@@ -95,7 +95,7 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.joinNow()
-	out, err := s.issueAdminToken(r, host, login, now)
+	out, err := s.issueAdminToken(r, host, login, s.seatOf(ep, self, host, login), now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -110,12 +110,19 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 // issueAdminToken is the token itself: the live endpoint of login on host
 // gets a new one, else a fixed-kind endpoint is enrolled pinned to host
 // (a code the hub mints for that machine and spends at once).
-func (s *Server) issueAdminToken(r *http.Request, host, login string, now time.Time) (*AdminTokenResponse, error) {
+func (s *Server) issueAdminToken(r *http.Request, host, login, seat string, now time.Time) (*AdminTokenResponse, error) {
 	tok, err := MintToken()
 	if err != nil {
 		return nil, err
 	}
 	out := &AdminTokenResponse{Login: login, Machine: firstLabel(host), Token: tok, Hub: s.nodeHubURL(r)}
+	if seat != "" {
+		if err := s.Store.RotateEndpointToken(seat, HashToken(tok), now, ReissueTokenGrace); err != nil {
+			return nil, err
+		}
+		out.EndpointID, out.Outcome = seat, "reissued"
+		return out, nil
+	}
 	if id, err := s.Store.LiveEndpointOn(host, login); err == nil {
 		if err := s.Store.RotateEndpointToken(id, HashToken(tok), now, ReissueTokenGrace); err != nil {
 			return nil, err
@@ -139,4 +146,30 @@ func (s *Server) issueAdminToken(r *http.Request, host, login string, now time.T
 	}
 	out.EndpointID, out.Outcome = id, "issued"
 	return out, nil
+}
+
+// seatOf is the live admin seat this machine already has, "" for none (task
+// MPCX): one enrolled as the machine the program enrolled as (any case, first
+// label), else — for a seat an older hub issued under the name the program
+// reported (a Mac's HostName) — one enrolled as that name, but only while the
+// name is no other machine's: not trusted, no other machine program enrolled
+// as it, no pod's.
+func (s *Server) seatOf(ep *store.Endpoint, self nodeIdent, host, login string) string {
+	if id, err := s.Store.LiveSeatOn(host, login); err == nil {
+		return id
+	}
+	rep := self.ReportedHost
+	if rep == "" || sameName(rep, host) || isUserPodName(rep) {
+		return ""
+	}
+	if settings, err := s.Store.FleetSettings(); err != nil || s.machineTrusted(firstLabel(rep), settings) {
+		return ""
+	}
+	if taken, err := s.Store.MachineProgramEnrolledAs(ep.ID, rep); err != nil || taken {
+		return ""
+	}
+	if id, err := s.Store.LiveSeatOn(rep, login); err == nil {
+		return id
+	}
+	return ""
 }

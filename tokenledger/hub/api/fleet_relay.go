@@ -545,7 +545,10 @@ func (s *Server) pushWorkers(ep store.Endpoint, nc *nodeConn) {
 	if !nc.workersAt.CompareAndSwap(last, now.UnixNano()) {
 		return
 	}
-	msg, err := control.New(control.TypeWorkers, control.Workers{Rows: s.workerMap(ep.ID, nc.hostname(), ep.OSUser, now)})
+	// Whose map it is: the machine and login the hub holds this node to
+	// (task MPCX), never the login its report names.
+	host, user := s.routeSelf(&ep, s.nodeSelf(&ep))
+	msg, err := control.New(control.TypeWorkers, control.Workers{Rows: s.workerMap(ep.ID, host, user, now)})
 	if err != nil {
 		return
 	}

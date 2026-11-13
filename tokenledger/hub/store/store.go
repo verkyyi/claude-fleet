@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -81,6 +82,9 @@ type Store struct {
 	// usage_events on this open, 0 when the rollup was already current. The
 	// hub logs it so an operator can see a first-run backfill happen.
 	BackfilledRollup int64
+
+	// identGen is IdentityGen (task MPCX).
+	identGen atomic.Uint64
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -806,8 +810,12 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 	// A device road's endpoint never takes root or the admin role account
 	// as its enrollment by report (task MPCX): it stays unstamped.
 	hold := 0
-	if s.deviceStampHeld(endpointID, id.OSUser) {
+	unstamped, held := s.deviceStampHeld(endpointID, id.OSUser)
+	if held {
 		hold = 1
+	}
+	if unstamped {
+		defer s.identGen.Add(1)
 	}
 	if login || prevAccount == "" {
 		_, err = s.write.Exec(`

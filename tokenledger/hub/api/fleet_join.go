@@ -279,7 +279,7 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 // login's node pass, claude-fleet#2212).
 func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*NodeJoinResponse, error) {
 	host := sanitizeJoinField(hostname)
-	osUser = sanitizeJoinField(osUser)
+	osUser = sanitizeJoinLogin(osUser) // a login is never cut at a dot (task MPCX)
 	label := host
 	if osUser != "" && host != "" {
 		label = host + "-" + osUser

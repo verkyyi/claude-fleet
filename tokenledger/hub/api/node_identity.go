@@ -59,6 +59,9 @@ type nodeIdent struct {
 	// Member: ByDevice, and none of those devices is a hub admin's
 	// (memberDevice).
 	ByDevice, Member bool
+	// Pinned: a code minted for one machine enrolled it (an opened login, an
+	// admin seat, a pod or a login in one): its machine never moves.
+	Pinned bool
 }
 
 // machineByLegacy is the rule before task MPCX, for an endpoint that has not
@@ -102,29 +105,47 @@ func sameEnrolledName(enrolled, reported string) bool {
 		(enrolled != "" && strings.EqualFold(sanitizeJoinField(enrolled), sanitizeJoinField(reported)))
 }
 
-// nodeSelfFrom holds a report (host, user) to ep's enrollment.
+// nodeSelfFrom holds a report (host, user) to ep's enrollment. The answer is
+// cached per endpoint for the report it was asked about (identCache): a
+// heartbeat and the registry write it feeds ask twice, and nothing it reads
+// moves between them.
 func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
+	if id, ok := s.identCached(ep.ID, host, user); ok {
+		return id
+	}
+	gen := s.Store.IdentityGen()
 	id := nodeIdent{Host: host, User: user, ReportedHost: host, ReportedUser: user}
 	et, err := s.Store.EndpointTrustOf(ep.ID)
 	if err != nil {
 		log.Printf("node %s: read its enrollment: %v", ep.ID, err)
 		return id
 	}
+	enr := s.enrollment(ep.ID)
 	id.EnrolledHost, id.EnrolledUser = enrolledMachine(et), et.EnrolledUser
 	id.Unstamped = et.EnrolledUser == ""
-	principals, byDevice := s.deviceEnrolled(ep.ID)
-	id.ByDevice, id.Member = byDevice, s.membersOnly(principals, byDevice)
-	id.Machine = et.EnrolledUser == "root" && !id.Member
-	pod := id.Machine && s.podEndpoint(ep.ID)
+	id.ByDevice, id.Member, id.Pinned = enr.ByDevice, enr.Member, enr.Pinned
+	// A machine's program is root by an operator's or the hub's code — never
+	// a device's road, whoever's device (task MPCX).
+	id.Machine = et.EnrolledUser == "root" && !enr.ByDevice
+	pod := s.podOf(enr, et)
 	if id.EnrolledHost != "" && !sameEnrolledName(id.EnrolledHost, host) {
 		switch {
 		case host == "":
 			id.Host = id.EnrolledHost // it never said: the enrollment's, as before
-		case id.Machine && (pod || s.nameBorrowed(host, et) || s.machineNameTaken(ep.ID, host)):
+		case id.Member || enr.Pinned || pod:
+			// A member's device, a login or seat the hub opened on one
+			// machine, a pod: the machine is the enrollment's. A machine's
+			// rename is its own program's to carry, never a login's.
 			id.Host, id.HostDrift = id.EnrolledHost, true
-		case !id.Machine && (id.Member || s.nameBorrowed(host, et)):
+		case s.nameHeld(ep.ID, host):
 			id.Host, id.HostDrift = id.EnrolledHost, true
 		}
+	}
+	if id.ByDevice && isDeviceAlias(id.EnrolledUser) && (user == "" || user == "root") {
+		// A device that runs as root (or names no login) enrolled under its
+		// person's alias login (deviceRoadLogin): that report is the alias.
+		user = id.EnrolledUser
+		id.User = user
 	}
 	if id.EnrolledUser != "" && user != id.EnrolledUser {
 		switch {
@@ -136,6 +157,7 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 			id.User, id.UserDrift = id.EnrolledUser, true
 		}
 	}
+	s.identStore(ep.ID, host, user, gen, id)
 	return id
 }
 
@@ -143,23 +165,34 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 // under on a machine `fleet node install` set up (the core's service seat).
 var machineSeatLogins = map[string]bool{"_fleetnode": true, "fleetnode": true}
 
-// machineNameTaken: host is a name a machine's program may not report as its
-// own (task MPCX) — one another machine's program enrolled as, or a user pod's
-// (the hub minted that name for a pod; a machine never renames into it). An
-// unreadable answer is a yes.
-func (s *Server) machineNameTaken(endpointID, host string) bool {
+// nameHeld: host, a name the endpoint did not enroll as, names a machine that
+// is not this endpoint's to claim (task MPCX) — a machine name the hub trusts,
+// a machine some other endpoint enrolled as, or a user pod's name. A name
+// nothing holds (a Mac's HostName, a renamed host) is not. Whether the
+// endpoint's own machine is trusted does not enter. An unreadable answer is a
+// yes.
+func (s *Server) nameHeld(endpointID, host string) bool {
 	if isUserPodName(host) {
 		return true
 	}
-	taken, err := s.Store.MachineProgramEnrolledAs(endpointID, host)
-	return err != nil || taken
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return true
+	}
+	if s.machineTrusted(firstLabel(host), settings) || s.machineTrusted(host, settings) {
+		return true
+	}
+	other, err := s.Store.EnrolledByAnother(endpointID, host)
+	return err != nil || other
 }
 
 // machineLoginOpen: login is one a machine's program speaks for on machine,
 // the machine it enrolled as (task MPCX) — an active account the hub opened
-// there, a live endpoint enrolled there as that login (a lane, the admin seat,
-// an operator's login), or the machine's service seat. A pod's program gets
-// no seat: its node runs as the pod's own login. An unreadable answer is no.
+// there (never a login a device recorded: ActiveAccountsOn leaves op=login
+// rows out), a live endpoint enrolled there as that login by any road but a
+// device's (a lane, the admin seat, an operator's login), or the machine's
+// service seat. A pod's program gets no seat: its node runs as the pod's own
+// login. An unreadable answer is no.
 func (s *Server) machineLoginOpen(machine, login string, pod bool) bool {
 	if machine == "" || login == "" {
 		return false
@@ -173,7 +206,7 @@ func (s *Server) machineLoginOpen(machine, login string, pod bool) bool {
 			return false
 		}
 		for _, a := range accts {
-			if a.Login == login {
+			if a.Login == login && a.Op != store.AccountOpLogin {
 				return true
 			}
 		}
@@ -185,76 +218,73 @@ func (s *Server) machineLoginOpen(machine, login string, pod bool) bool {
 	return err == nil && ok
 }
 
-// nameBorrowed: host is a trusted machine the endpoint did not enroll as
-// (nodeTrust's name_borrowed). A machine name that merely moved since an
-// operator's or the hub's code enrolled the endpoint — a renamed Mac, a join
-// that named the machine differently — is not borrowed and keeps its report,
-// as before; a member's device is held to its enrollment either way.
-func (s *Server) nameBorrowed(host string, et store.EndpointTrust) bool {
-	settings, err := s.Store.FleetSettings()
-	if err != nil {
-		return true // unreadable: the enrollment decides
-	}
-	_, src := nodeTrust(host, et, settings)
-	return src == TrustSourceNameBorrowed
+// enrollRec is store.EndpointEnrollment plus Member, cached (enrollment).
+type enrollRec struct {
+	store.EndpointEnrollment
+	// Member: ByDevice, and none of those devices' people is one of the
+	// hub's admins (memberDevice).
+	Member bool
 }
 
-// deviceEnrolled is who enrolled endpointID by a device's road
-// (store.DeviceEnrollers); an unreadable record reads as enrolled by nobody
-// the hub can name — never as an operator's own endpoint.
-func (s *Server) deviceEnrolled(endpointID string) (principals []string, byDevice bool) {
-	principals, byDevice, err := s.Store.DeviceEnrollers(endpointID)
+// enrollment is endpointID's enrollment record, cached until the identity
+// generation moves (or identTTL passes — another replica's write). An
+// unreadable record reads as the most held one: a member's device, pinned, a
+// pod — never the operator's own; it is not cached.
+func (s *Server) enrollment(endpointID string) enrollRec {
+	gen := s.Store.IdentityGen()
+	if v, ok := s.enrollCache.Load(endpointID); ok {
+		if e := v.(enrollEntry); e.gen == gen && time.Since(e.at) < identTTL {
+			return e.rec
+		}
+	}
+	e, err := s.Store.EnrollmentOf(endpointID)
 	if err != nil {
 		log.Printf("node %s: read how it enrolled: %v", endpointID, err)
-		return nil, true
+		return enrollRec{EndpointEnrollment: store.EndpointEnrollment{ByDevice: true, Pinned: true, Pod: true}, Member: true}
 	}
-	return principals, byDevice
+	rec := enrollRec{EndpointEnrollment: e, Member: e.ByDevice}
+	for _, p := range e.DevicePeople {
+		if s.isOperator(p) {
+			rec.Member = false
+			break
+		}
+	}
+	s.enrollCache.Store(endpointID, enrollEntry{gen: gen, at: time.Now(), rec: rec})
+	return rec
+}
+
+type enrollEntry struct {
+	gen uint64
+	at  time.Time
+	rec enrollRec
+}
+
+// deviceEnrolled is who enrolled endpointID by a device's road, or tied it to
+// a device later (store.EnrollmentOf); an unreadable record reads as enrolled
+// by nobody the hub can name — never as an operator's own endpoint.
+func (s *Server) deviceEnrolled(endpointID string) (principals []string, byDevice bool) {
+	e := s.enrollment(endpointID)
+	return e.DevicePeople, e.ByDevice
 }
 
 // memberDevice: endpointID was enrolled by a device road (`fleet login`'s node
-// pass, a `fleet node join` scan) and none of those devices is a hub admin's.
-// Such an endpoint is a person's own terminal: whatever login it enrolled
-// under, it is never an admin node and never a machine's program.
-func (s *Server) memberDevice(endpointID string) bool {
-	return s.membersOnly(s.deviceEnrolled(endpointID))
-}
+// pass, a `fleet node join` scan) or linked to a device, and none of those
+// devices is a hub admin's. Such an endpoint is a person's own terminal:
+// whatever login it enrolled under, it is never an admin node and never a
+// machine's program. An operator's own linked computer is not one.
+func (s *Server) memberDevice(endpointID string) bool { return s.enrollment(endpointID).Member }
 
-// membersOnly: a device road enrolled it, and none of those devices' people is
-// one of the hub's admins.
-func (s *Server) membersOnly(principals []string, byDevice bool) bool {
-	if !byDevice {
-		return false
-	}
-	for _, p := range principals {
-		if s.isOperator(p) {
-			return false
-		}
-	}
-	return true
-}
-
-// podEndpoint: endpointID is a person's pod's own node program (task MPCX) —
-// enrolled by the code the hub minted for that pod, or enrolled as a user
-// pod's name. Its token is readable by the pod's person, so whatever a
-// machine's program may do, this one does only for its own pod. An
-// unreadable record reads as a pod.
+// podEndpoint: endpointID is a person's pod's node program or a login inside
+// a pod (task MPCX) — enrolled by the code the hub minted for that pod, or as
+// a user pod's name. Its token is readable by the pod's person, so it does
+// only what is that pod's own. An unreadable record reads as a pod.
 func (s *Server) podEndpoint(endpointID string) bool {
-	pod, err := s.Store.PodEnrolled(endpointID)
-	if err != nil {
-		log.Printf("node %s: read how it enrolled: %v", endpointID, err)
-		return true
-	}
-	if pod {
-		return true
-	}
-	et, err := s.Store.EndpointTrustOf(endpointID)
-	if errors.Is(err, store.ErrNoSuchEndpoint) {
-		return false
-	}
-	if err != nil {
-		return true
-	}
-	return isUserPodName(enrolledMachine(et))
+	e := s.enrollment(endpointID)
+	return e.Pod || isUserPodName(enrolledMachine(store.EndpointTrust{EnrolledHost: e.EnrolledHost}))
+}
+
+func (s *Server) podOf(e enrollRec, et store.EndpointTrust) bool {
+	return e.Pod || isUserPodName(enrolledMachine(et))
 }
 
 // isOperator: pid is one of the hub's admins right now (personRole).
@@ -285,9 +315,11 @@ func (s *Server) nodeAdminOK(ep *store.Endpoint) bool {
 
 // operatorEndpoint is the endpoint's half of "this node is the operator's"
 // (task MPCX), beside a login on the admin list (or a hub that names no
-// admins): no member's device road enrolled it, and it is no person's pod —
-// a pod's node runs as its person, whatever login it says. A login's own
-// name never makes an endpoint the operator's.
+// admins): no member's device enrolled it or was linked to it, and it is no
+// person's pod — a pod's node runs as its person, whatever login it says. A
+// login's own name never makes an endpoint the operator's. Cached
+// (enrollment), so a reader over every fleet row asks the database once per
+// endpoint.
 func (s *Server) operatorEndpoint(endpointID string) bool {
 	if endpointID == "" {
 		return false
@@ -297,13 +329,20 @@ func (s *Server) operatorEndpoint(endpointID string) bool {
 
 // ownerlessOperator: an endpoint whose login no person owns may act as the
 // operator's (task MPCX) — the operator's own agent, enrolled by an
-// operator's code or `ccquota enroll`. Never one a device road enrolled (a
-// device is a person's or nothing) and never a person's pod.
+// operator's code or `ccquota enroll`, or the operator's own linked computer
+// (its device's person is an admin). Never a member's device, never a pod,
+// and never a login the hub opened on a machine (`<machine>-<login>` code) —
+// a spare waiting for its person has none yet — unless that login is on the
+// hub's admin list.
 func (s *Server) ownerlessOperator(endpointID string) bool {
 	if endpointID == "" {
 		return false
 	}
-	if _, byDevice := s.deviceEnrolled(endpointID); byDevice {
+	e := s.enrollment(endpointID)
+	if e.ByDevice {
+		return !e.Member
+	}
+	if e.OpenedLogin != "" && !s.isFleetAdmin(e.OpenedLogin) {
 		return false
 	}
 	return !s.podEndpoint(endpointID)
@@ -353,17 +392,81 @@ var errNodeDrift = errors.New("this node reports a login other than the one it e
 // routeSelf is the machine and login a link is routed to by (task MPCX): the
 // identity nodeSelf holds it to — so a report naming another person's machine
 // or login moves none of their relays, chats, terminals, service logs, svc
-// runs or previews onto this link — except one shape: a link whose machine
-// name moved (a member's renamed laptop) to a name nothing else on the hub
+// runs or previews onto this link — except one shape: a member's device whose
+// machine name moved (a renamed laptop) to a name nothing else on the hub
 // holds — no other endpoint reports it, no login is open on it, it is no
 // machine the hub has a trust word for — keeps that name, since its sessions
-// are listed under it. Its login stays held either way.
+// are listed under it. Its login stays held either way. Cached with nodeSelf's
+// answer.
 func (s *Server) routeSelf(ep *store.Endpoint, id nodeIdent) (host, user string) {
+	if h, u, ok := s.routeCached(ep.ID, id); ok {
+		return h, u
+	}
+	gen := s.Store.IdentityGen()
 	host, user = id.Host, id.User
-	if id.HostDrift && id.ReportedHost != "" && !s.hostClaimed(ep.ID, id.ReportedHost) {
+	if id.HostDrift && id.Member && id.ReportedHost != "" && !s.hostClaimed(ep.ID, id.ReportedHost) {
 		host = id.ReportedHost
 	}
+	s.routeStore(ep.ID, id, gen, host, user)
 	return host, user
+}
+
+// identTTL bounds how long a cached identity answer stands without a write on
+// this replica moving IdentityGen — another replica's enrollment or trust
+// word reaches this one within it.
+const identTTL = 30 * time.Second
+
+// identEntry is one endpoint's cached answer: nodeSelfFrom's for one report,
+// and routeSelf's for it once asked.
+type identEntry struct {
+	host, user string // the report asked about
+	gen        uint64
+	at         time.Time
+	id         nodeIdent
+	routed     bool
+	rHost      string
+	rUser      string
+}
+
+func (s *Server) identCached(endpointID, host, user string) (nodeIdent, bool) {
+	v, ok := s.identCache.Load(endpointID)
+	if !ok {
+		return nodeIdent{}, false
+	}
+	e := v.(identEntry)
+	if e.host != host || e.user != user || e.gen != s.Store.IdentityGen() || time.Since(e.at) >= identTTL {
+		return nodeIdent{}, false
+	}
+	return e.id, true
+}
+
+func (s *Server) identStore(endpointID, host, user string, gen uint64, id nodeIdent) {
+	s.identCache.Store(endpointID, identEntry{host: host, user: user, gen: gen, at: time.Now(), id: id})
+}
+
+func (s *Server) routeCached(endpointID string, id nodeIdent) (string, string, bool) {
+	v, ok := s.identCache.Load(endpointID)
+	if !ok {
+		return "", "", false
+	}
+	e := v.(identEntry)
+	if !e.routed || e.id != id || e.gen != s.Store.IdentityGen() || time.Since(e.at) >= identTTL {
+		return "", "", false
+	}
+	return e.rHost, e.rUser, true
+}
+
+func (s *Server) routeStore(endpointID string, id nodeIdent, gen uint64, host, user string) {
+	v, ok := s.identCache.Load(endpointID)
+	if !ok {
+		return
+	}
+	e := v.(identEntry)
+	if e.id != id || e.gen != gen {
+		return
+	}
+	e.routed, e.rHost, e.rUser = true, host, user
+	s.identCache.Store(endpointID, e)
 }
 
 // hostClaimed: host names a machine the hub knows apart from endpointID — a

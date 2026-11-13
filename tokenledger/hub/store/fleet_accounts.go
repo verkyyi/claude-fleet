@@ -444,6 +444,7 @@ func (s *Store) RequestAccount(p *Principal, hostname string, retry bool, at tim
 // AdoptAccount records a login that already exists on hostname as active,
 // without running anything there.
 func (s *Store) AdoptAccount(p *Principal, hostname string, at time.Time) error {
+	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
 	ts := at.UTC().Format(rfc)
 	_, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, 'adopt', 'adopted: existed before the hub', ?, ?)
@@ -584,6 +585,7 @@ func (s *Store) AdoptReloginAccount(principalID, hostname, login string, at time
 // remove_pending), an unknown, and an active row are left exactly as they
 // are. adopted reports whether a row was written.
 func (s *Store) AdoptAccountIfOpen(p *Principal, hostname string, at time.Time) (adopted bool, err error) {
+	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, 'adopt', 'adopted: an agent runs as this login', ?, ?)
@@ -826,6 +828,7 @@ const AccountOpAdopt = "adopt"
 // unless that row is itself a login row or never reached the machine, and
 // reports whether it wrote.
 func (s *Store) RecordLoginAccount(p *Principal, hostname, osUser, endpointID, detail string, at time.Time) (bool, error) {
+	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, endpoint_id, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

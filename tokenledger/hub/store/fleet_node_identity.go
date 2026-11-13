@@ -136,13 +136,14 @@ func (s *Store) EndpointTrusts() (map[string]EndpointTrust, map[string]string, e
 // DeviceEnrollers is who enrolled endpointID through a device's own road
 // (task MPCX): a `fleet login` node pass or a `fleet node join` scan — the
 // codes the hub mints tagged with the device (CreateJoinCodeForDevice, role
-// client). byDevice is false for an endpoint enrolled any other way (an
+// client) — or tied to one later (LinkDeviceEndpoint, no role): any code row
+// that names a device. byDevice is false for an endpoint enrolled any other way (an
 // operator's code, a login the hub opened, `ccquota enroll`); principals are
 // the devices' people, "" for a device the hub no longer knows.
 func (s *Store) DeviceEnrollers(endpointID string) (principals []string, byDevice bool, err error) {
 	rows, err := s.read.Query(`SELECT COALESCE(d.principal_id, '') FROM fleet_join_codes c
 		LEFT JOIN fleet_devices d ON d.fingerprint = c.device_fp
-		WHERE c.endpoint_id = ? AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL`, endpointID, NodeRoleClient)
+		WHERE c.endpoint_id = ? AND c.device_fp <> '' AND c.used_at IS NOT NULL`, endpointID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -187,8 +188,8 @@ func (s *Store) MachineEnrolledByOthers(endpointID, machine string) (bool, error
 		WHERE e.retired_at IS NULL AND e.endpoint_id <> ?
 		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
 		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
-		      AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL)`,
-		endpointID, machine, machine+".%", NodeRoleClient).Scan(&n)
+		      AND c.device_fp <> '' AND c.used_at IS NOT NULL)`,
+		endpointID, machine, machine+".%").Scan(&n)
 	return n > 0, err
 }
 
@@ -206,8 +207,8 @@ func (s *Store) MachineProgramEnrolledAs(endpointID, machine string) (bool, erro
 		WHERE e.retired_at IS NULL AND e.endpoint_id <> ? AND e.enrolled_user = 'root'
 		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
 		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
-		      AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL)`,
-		endpointID, machine, machine+".%", NodeRoleClient).Scan(&n)
+		      AND c.device_fp <> '' AND c.used_at IS NOT NULL)`,
+		endpointID, machine, machine+".%").Scan(&n)
 	return n > 0, err
 }
 
@@ -224,8 +225,8 @@ func (s *Store) LoginEnrolledOn(machine, login string) (bool, error) {
 		WHERE e.retired_at IS NULL AND e.enrolled_user = ?
 		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
 		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
-		      AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL)`,
-		login, machine, machine+".%", NodeRoleClient).Scan(&n)
+		      AND c.device_fp <> '' AND c.used_at IS NOT NULL)`,
+		login, machine, machine+".%").Scan(&n)
 	return n > 0, err
 }
 
@@ -237,37 +238,118 @@ func lowerFirstLabel(machine string) string {
 	return strings.ToLower(machine)
 }
 
+// EndpointEnrollment is how an endpoint came to be, read from the join codes
+// spent for it (task MPCX).
+type EndpointEnrollment struct {
+	// ByDevice: a code naming a device enrolled or linked it; DevicePeople
+	// are those devices' people ("" for a device the hub no longer knows).
+	ByDevice     bool
+	DevicePeople []string
+	// Pinned: a code minted for one machine enrolled it (an opened login, an
+	// admin seat, a pod or a login inside one) — the machine is the code's.
+	Pinned bool
+	// Pod: the code the hub minted for one user pod (label pod-<machine>).
+	Pod bool
+	// OpenedLogin: a code minted for one login the hub opened
+	// (`<machine>-<login>`, managed, pinned, no trust) — that login.
+	OpenedLogin string
+	// EnrolledHost is endpoints.enrolled_host ("" for an unknown endpoint).
+	EnrolledHost string
+}
+
+// EnrollmentOf reads endpointID's EndpointEnrollment (two indexed reads).
+func (s *Store) EnrollmentOf(endpointID string) (EndpointEnrollment, error) {
+	var e EndpointEnrollment
+	if err := s.read.QueryRow(`SELECT enrolled_host FROM endpoints WHERE endpoint_id = ?`, endpointID).
+		Scan(&e.EnrolledHost); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return e, err
+	}
+	rows, err := s.read.Query(`SELECT c.device_fp, c.role, c.machine, c.label, c.trust, COALESCE(d.principal_id, '')
+		FROM fleet_join_codes c LEFT JOIN fleet_devices d ON d.fingerprint = c.device_fp
+		WHERE c.endpoint_id = ? AND c.used_at IS NOT NULL`, endpointID)
+	if err != nil {
+		return e, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fp, role, machine, label, trust, person string
+		if err := rows.Scan(&fp, &role, &machine, &label, &trust, &person); err != nil {
+			return e, err
+		}
+		if fp != "" {
+			e.ByDevice = true
+			e.DevicePeople = append(e.DevicePeople, person)
+		}
+		if machine != "" {
+			e.Pinned = true
+			if role == NodeRoleManaged && label == "pod-"+machine {
+				e.Pod = true
+			}
+			if l, ok := openedLoginOf(label, machine, trust, role); ok {
+				e.OpenedLogin = l
+			}
+		}
+	}
+	return e, rows.Err()
+}
+
+// EnrolledByAnother: a live endpoint other than endpointID enrolled as
+// machine (first label, any case) — the name is that endpoint's machine
+// (task MPCX). A LIKE wildcard in the name can only over-match.
+func (s *Store) EnrolledByAnother(endpointID, machine string) (bool, error) {
+	machine = lowerFirstLabel(machine)
+	if machine == "" {
+		return false, nil
+	}
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints
+		WHERE retired_at IS NULL AND endpoint_id <> ? AND (LOWER(enrolled_host) = ? OR LOWER(enrolled_host) LIKE ?)`,
+		endpointID, machine, machine+".%").Scan(&n)
+	return n > 0, err
+}
+
+// IdentityGen is bumped by every write that can change how the hub reads a
+// node's identity — an enrollment, a device link, a retire, a fleet setting,
+// a recorded login (task MPCX); the api's identity cache keys on it.
+func (s *Store) IdentityGen() uint64 { return s.identGen.Load() }
+
+// TouchIdentity bumps IdentityGen (a write this package does not see: a test
+// editing rows directly, another replica's word).
+func (s *Store) TouchIdentity() { s.identGen.Add(1) }
+
 // deviceHeldLogins are the logins a device road's endpoint never takes as its
 // enrollment from a report (task MPCX): a machine's own program enrolls as
 // root, and the admin role account comes only from its machine's install.
 var deviceHeldLogins = map[string]bool{"root": true, "_fleetadmin": true, "fleetadmin": true}
 
-// deviceStampHeld: endpointID has no enrolled login yet, a device road
-// enrolled it, and the login a first report would stamp — report, or the
-// os_user an earlier report left — is one of deviceHeldLogins. An unreadable
-// answer (a ledger without the fleet tables) is no.
-func (s *Store) deviceStampHeld(endpointID, report string) bool {
-	var unstamped int
+// deviceStampHeld: endpointID has no enrolled login yet (unstamped), and —
+// when a device enrolled it or was linked to it — the login a first report
+// would stamp (report, or the os_user an earlier report left) is one of
+// deviceHeldLogins (hold). An unreadable answer (a ledger without the fleet
+// tables) is neither.
+func (s *Store) deviceStampHeld(endpointID, report string) (unstamped, hold bool) {
+	var u int
 	var prev string
 	err := s.read.QueryRow(`SELECT CASE WHEN enrolled_user = '' THEN 1 ELSE 0 END, os_user FROM endpoints WHERE endpoint_id = ?`,
-		endpointID).Scan(&unstamped, &prev)
-	if err != nil || unstamped == 0 {
-		return false
+		endpointID).Scan(&u, &prev)
+	if err != nil || u == 0 {
+		return false, false
 	}
 	cand := prev
 	if cand == "" {
 		cand = report
 	}
 	if !deviceHeldLogins[cand] {
-		return false
+		return true, false
 	}
 	_, byDevice, err := s.DeviceEnrollers(endpointID)
-	return err == nil && byDevice
+	return true, err == nil && byDevice
 }
 
 // SetEndpointTrust writes an endpoint's own trust ("" clears it, so the
 // machine-name rule decides again).
 func (s *Store) SetEndpointTrust(endpointID, trust, source string) error {
+	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
 	if trust == "" {
 		source = ""
 	}

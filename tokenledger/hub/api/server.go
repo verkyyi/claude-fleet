@@ -552,6 +552,14 @@ type Server struct {
 	// underivedEPs: endpoints this replica raised fleet_underived for (T906).
 	underivedMu  sync.Mutex
 	underivedEPs map[string]bool
+
+	// identCache / enrollCache: node identity answers by endpoint (task
+	// MPCX, node_identity.go) — keyed on store.IdentityGen, identTTL old at
+	// most.
+	identCache, enrollCache sync.Map
+	// machineHeld: endpoint → its roster note while its machine id is
+	// another node's (store.ErrMachineHeld).
+	machineHeld sync.Map
 }
 
 // Handler builds the router.
