@@ -1337,8 +1337,13 @@ grant row (`fleet_agent_grants`, `store/fleet_agent_grants.go`): the person, the
 scopes they ticked (read always · talk `worker:message` · start `worker:start` ·
 stop `worker:stop`+`worker:resume` · answer `worker:answer`, off by default), an
 expiry (30 days default, a year at most; a self-registered DCR client at most 30 days,
-its consent page marked unverified, led by its redirect host, write permissions unticked),
-a revocation, a call count.
+its consent page marked unverified, led by its redirect host, write permissions unticked;
+a metadata-document client is led by its document's host, its name shown as that site's
+own word, and keeps the year and its asked permissions ticked only when that host is on
+`CCQUOTA_OAUTH_CLIENT_HOSTS` — default claude.ai, claude.com — otherwise 30 days and read
+alone ticked), a revocation, a call count. New clients are bounded: a per-address budget on
+registrations and metadata fetches, and at most 5000 stored, the oldest that no grant or
+pending code names making room (`store.PutOAuthClientBounded`).
 
 - **Two ways in, one row.** A personal key `tm_…` minted on the console (我的 → Agent,
   `POST /v1/me/agents`, shown once, stored as SHA-256), or OAuth: the hub is its own
@@ -2473,8 +2478,20 @@ acceptance session can photograph it; it is never renewed; and every reader but 
 gate's two doors (`personAdmit`, `sshRelayHTTPIdentity`) takes it for no session
 (`personSessionAny`). `/v1/me` says `read_only`. Each issuance is a `fleet_audit`
 row `console_ticket` with the session's worker id, each opening one
-`console_ticket_used` (`OK …` / `refused:already used`). The `/v1/access` door
+`console_ticket_used` (`OK …` / `refused:already used`). A browser already signed in
+keeps its sign-in: the same person's ticket is spent and opens on that session with no
+cookie set; another person's is refused (409, not spent). The `/v1/access` door
 `ticket` lists it. `console_ticket_test.go`, `fleet-console-ticket-selftest.sh`.
+
+**A write the session cookie authenticates comes from the hub's own pages**
+(`api/cookie_origin.go`, `cookieWriteGuard`, in front of every route): a request that is
+not GET / HEAD / OPTIONS and carries a session cookie that verifies passes when
+`sameOrigin` does (a client sending neither Origin nor Referer — the CLI with
+`FLEET_HUB_SESSION` — included) or when it is JSON the browser marks `Sec-Fetch-Site:
+same-origin`; `Sec-Fetch-Site: same-site` / `cross-site` never passes. Anything else is
+403 `cross-site request refused`. Bearers, the viewer token, node tokens and signatures
+carry no session cookie and are not looked at; another replica's hand-over was checked
+by the first. `cookie_origin_test.go`.
 
 ## Validation and next increments
 

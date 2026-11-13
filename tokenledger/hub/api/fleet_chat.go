@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -75,15 +76,50 @@ const chatRelaySandbox = "sandbox; default-src 'none'"
 
 // chatRelayHeaders is what a relayed answer may carry on the hub's origin:
 // never a cookie the service sets, never a type the browser guesses; a file or
-// a session view (sandbox) under chatRelaySandbox whatever the service said.
-func chatRelayHeaders(resp *http.Response, sandbox bool) {
+// a session view (chatRelaySandboxed) under chatRelaySandbox whatever the
+// service said. An answer of a type the route does not return
+// (chatRelayTypeOK) is errChatRelayType: the caller answers 502 instead.
+func chatRelayHeaders(resp *http.Response, route string) error {
 	resp.Header.Del("Set-Cookie")
 	resp.Header.Del("Set-Cookie2")
 	resp.Header.Set("X-Content-Type-Options", "nosniff")
-	if sandbox {
+	if chatRelaySandboxed(route) {
 		resp.Header.Del("Content-Security-Policy-Report-Only")
 		resp.Header.Set("Content-Security-Policy", chatRelaySandbox)
 	}
+	if !chatRelayTypeOK(resp, route) {
+		return errChatRelayType
+	}
+	return nil
+}
+
+// errChatRelayType: the conversation service answered a route with a type
+// that route never returns.
+var errChatRelayType = errors.New("the conversation service answered with an unexpected content type")
+
+// chatRelaySandboxed: the routes whose answer is served under chatRelaySandbox.
+func chatRelaySandboxed(route string) bool { return route == "file" || route == chatViewRoute }
+
+// chatRelayTypeOK says the answer's type is one the route returns: JSON,
+// NDJSON (a turn's stream) or an event stream for every route; a file
+// (sandboxed) any type, as the service names it. No body needs no type.
+func chatRelayTypeOK(resp *http.Response, route string) bool {
+	if route == "file" {
+		return true
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		return resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified || resp.ContentLength == 0
+	}
+	mt, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	switch mt {
+	case "application/json", "application/x-ndjson", "text/event-stream":
+		return true
+	}
+	return false
 }
 
 // chatProvider is which of the person's two conversations a request is for
@@ -597,7 +633,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// NDJSON: each line reaches the page as the service writes it.
 		FlushInterval: -1,
 		ModifyResponse: func(resp *http.Response) error {
-			chatRelayHeaders(resp, name == "file")
+			if err := chatRelayHeaders(resp, name); err != nil {
+				return err
+			}
 			if name == "file" {
 				// an image by its content's name never changes: the page may keep it
 				w.Header().Del("Cache-Control")
@@ -632,6 +670,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			if refund != nil && r.Context().Err() == nil {
 				refund("the relay did not reach the service")
 			}
+			if errors.Is(err, errChatRelayType) {
+				s.chatAudit(person, "chat_relay", "REFUSED type "+name+" "+where)
+				refuseJSON(w, http.StatusBadGateway, "relay_type", err.Error())
+				return
+			}
 			mu.Lock()
 			derr := dialErr
 			if derr == nil {
@@ -661,6 +704,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 		},
 	}
+	// every answer of this road, the hub's own refusals too, is never sniffed
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	rp.ServeHTTP(w, r)
 }
 

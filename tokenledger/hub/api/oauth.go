@@ -196,6 +196,11 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 		oauthError(w, http.StatusMethodNotAllowed, "invalid_request", "POST")
 		return
 	}
+	if !s.budget("oauth-client", newOAuthClientBudget).allow(r, time.Now()) {
+		w.Header().Set("Retry-After", "60")
+		oauthError(w, http.StatusTooManyRequests, "temporarily_unavailable", "too many registrations from this address; retry later")
+		return
+	}
 	var in struct {
 		RedirectURIs []string `json:"redirect_uris"`
 		ClientName   string   `json:"client_name"`
@@ -222,7 +227,11 @@ func (s *Server) handleOAuthRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	c := store.OAuthClient{ClientID: "tmc_" + agentID(), Kind: "dcr", Name: name,
 		RedirectURIs: in.RedirectURIs, CreatedAt: time.Now().UTC()}
-	if err := s.Store.PutOAuthClient(c); err != nil {
+	if err := s.putOAuthClient(c); errors.Is(err, store.ErrOAuthClientsFull) {
+		w.Header().Set("Retry-After", "3600")
+		oauthError(w, http.StatusServiceUnavailable, "temporarily_unavailable", err.Error())
+		return
+	} else if err != nil {
 		oauthError(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
@@ -296,7 +305,8 @@ var cimdLocks sync.Map
 
 // oauthClient finds a client: a registered one, or a metadata document
 // (fetched, checked and kept a day).
-func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient, error) {
+func (s *Server) oauthClient(r *http.Request, id string) (store.OAuthClient, error) {
+	ctx := r.Context()
 	if id == "" {
 		return store.OAuthClient{}, errors.New("client_id is required")
 	}
@@ -309,6 +319,9 @@ func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient,
 	}
 	if !isCIMD(id) {
 		return c, errors.New("unknown client_id: register it first (" + OAuthRegisterPath + ")")
+	}
+	if !s.budget("oauth-client", newOAuthClientBudget).allow(r, time.Now()) {
+		return c, errors.New("too many new clients from this address; retry later")
 	}
 	mu, _ := cimdLocks.LoadOrStore(id, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
@@ -333,7 +346,7 @@ func (s *Server) oauthClient(ctx context.Context, id string) (store.OAuthClient,
 	if utf8.RuneCountInString(c.Name) > 100 {
 		c.Name = string([]rune(c.Name)[:100])
 	}
-	return c, s.Store.PutOAuthClient(c)
+	return c, s.putOAuthClient(c)
 }
 
 // cimdDoc is the part of a Client ID Metadata Document the hub reads.
@@ -428,17 +441,92 @@ func clientKind(c store.OAuthClient) string {
 	return "other"
 }
 
-// dcrGrantMaxTTL caps a registered (DCR) client's connection: anyone can
-// register one and name it anything, so it lives at most this long whatever
-// the person picks; a metadata-document client keeps agentGrantMaxTTL.
+// dcrGrantMaxTTL caps a connection the hub knows nothing about: a registered
+// (DCR) client — anyone can register one and name it anything — and a
+// metadata-document client whose host is not one the operator listed
+// (OAuthClientHosts). Only a listed host's client keeps agentGrantMaxTTL.
 const dcrGrantMaxTTL = 30 * 24 * time.Hour
 
-// clientGrantMaxTTL is the longest connection c may be given.
-func clientGrantMaxTTL(c store.OAuthClient) time.Duration {
-	if c.Kind == "dcr" {
-		return dcrGrantMaxTTL
+// oauthDefaultClientHosts are the hosts known without configuration: the
+// first-party ones clientKind already names.
+var oauthDefaultClientHosts = []string{"claude.ai", "claude.com"}
+
+// ParseOAuthClientHosts reads CCQUOTA_OAUTH_CLIENT_HOSTS: space- or
+// comma-separated hostnames, each also covering the names under it. Unset is
+// nil (the default list); "none" is an empty list.
+func ParseOAuthClientHosts(v string) ([]string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
 	}
-	return agentGrantMaxTTL
+	if strings.EqualFold(v, "none") {
+		return []string{}, nil
+	}
+	out := []string{}
+	for _, h := range strings.FieldsFunc(v, func(r rune) bool { return r == ' ' || r == ',' || r == '\t' }) {
+		h = strings.TrimPrefix(strings.ToLower(h), "*.")
+		if h == "" || strings.ContainsAny(h, "/:@") || !strings.Contains(h, ".") {
+			return nil, fmt.Errorf("not a hostname: %q", h)
+		}
+		out = append(out, h)
+	}
+	return out, nil
+}
+
+// knownClientHost says host is one of OAuthClientHosts, or a name under one.
+func (s *Server) knownClientHost(host string) bool {
+	list := s.OAuthClientHosts
+	if list == nil {
+		list = oauthDefaultClientHosts
+	}
+	h := strings.ToLower(host)
+	if hn, _, err := net.SplitHostPort(h); err == nil {
+		h = hn
+	}
+	for _, d := range list {
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+// knownClient says c is a metadata-document client at a listed host: the one
+// kind of client the hub has checked something about (its document is served
+// from that host) AND the operator vouches for.
+func (s *Server) knownClient(c store.OAuthClient) bool {
+	return c.Kind == "cimd" && s.knownClientHost(clientHost(c))
+}
+
+// clientGrantMaxTTL is the longest connection c may be given.
+func (s *Server) clientGrantMaxTTL(c store.OAuthClient) time.Duration {
+	if s.knownClient(c) {
+		return agentGrantMaxTTL
+	}
+	return dcrGrantMaxTTL
+}
+
+// oauthClientsMax is the default bound on stored clients (OAuthClientsMax).
+const oauthClientsMax = 5000
+
+func (s *Server) oauthClientsMax() int {
+	if s.OAuthClientsMax > 0 {
+		return s.OAuthClientsMax
+	}
+	return oauthClientsMax
+}
+
+// oauthClientBudget is each source's allowance of new clients — a
+// registration, or a metadata document fetched for a client not held fresh —
+// in front of the global bound: a burst, then one a minute.
+func newOAuthClientBudget() *clientBudget {
+	return &clientBudget{burst: 20, perSec: 1.0 / 60, max: 4096}
+}
+
+// putOAuthClient stores c within the bound: the oldest clients no grant and
+// no pending code names make room; none to drop ⇒ store.ErrOAuthClientsFull.
+func (s *Server) putOAuthClient(c store.OAuthClient) error {
+	return s.Store.PutOAuthClientBounded(c, s.oauthClientsMax(), time.Now().UTC())
 }
 
 // --- authorize -----------------------------------------------------------------
@@ -457,7 +545,7 @@ type authzRequest struct {
 // the client's own, so an error may be sent back to it; otherwise the error
 // is shown to the person and the browser goes nowhere.
 func (s *Server) checkAuthorize(r *http.Request, q url.Values) (a authzRequest, redirectOK bool, code, desc string) {
-	c, err := s.oauthClient(r.Context(), q.Get("client_id"))
+	c, err := s.oauthClient(r, q.Get("client_id"))
 	if err != nil {
 		return a, false, "invalid_client", err.Error()
 	}
@@ -572,7 +660,7 @@ func (s *Server) handleMeOAuthRequest(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = clientHost(a.client)
 	}
-	days, maxDays := int(agentGrantDefaultTTL/(24*time.Hour)), int(clientGrantMaxTTL(a.client)/(24*time.Hour))
+	days, maxDays := int(agentGrantDefaultTTL/(24*time.Hour)), int(s.clientGrantMaxTTL(a.client)/(24*time.Hour))
 	if days > maxDays {
 		days = maxDays
 	}
@@ -583,9 +671,13 @@ func (s *Server) handleMeOAuthRequest(w http.ResponseWriter, r *http.Request) {
 		"all_permissions": agentPermissionOrder,
 		"days":            days,
 		"max_days":        maxDays,
-		// a registered client's name is self-reported: the page says so and
-		// leads with where it sends the person back to
-		"verified": a.client.Kind != "dcr",
+		// verified: the hub checked something AND vouches for it — a
+		// metadata document served from a host the operator lists. Anything
+		// else starts with read alone ticked. A registered client's name is
+		// self-reported (the page leads with where it sends the person back
+		// to); a metadata-document client is led by its document's host, its
+		// name shown as that site's own word.
+		"verified": s.knownClient(a.client),
 	})
 }
 
@@ -640,7 +732,7 @@ func (s *Server) handleMeOAuthApprove(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if max := clientGrantMaxTTL(a.client); ttl > max {
+	if max := s.clientGrantMaxTTL(a.client); ttl > max {
 		ttl = max
 	}
 	codeTok, err := randomToken(32)
@@ -821,7 +913,7 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		if ttl <= 0 || ttl > agentGrantMaxTTL {
 			ttl = agentGrantDefaultTTL
 		}
-		if max := clientGrantMaxTTL(cl); ttl > max {
+		if max := s.clientGrantMaxTTL(cl); ttl > max {
 			ttl = max
 		}
 		g := store.AgentGrant{ID: agentID(), Person: c.Person, Name: name, Client: clientKind(cl),

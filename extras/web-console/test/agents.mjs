@@ -70,4 +70,6 @@ const consent = read('pages/oauth-consent.tsx');
 for (const s of ['/v1/me/oauth/request?${query}', '"/v1/me/oauth/approve"', '{ query, permissions: perms, days, approve }', 'window.location.assign(r.data.redirect)']) assert.ok(consent.includes(s), s);
 // an unverified agent: the notice, the redirect host leads, the cap is passed on
 for (const s of ['consentPerms(ask.permissions, isVerified(ask)', 'Unverified app', 'max={ask.max_days}', 'asked={verified ? undefined : ask.permissions}']) assert.ok(consent.includes(s), s);
+// a metadata-document agent: led by its document's host, its name that site's word; unlisted ⇒ the note
+for (const s of ['ask.client.kind === "cimd" && ask.client.host', '{ask.client.host}</p>', 'as given by ${ask.client.host}', "Not on this hub's known list"]) assert.ok(consent.includes(s), s);
 console.log('agents: ok');

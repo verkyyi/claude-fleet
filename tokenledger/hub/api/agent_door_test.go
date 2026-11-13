@@ -592,7 +592,143 @@ func TestOAuthClientKindByHost(t *testing.T) {
 			t.Errorf("clientKind(%+v) = %q, want %q", c.cl, got, c.want)
 		}
 	}
-	if clientGrantMaxTTL(store.OAuthClient{Kind: "cimd"}) != agentGrantMaxTTL || clientGrantMaxTTL(store.OAuthClient{Kind: "dcr"}) != dcrGrantMaxTTL {
-		t.Fatal("grant caps")
+	s := &Server{}
+	for _, c := range []struct {
+		cl   store.OAuthClient
+		want time.Duration
+	}{
+		{store.OAuthClient{Kind: "cimd", ClientID: "https://claude.ai/oauth/meta"}, agentGrantMaxTTL},
+		{store.OAuthClient{Kind: "cimd", ClientID: "https://mcp.claude.com/meta"}, agentGrantMaxTTL},
+		{store.OAuthClient{Kind: "cimd", ClientID: "https://agent.example.com/meta"}, dcrGrantMaxTTL},
+		{store.OAuthClient{Kind: "cimd", ClientID: "https://claude.ai.evil.example/meta"}, dcrGrantMaxTTL},
+		{store.OAuthClient{Kind: "dcr", RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"}}, dcrGrantMaxTTL},
+		{store.OAuthClient{}, dcrGrantMaxTTL}, // a client no longer held
+	} {
+		if got := s.clientGrantMaxTTL(c.cl); got != c.want {
+			t.Errorf("clientGrantMaxTTL(%+v) = %v; want %v", c.cl, got, c.want)
+		}
+	}
+	// the operator's list replaces the default; "none" knows no host
+	s.OAuthClientHosts, _ = ParseOAuthClientHosts("agent.example.com, *.tools.example.org")
+	for host, want := range map[string]bool{"agent.example.com": true, "a.tools.example.org": true,
+		"tools.example.org": true, "claude.ai": false, "example.com": false} {
+		if got := s.knownClientHost(host); got != want {
+			t.Errorf("listed: knownClientHost(%q) = %v; want %v", host, got, want)
+		}
+	}
+	s.OAuthClientHosts, _ = ParseOAuthClientHosts("none")
+	if s.knownClientHost("claude.ai") {
+		t.Error(`"none" still knows claude.ai`)
+	}
+	if _, err := ParseOAuthClientHosts("https://x.example.com/"); err == nil {
+		t.Error("a URL was taken as a host")
+	}
+}
+
+// A metadata-document client is known only at a listed host: claude.ai's
+// (the default list) keeps the year and starts with what it asked; another
+// host's document is led by that host, unverified, 30 days at most.
+func TestOAuthCIMDKnownHosts(t *testing.T) {
+	h := newAgentHarness(t)
+	saved := cimdFetch
+	t.Cleanup(func() { cimdFetch = saved })
+	ask := func(id, redirect string) map[string]any {
+		t.Helper()
+		cimdFetch = func(context.Context, string) ([]byte, error) {
+			return json.Marshal(map[string]any{"client_id": id, "client_name": "Claude", "redirect_uris": []string{redirect}})
+		}
+		cimdDocs.Delete(id)
+		q := url.Values{"response_type": {"code"}, "client_id": {id}, "redirect_uri": {redirect},
+			"code_challenge": {pkceS256(strings.Repeat("w", 43))}, "code_challenge_method": {"S256"}}
+		code, req := jsonAsPerson(t, h, http.MethodGet, MeOAuthRequestPath+"?"+q.Encode(), pAlice, nil)
+		if code != 200 {
+			t.Fatalf("%s: HTTP %d %v", id, code, req)
+		}
+		return req
+	}
+	known := ask("https://claude.ai/oauth/meta", "https://claude.ai/api/mcp/auth_callback")
+	if known["verified"] != true || known["max_days"] != float64(agentGrantMaxTTL/(24*time.Hour)) {
+		t.Errorf("claude.ai's document: %v; want verified, the long cap", known)
+	}
+	other := ask("https://agent.example.com/meta", "https://agent.example.com/cb")
+	cl, _ := other["client"].(map[string]any)
+	if other["verified"] != false || other["max_days"] != float64(30) || cl["host"] != "agent.example.com" || cl["kind"] != "cimd" {
+		t.Errorf("an unlisted host's document: %v; want unverified, 30 days, led by its host", other)
+	}
+	// the operator lists it: known
+	h.srv.OAuthClientHosts = []string{"agent.example.com"}
+	if again := ask("https://agent.example.com/meta", "https://agent.example.com/cb"); again["verified"] != true {
+		t.Errorf("a listed host's document: %v; want verified", again)
+	}
+}
+
+// New clients are bounded: each address has its own allowance of
+// registrations, and the stored total stays under the cap — the oldest client
+// nobody uses makes room, and when all are in use a new one is refused.
+func TestOAuthClientBounds(t *testing.T) {
+	h := newAgentHarness(t)
+	register := func() (int, string) {
+		t.Helper()
+		reg, _ := json.Marshal(map[string]any{"client_name": "x", "redirect_uris": []string{"http://localhost:4000/callback"}})
+		resp, err := http.Post(h.http.URL+OAuthRegisterPath, "application/json", bytes.NewReader(reg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var cl map[string]any
+		json.NewDecoder(resp.Body).Decode(&cl)
+		id, _ := cl["client_id"].(string)
+		return resp.StatusCode, id
+	}
+	count := func() int {
+		var n int
+		if err := h.srv.Store.DB().QueryRow(`SELECT COUNT(*) FROM fleet_oauth_clients`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	h.srv.OAuthClientsMax = 2
+	_, first := register()
+	time.Sleep(10 * time.Millisecond)
+	_, second := register()
+	if code, third := register(); code != 201 || third == "" || count() != 2 {
+		t.Fatalf("third under a cap of 2: %d, %d stored", code, count())
+	}
+	if _, err := h.srv.Store.OAuthClient(first); err == nil {
+		t.Errorf("the oldest unused client %s was kept", first)
+	}
+	// every stored client in use: a new one is refused, nothing dropped
+	now := time.Now().UTC()
+	rows, _ := h.srv.Store.DB().Query(`SELECT client_id FROM fleet_oauth_clients`)
+	var held []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		held = append(held, id)
+	}
+	rows.Close()
+	for i, id := range held {
+		if err := h.srv.Store.AddAgentGrant(store.AgentGrant{ID: fmt.Sprintf("g%d", i), Person: pAlice, Name: "x", Kind: store.AgentGrantOAuth,
+			ClientID: id, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}, fmt.Sprintf("hash-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, _ := register(); code != http.StatusServiceUnavailable || count() != 2 {
+		t.Fatalf("all in use: %d, %d stored; want 503 and the two kept", code, count())
+	}
+	if _, err := h.srv.Store.OAuthClient(second); err != nil {
+		t.Errorf("a client in use was dropped: %v", err)
+	}
+
+	// one address's allowance: a burst, then refused
+	h.srv.OAuthClientsMax = 0
+	refused := false
+	for i := 0; i < 40 && !refused; i++ {
+		code, _ := register()
+		refused = code == http.StatusTooManyRequests
+	}
+	if !refused {
+		t.Fatal("40 registrations from one address were all taken")
 	}
 }

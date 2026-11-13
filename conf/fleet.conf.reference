@@ -2845,3 +2845,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 requests that carried them from outside the list —
 #                                 to learn the list before enforcing it · 可选
 #                                 (unset = enforce once a list is set)
+#   CCQUOTA_OAUTH_CLIENT_HOSTS    hosts whose OAuth client metadata documents an agent's
+#                                 consent page treats as known, space- or comma-separated
+#                                 (each also covers the names under it): a known client
+#                                 starts with the permissions it asked for and may connect
+#                                 for up to a year; any other client starts with read only
+#                                 and connects for at most 30 days · 可选 (unset =
+#                                 claude.ai claude.com; none = no host is known)

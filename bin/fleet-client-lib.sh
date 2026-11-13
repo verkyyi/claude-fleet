@@ -53,10 +53,17 @@
 #                                this client came from (<root>/.client-version):
 #                                the hub's stable copy of its commit, else the
 #                                hub's own /install, else (不接) GitHub's raw
-#                                at that commit; SHA-256 checked against the
-#                                hub's header, put in place by one rename.
-#                                0 all here · 1 a fetch failed · 2 nowhere to
-#                                fetch from; FC_WHY says which. Seams:
+#                                at that commit; put in place by one rename.
+#                                Checked against the installed version's
+#                                signed manifest (kept with the version by the
+#                                client update, with the verified tree the
+#                                file is then taken from; else the hub's, by
+#                                the pinned release key) — none with a key
+#                                pinned, a path it lacks or other bytes →
+#                                refused; no key: the hub's X-Ccquota-Sha256,
+#                                required. 0 all here · 1 a fetch failed or was
+#                                refused · 2 nowhere to fetch from; FC_WHY says
+#                                which. Seams:
 #                                FLEET_SERVED_FROM (the one source, a URL or
 #                                file://), FLEET_STABLE_RAW
 #
@@ -214,16 +221,27 @@ fc_pkg_install() {  # <pkg>
 }
 
 # ── what the package only serves (issue #4826) ────────────────────────────────
-# fc_served_from <root> — the URLs to try, best first, one per line
-fc_served_from() {
-  if [ -n "${FLEET_SERVED_FROM:-}" ]; then printf '%s\n' "${FLEET_SERVED_FROM%/}"; return 0; fi
-  _fsv=$(sed -n 's/^version=//p' "$1/.client-version" 2>/dev/null | head -n 1)
+# fc_served_hub <root> — the hub this client came from ('' none): .client-version's
+# hub=, else FLEET_HUB_URL, else fleet.conf's
+fc_served_hub() {
   _fsh=$(sed -n 's/^hub=//p' "$1/.client-version" 2>/dev/null | head -n 1)
   [ -n "$_fsh" ] || _fsh=${FLEET_HUB_URL:-}
   [ -n "$_fsh" ] || _fsh=$(sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}FLEET_HUB_URL=//p' \
     "${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/fleet.conf" 2>/dev/null | tail -n 1 | tr -d "\"' ")
-  _fsh=${_fsh%/}
-  case $_fsv in *[!0-9a-f]*|'') _fs40='' ;; *) [ ${#_fsv} = 40 ] && _fs40=$_fsv || _fs40='' ;; esac
+  printf '%s\n' "${_fsh%/}"
+}
+# fc_served_version <root> — the installed version, when it is a 40-hex commit
+fc_served_version() {
+  _fsv=$(sed -n 's/^version=//p' "$1/.client-version" 2>/dev/null | head -n 1)
+  case $_fsv in *[!0-9a-f]*|'') return 0 ;; esac
+  [ ${#_fsv} = 40 ] && printf '%s\n' "$_fsv"
+  return 0
+}
+# fc_served_from <root> — the URLs to try, best first, one per line
+fc_served_from() {
+  if [ -n "${FLEET_SERVED_FROM:-}" ]; then printf '%s\n' "${FLEET_SERVED_FROM%/}"; return 0; fi
+  _fs40=$(fc_served_version "$1")
+  _fsh=$(fc_served_hub "$1")
   if [ -n "$_fsh" ]; then
     [ -z "$_fs40" ] || printf '%s/install/stable/%s\n' "$_fsh" "$_fs40"
     printf '%s/install\n' "$_fsh"
@@ -232,45 +250,144 @@ fc_served_from() {
     printf '%s/%s\n' "${_fsr%/}" "$_fs40"
   fi
 }
+fc_sha256() {  # <file> — its sha256
+  python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1" 2>/dev/null
+}
+# fc_manifest_sum <manifest.json> <version> <path> — the sha256 a release
+# manifest names for <path>. rc 1: <path> is not in it · 2: the manifest is
+# unreadable or of another version
+fc_manifest_sum() {
+  python3 -c 'import json, re, sys
+try:
+    m = json.load(open(sys.argv[1], "rb"))
+except (OSError, ValueError):
+    sys.exit(2)
+if not isinstance(m, dict) or m.get("sha") != sys.argv[2]:
+    sys.exit(2)
+for f in m.get("files") or []:
+    if isinstance(f, dict) and f.get("path") == sys.argv[3] and re.match(r"^[0-9a-f]{64}$", str(f.get("sha256") or "")):
+        print(f["sha256"])
+        sys.exit(0)
+sys.exit(1)' "$1" "$2" "$3" 2>/dev/null
+}
+# fc_served_manifest <root> <hub> <version> <pubkey> <out> — the hub's signed manifest of
+# <version>, checked against the pinned key by this client's own
+# bin/fleet-release-fetch.py (the client update's check: SSHSIG or the ed25519
+# signature, the key chain, the revocations), written to <out>. rc 1: the
+# reason on stdout
+fc_served_manifest() {
+  [ -f "$1/bin/fleet-release-fetch.py" ] && [ -f "$1/bin/fleet-release-verify.py" ] \
+    || { echo "这台没有 bin/fleet-release-fetch.py 可用来核对（重跑一次安装命令）"; return 1; }
+  python3 -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("fleet_release_fetch", sys.argv[1])
+F = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(F)
+try:
+    mb = F.Fetch(sys.argv[2], sys.argv[3], 30).manifest(sys.argv[4])[1]
+except Exception as e:
+    print(str(e).splitlines()[-1] if str(e) else type(e).__name__)
+    sys.exit(1)
+with open(sys.argv[5], "wb") as f:
+    f.write(mb)' "$1/bin/fleet-release-fetch.py" "$2" "$4" "$3" "$5" 2>&1 </dev/null
+}
+# fc_served <root> <path>… — each one here, or put in place (see the top).
+# The installed version's signed manifest decides when there is one: the one
+# the client update kept with this version (<root>/.release-tree, beside the
+# verified tree's files), else — a release key pinned ($FLEET_CONF_DIR/
+# release.pub) — the hub's, its signature checked. The bytes come from that
+# kept tree (no download) or a download, and must match the sha256 the
+# manifest names; a path it does not name, a manifest that cannot be had or
+# checked, or bytes that do not match → refused. No key pinned: a download
+# from a hub must carry X-Ccquota-Sha256 and match it; a file:// source
+# (FLEET_SERVED_FROM) and GitHub's raw at the installed commit (不接) are taken
+# as fetched.
 fc_served() {  # <root> <path>…
   FC_WHY=''
   _fsr0=$1; shift
   _fsl=$(fc_served_from "$_fsr0")
+  _fsver=$(fc_served_version "$_fsr0")
+  _fshub=$(fc_served_hub "$_fsr0")
+  _fspub="${FLEET_CONF_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-fleet}/release.pub"
+  _fskt="$_fsr0/.release-tree"
+  _fsmt=''       # a fetched manifest's temp file
+  _fsman=''      # the signed manifest in use
+  if [ -n "$_fsver" ] && [ -f "$_fskt/.release/manifest.json" ]; then
+    fc_manifest_sum "$_fskt/.release/manifest.json" "$_fsver" bin/fleet >/dev/null
+    [ $? = 2 ] || _fsman="$_fskt/.release/manifest.json"
+  fi
   for _fsp in "$@"; do
     [ -f "$_fsr0/$_fsp" ] && continue
-    case $_fsp in bin/*|conf/*) ;; *) FC_WHY="不认识的路径 $_fsp"; return 1 ;; esac
-    case $_fsp in *..*|*//*) FC_WHY="不认识的路径 $_fsp"; return 1 ;; esac
-    [ -n "$_fsl" ] || { FC_WHY="这台不知道从哪取 ${_fsp}（没有入口地址，也没有 .client-version）"; return 2; }
-    mkdir -p "$_fsr0/$(dirname "$_fsp")" 2>/dev/null || { FC_WHY="写不进 $_fsr0"; return 1; }
-    _fst="$_fsr0/$_fsp.fetch.$$"
-    _fsok=0
-    for _fsu in $_fsl; do
-      rm -f "$_fst" "$_fst.hdr"
-      curl -fsSL --connect-timeout 10 --max-time 120 -D "$_fst.hdr" "$_fsu/$_fsp" -o "$_fst" 2>/dev/null || continue
-      _fsw=$(tr -d '\r' <"$_fst.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}' | tail -n 1)
-      if [ -n "$_fsw" ]; then
-        [ "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_fst")" = "$_fsw" ] || continue
+    case $_fsp in bin/*|conf/*) ;; *) FC_WHY="不认识的路径 $_fsp"; _fs_done; return 1 ;; esac
+    case $_fsp in *..*|*//*) FC_WHY="不认识的路径 $_fsp"; _fs_done; return 1 ;; esac
+    if [ -z "$_fsl" ] && { [ -z "$_fsman" ] || [ ! -f "$_fskt/$_fsp" ]; }; then
+      FC_WHY="这台不知道从哪取 ${_fsp}（没有入口地址，也没有 .client-version）"; _fs_done; return 2
+    fi
+    if [ -z "$_fsman" ] && [ -s "$_fspub" ]; then
+      if [ -z "$_fsver" ] || [ -z "$_fshub" ]; then
+        FC_WHY="核对不了 ${_fsp}：这台记着发布签名钥匙，却不知道该比对哪个已签名的版本（.client-version 里没有入口或版本）"
+        _fs_done; return 1
       fi
-      [ -s "$_fst" ] || continue
-      _fsok=1; break
-    done
+      _fsmt="${TMPDIR:-/tmp}/fleet-served-manifest.$$"
+      if ! _fso=$(fc_served_manifest "$_fsr0" "$_fshub" "$_fsver" "$_fspub" "$_fsmt"); then
+        FC_WHY="核对不了 ${_fsp}：取不到 $(printf '%.7s' "$_fsver") 的已签名发布清单（$(printf '%s' "$_fso" | tail -n 1 | cut -c1-160)）"
+        _fs_done; return 1
+      fi
+      _fsman=$_fsmt
+    fi
+    _fswant=''
+    if [ -n "$_fsman" ]; then
+      _fswant=$(fc_manifest_sum "$_fsman" "$_fsver" "$_fsp")
+      case $? in
+        0) ;;
+        1) FC_WHY="已签名的发布 $(printf '%.7s' "$_fsver") 里没有 ${_fsp}，不装"; _fs_done; return 1 ;;
+        *) FC_WHY="核对不了 ${_fsp}：已签名发布清单读不了"; _fs_done; return 1 ;;
+      esac
+    fi
+    mkdir -p "$_fsr0/$(dirname "$_fsp")" 2>/dev/null || { FC_WHY="写不进 $_fsr0"; _fs_done; return 1; }
+    _fst="$_fsr0/$_fsp.fetch.$$"
+    _fsok=0; _fsbad=''
+    # the verified tree kept with this version: no download
+    if [ -n "$_fswant" ] && [ -f "$_fskt/$_fsp" ] && cp "$_fskt/$_fsp" "$_fst" 2>/dev/null; then
+      [ "$(fc_sha256 "$_fst")" = "$_fswant" ] && _fsok=1 || rm -f "$_fst"
+    fi
+    if [ "$_fsok" != 1 ]; then
+      for _fsu in $_fsl; do
+        rm -f "$_fst" "$_fst.hdr"
+        curl -fsSL --connect-timeout 10 --max-time 120 -D "$_fst.hdr" "$_fsu/$_fsp" -o "$_fst" 2>/dev/null || continue
+        [ -s "$_fst" ] || continue
+        if [ -n "$_fswant" ]; then
+          [ "$(fc_sha256 "$_fst")" = "$_fswant" ] || { _fsbad="与已签名发布清单的 SHA-256 对不上"; continue; }
+        else
+          case $_fsu in
+            file://*) ;;                     # a local tree named as the source
+            *) if [ -n "$_fshub" ] || [ -n "${FLEET_SERVED_FROM:-}" ]; then
+                 _fsw=$(tr -d '\r' <"$_fst.hdr" | awk 'tolower($1)=="x-ccquota-sha256:"{print $2}' | tail -n 1)
+                 [ -n "$_fsw" ] || { _fsbad="回应里没有 X-Ccquota-Sha256"; continue; }
+                 [ "$(fc_sha256 "$_fst")" = "$_fsw" ] || { _fsbad="SHA-256 与 X-Ccquota-Sha256 对不上"; continue; }
+               fi ;;                         # else 不接: GitHub's raw at the installed commit
+          esac
+        fi
+        _fsok=1; break
+      done
+    fi
     rm -f "$_fst.hdr"
     if [ "$_fsok" != 1 ]; then
       rm -f "$_fst"
-      FC_WHY="取不到 ${_fsp}（$(printf '%s' "$_fsl" | head -n 1 | sed 's/?.*//')）"
-      return 1
+      FC_WHY="取不到 ${_fsp}（$(printf '%s' "$_fsl" | head -n 1 | sed 's/?.*//')${_fsbad:+：$_fsbad}）"
+      _fs_done; return 1
     fi
     case $_fsp in bin/*) chmod 755 "$_fst" ;; *) chmod 644 "$_fst" ;; esac
-    mv -f "$_fst" "$_fsr0/$_fsp" || { rm -f "$_fst"; FC_WHY="放不进 $_fsr0/$_fsp"; return 1; }
+    mv -f "$_fst" "$_fsr0/$_fsp" || { rm -f "$_fst"; FC_WHY="放不进 $_fsr0/$_fsp"; _fs_done; return 1; }
     # the fleet's file (issue #4827): on installed.list, so a later upgrade
     # drops it rather than carrying it along as the person's
     if [ -f "$_fsr0/installed.list" ]; then
-      printf '%s\t%s\n' "$_fsp" "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_fsr0/$_fsp")" \
-        >> "$_fsr0/installed.list" 2>/dev/null
+      printf '%s\t%s\n' "$_fsp" "$(fc_sha256 "$_fsr0/$_fsp")" >> "$_fsr0/installed.list" 2>/dev/null
     fi
   done
+  _fs_done
   return 0
 }
+_fs_done() { [ -z "${_fsmt:-}" ] || rm -f "$_fsmt"; }
 
 # ── the client's own record (issue #2896) ─────────────────────────────────────
 fleet_clientlog_dir() {

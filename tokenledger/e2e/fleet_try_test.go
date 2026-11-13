@@ -79,6 +79,7 @@ func TestTrialFailedTurnKeepsTheLine(t *testing.T) {
 
 	// The service refused the turn outright (its SDK did not load).
 	if code, _ = turn(func(w http.ResponseWriter) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		io.WriteString(w, `{"error":"no sdk"}`)
 	}); code != http.StatusServiceUnavailable {

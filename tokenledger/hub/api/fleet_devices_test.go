@@ -46,18 +46,38 @@ func newDevice(t *testing.T) *device {
 		fp: ssh.FingerprintSHA256(s.PublicKey())}
 }
 
-// scan runs the whole `fleet login` for sub and keeps the certificate.
+// scan runs the whole `fleet login` for sub and keeps the certificate: the
+// start signed by the device key, as the client sends it.
 func (d *device) scan(t *testing.T, h *harness, sub, name string) CertResponse {
 	t.Helper()
-	code, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{"public_key": d.pub, "device_name": name})
+	ts := time.Now().Unix()
+	return d.scanWith(t, h, sub, map[string]any{"public_key": d.pub, "device_name": name, "ts": ts,
+		"sig": sshsig(t, d.signer, control.LoginStartSigNamespace, []byte(control.LoginStartSigMessage(ts)))})
+}
+
+// scanStart opens a login with body and confirms it as sub: the page's answer.
+func scanStart(t *testing.T, h *harness, sub string, body map[string]any) (DeviceStart, string) {
+	t.Helper()
+	code, raw := postJSON(t, h, "/v1/fleet/login/start", body)
 	if code != 200 {
-		t.Fatalf("start: %d %s", code, body)
+		t.Fatalf("start: %d %s", code, raw)
 	}
 	var st DeviceStart
-	json.Unmarshal(body, &st)
-	if pc, done := personForm(t, h, sub, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}}); pc != 200 || !strings.Contains(done, "valid until") {
+	json.Unmarshal(raw, &st)
+	pc, done := personForm(t, h, sub, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	if pc != 200 {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
+	return st, done
+}
+
+func (d *device) scanWith(t *testing.T, h *harness, sub string, start map[string]any) CertResponse {
+	t.Helper()
+	st, done := scanStart(t, h, sub, start)
+	if !strings.Contains(done, "valid until") {
+		t.Fatalf("approve:\n%s", done)
+	}
+	code, body := 0, []byte(nil)
 	code, body = postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
 	if code != 200 {
 		t.Fatalf("poll: %d %s", code, body)
@@ -633,4 +653,79 @@ func TestDevicesMarkHostingMachines(t *testing.T) {
 	if len(host) != 2 || host["alices-mbp"] || !host["mac-c"] {
 		t.Fatalf("host marks = %v; want mac-c only", host)
 	}
+}
+
+// A key's registration moves only with the key: a person who knows another's
+// device PUBLIC key can neither paste it (the web road) nor scan it from an
+// unsigned start; a revocation is never cleared that way either. A start the
+// key signed — the computer that holds it — may move it, as a scan always did.
+func TestDeviceRebindNeedsTheKey(t *testing.T) {
+	h, _, _, _, _ := homeHarness(t)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "mac-c", Login: "bob"}); code != 200 {
+		t.Fatalf("adopt bob: HTTP %d", code)
+	}
+	a := newDevice(t)
+	a.scan(t, h, pAlice, "laptop")
+	owner := func(want string, revoked bool) {
+		t.Helper()
+		d, err := h.srv.Store.Device(a.fp)
+		if err != nil || d.PrincipalID != want || d.Revoked() != revoked {
+			t.Fatalf("device = %+v %v; want %s, revoked=%v", d, err, want, revoked)
+		}
+	}
+	webPost := func(pid string) (int, string) {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"public_key": a.pub})
+		code, b := asPerson(t, h, http.MethodPost, "/v1/fleet/cert", pid, body)
+		return code, string(b)
+	}
+	unsigned := map[string]any{"public_key": a.pub, "device_name": "laptop"}
+
+	// Bob pastes Alice's public key: refused before anything is issued.
+	if code, b := webPost(pBob); code != http.StatusConflict || !strings.Contains(b, "registered to another person") {
+		t.Fatalf("Bob's web post of Alice's key = %d %s; want 409", code, b)
+	}
+	owner(pAlice, false)
+	// Bob scans it from an unsigned start: the confirmation says no, the poll is denied.
+	st, done := scanStart(t, h, pBob, unsigned)
+	if strings.Contains(done, "valid until") || !strings.Contains(done, "registered to another person") {
+		t.Fatalf("Bob's unsigned scan of Alice's key:\n%s", done)
+	}
+	if code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusForbidden {
+		t.Fatalf("poll after the refusal: %d %s; want 403", code, body)
+	}
+	owner(pAlice, false)
+	// A start signed by another key is refused at once.
+	other := newDevice(t)
+	ts := time.Now().Unix()
+	if code, body := postJSON(t, h, "/v1/fleet/login/start", map[string]any{"public_key": a.pub, "ts": ts,
+		"sig": sshsig(t, other.signer, control.LoginStartSigNamespace, []byte(control.LoginStartSigMessage(ts)))}); code != http.StatusUnauthorized ||
+		!strings.Contains(string(body), "bad_signature") {
+		t.Fatalf("start signed by another key: %d %s; want 401 bad_signature", code, body)
+	}
+	// Alice's own key renews as hers still.
+	if code, _ := a.renew(t, h, time.Now().Unix()); code != 200 {
+		t.Fatalf("Alice's renew: %d", code)
+	}
+
+	// Revoked: neither road clears it without the key.
+	if _, err := h.srv.Store.RevokeDevice(a.fp, "operator", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if code, b := webPost(pAlice); code != http.StatusConflict {
+		t.Fatalf("Alice's web post of her revoked key = %d %s; want 409", code, b)
+	}
+	if _, done := scanStart(t, h, pAlice, unsigned); strings.Contains(done, "valid until") {
+		t.Fatalf("Alice's unsigned scan of her revoked key was confirmed:\n%s", done)
+	}
+	owner(pAlice, true)
+	// The computer that holds the key signs its start: registered again.
+	a.scan(t, h, pAlice, "laptop")
+	owner(pAlice, false)
+	if code, _ := a.renew(t, h, time.Now().Unix()); code != 200 {
+		t.Fatalf("renew after the signed scan: %d", code)
+	}
+	// … and may move to another person the same way (the key's holder asked).
+	a.scan(t, h, pBob, "laptop")
+	owner(pBob, false)
 }

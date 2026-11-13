@@ -52,29 +52,71 @@ func (s *Server) deviceAudit(action, fp, pid, actor, detail string, at time.Time
 
 // registerDevice binds a signed key to the person it was signed for. Called
 // after a scan or a web issuance — the two paths where a person proved who
-// they are — never after a renewal.
-func (s *Server) registerDevice(pid, keyLine, name, via string, now time.Time) {
+// they are — never after a renewal. proven says the request also showed it
+// holds the private key (a signed login start): only then may a key
+// registered to someone else, or a revoked one, be bound (store.RebindDevice).
+// Both roads ask deviceBindable before they issue anything, so a refusal here
+// is the race between the two.
+func (s *Server) registerDevice(pid, keyLine, name, via string, proven bool, now time.Time) {
 	key, err := sshca.ParseUserKey(keyLine)
 	if err != nil {
 		return
 	}
 	fp := ssh.FingerprintSHA256(key)
 	name = cleanDeviceName(name)
-	isNew, err := s.Store.RegisterDevice(store.FleetDevice{Fingerprint: fp, PrincipalID: pid,
+	reg := s.Store.RegisterDevice
+	if proven {
+		reg = s.Store.RebindDevice
+	}
+	isNew, err := reg(store.FleetDevice{Fingerprint: fp, PrincipalID: pid,
 		PublicKey: strings.TrimSpace(keyLine), Name: name}, now)
+	if errors.Is(err, store.ErrDeviceBound) {
+		s.deviceAudit(store.DeviceRegister, fp, pid, pid, "via "+via+": refused, "+err.Error(), now)
+		return
+	}
 	if err != nil {
 		log.Printf("fleet: register device %s for %s: %v", fp, pid, err)
 		return
 	}
 	detail := "via " + via
 	if !isNew {
-		detail += " (already registered — re-bound, revocation cleared)"
+		if proven {
+			detail += " (already registered — re-bound by the key's holder, revocation cleared)"
+		} else {
+			detail += " (already registered to this person)"
+		}
 	}
 	if name != "" {
 		detail += ", name " + name
 	}
 	s.deviceAudit(store.DeviceRegister, fp, pid, pid, detail, now)
 	s.entryDeviceKey(pid, keyLine, name, true, now)
+}
+
+// errDeviceBound is the answer to a key that cannot be registered to the
+// person asking without proof that they hold its private key.
+var errDeviceBound = errors.New("this key is already registered to another person, or was revoked: " +
+	"its owner revokes it on the devices page, or use a new key (the current client signs in with proof of the key and is not refused)")
+
+// deviceBindable is the check both roads make before they issue a
+// certificate for keyLine to pid: unless proven, a key registered to someone
+// else or revoked is errDeviceBound.
+func (s *Server) deviceBindable(pid, keyLine string, proven bool) error {
+	if proven {
+		return nil
+	}
+	key, err := sshca.ParseUserKey(keyLine)
+	if err != nil {
+		return nil // issueCert answers a bad key
+	}
+	ok, err := s.Store.DeviceBindable(ssh.FingerprintSHA256(key), pid)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errDeviceBound
+	}
+	return nil
 }
 
 // cleanDeviceName keeps a device's self-reported name printable and short:
