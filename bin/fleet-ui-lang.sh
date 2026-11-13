@@ -205,6 +205,12 @@ fleet_ui_t() {
     en:badge_update_later)      printf 'new version ready · takes effect next open' ;;
     zh:badge_update_pending_fmt) printf '待换新（%s）' "${1:-}" ;;
     en:badge_update_pending_fmt) printf 'update pending (%s)' "${1:-}" ;;
+    # the client's update, refused (fleet-client-update.sh): the new version did not verify
+    # against the release key this client pinned, or the hub had no signed release of it
+    zh:client_update_refused_fmt) printf '新版 %s 没通过发布签名校验，没装，继续用现在这版（%s）' "${1:-}" "${2:-}" ;;
+    en:client_update_refused_fmt) printf 'new version %s failed the release signature check and was not installed; staying on this version (%s)' "${1:-}" "${2:-}" ;;
+    zh:client_update_unreachable_fmt) printf '取不到新版 %s 的签名发布，没装，继续用现在这版（%s）' "${1:-}" "${2:-}" ;;
+    en:client_update_unreachable_fmt) printf 'could not get the signed release of new version %s, so it was not installed; staying on this version (%s)' "${1:-}" "${2:-}" ;;
     zh:peer_hub_lost_fmt)       printf '入口失联，机器间访问暂停；你可直接 `fleet %s` 进去' "${1:-}" ;;
     en:peer_hub_lost_fmt)       printf 'hub lost — machine-to-machine access paused; you can still go in directly with `fleet %s`' "${1:-}" ;;
     zh:pin_heading_fmt)         printf '置顶 (%s)' "${1:-}" ;;

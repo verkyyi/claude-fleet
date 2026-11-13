@@ -108,6 +108,19 @@ TMO="${FLEET_CLIENT_TIMEOUT:-3}"
 case "$TMO" in ''|*[!0-9]*) TMO=3 ;; esac
 
 note() { printf 'fleet: %s\n' "$*" >&2; }
+# the person's language for the lines below (fleet_ui_t, the one string table);
+# a copy of this script with no table beside it still says them, in Chinese
+# shellcheck source=fleet-ui-lang.sh
+[ -f "$BIN/fleet-ui-lang.sh" ] && . "$BIN/fleet-ui-lang.sh"
+if ! command -v fleet_ui_t >/dev/null 2>&1; then
+  fleet_ui_t() {
+    case "$1" in
+      client_update_refused_fmt) printf '新版 %s 没通过发布签名校验，没装，继续用现在这版（%s）' "${2:-}" "${3:-}" ;;
+      client_update_unreachable_fmt) printf '取不到新版 %s 的签名发布，没装，继续用现在这版（%s）' "${2:-}" "${3:-}" ;;
+      *) printf '%s' "$1" ;;
+    esac
+  }
+fi
 
 # mark_get <file> <key> — one `key=value` line of a .client-version
 mark_get() { sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1; }
@@ -323,12 +336,53 @@ tidy() {
   done
   return 0
 }
+# rel_pin — the release key this client checks the hub's versions against:
+# $CONF_DIR/release.pub, pinned by the install line. None yet: the hub's, taken
+# ONCE, as a login install takes it (fleet-release-lib.sh fleet_rel_pubkey) —
+# from then on only it (or a key it vouches for) counts. rc 1: no key, the hub
+# keeps no releases (or gave nothing that reads as a key).
+rel_pin() {
+  local pk="$CONF_DIR/release.pub" f="$VERS/.lock/release.pub"
+  [ -s "$pk" ] && return 0
+  curl -fsS --max-time "$TMO" "$HUB/v1/fleet/release/key" -o "$f" 2>/dev/null || return 1
+  head -n 1 "$f" | grep -Eq '^ed25519 [A-Za-z0-9+/=_-]{8,}$' || return 1
+  mkdir -p "$CONF_DIR" 2>/dev/null
+  head -n 1 "$f" > "$pk.tmp.$$" && chmod 0644 "$pk.tmp.$$" && mv -f "$pk.tmp.$$" "$pk" \
+    || { rm -f "$pk.tmp.$$"; return 1; }
+  ulog "pinned the hub's release key ($pk)"
+}
+# refuse <version> <why> — a new version that is not installed: ONE line (in the
+# person's language); the why in update.state — the doctor's row, and the next
+# start's line instead of 「后台取」. The version in use is untouched.
+refuse_line() {   # <version> <why> — that one line
+  case "$2" in
+    *"no answer from"*|*"HTTP "[0-9]*) fleet_ui_t client_update_unreachable_fmt "$(short "$1")" "$2" ;;
+    *) fleet_ui_t client_update_refused_fmt "$(short "$1")" "$2" ;;
+  esac
+}
+refuse() {
+  note "$(refuse_line "$1" "$2")"
+  ulog "refused $1: $2"
+  set_state failed "$(cur_key)" "$1" "$2"
+}
 # stage — the hub's client into <home>.versions/<version>, the way a person
-# would get it: the hub's own /install, aimed at a staging dir (no PATH line, no
-# tmux step, no run), then renamed into place. Done = <dir>/.staged and .next
-# naming it. A lock keeps two stagers from staging twice.
+# would get it, aimed at a staging dir (no PATH line, no tmux step, no run),
+# then renamed into place. Done = <dir>/.staged and .next naming it. A lock
+# keeps two stagers from staging twice.
+#
+# SIGNED (the trust is this installed client's, never the download's): with a
+# hub and a pinned release key (rel_pin), the new version is the hub's signed
+# release of that commit, taken by THIS client's own bin/fleet-release-fetch.py
+# — the manifest's signature against the pinned key (or a key it vouches for),
+# then tree.tar.gz and every file in it by the sha256 the manifest names — and
+# the installer that runs is the one inside that verified tree, installing from
+# it (FLEET_INSTALL_SRC=file://, no download of its own). Anything that does not
+# verify, or a hub that names no release for it, is refused (refuse) and the
+# version in use stays. No key and the hub keeps no releases: the hub's own
+# /install, as before (trust = TLS to the hub). No hub: stable's installer from
+# GitHub's raw host at the commit GitHub's API names (trust = TLS to GitHub).
 stage() {
-  local lock="$VERS/.lock" tmp inst rc k sha="${1:-}" src
+  local lock="$VERS/.lock" tmp inst rc k sha="${1:-}" src want='' rel out c
   if [ -z "$HUB" ]; then
     case "$sha" in ''|*[!0-9a-f]*) sha=$(stable_sha) || { note "问不到 GitHub 上 stable 指向哪个提交"; return 1; } ;; esac
   fi
@@ -343,27 +397,66 @@ stage() {
   fi
   inst="$lock/install.sh"; tmp="$VERS/.staging"
   rm -rf "$tmp" "$ROOT.next"
-  # the installer: the hub's (stable's own, through it) or stable's on GitHub
-  if [ -n "$HUB" ]; then src="$HUB/install"; else src="$RAW/$sha/bin/fleet-install.sh"; fi
-  if ! curl -fsSL --max-time 30 "$src" -o "$inst" 2>"$lock/err"; then
-    note "取不到 ${src}（$(tr -d '\n' <"$lock/err" | cut -c1-80)）"; rm -rf "$lock"; return 1
-  fi
-  [ "$(head -c 2 "$inst")" = '#!' ] || { note "$src 返回的不是安装脚本"; rm -rf "$lock"; return 1; }
-  # never asks (a stage runs in the background), never 承载, never a node: it
-  # only fills a staging dir with the part everyone has
-  if [ -n "$HUB" ]; then
-    FLEET_HUB_URL="$HUB" FLEET_INSTALL_HUB=1 FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
-      FLEET_INSTALL_ASK=0 FLEET_INSTALL_HOST=0 FLEET_INSTALL_NO_NODE=1 \
-      FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
-      FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1
-  else
-    FLEET_INSTALL_SRC="$RAW/$sha" FLEET_INSTALL_VERSION="$sha" FLEET_INSTALL_HUB=0 \
+  if [ -n "$HUB" ] && rel_pin; then
+    # the signed road (SIGNED above): the release of the commit the hub named
+    want=${sha:-${HV:-}}
+    if ! printf '%s' "$want" | grep -Eq '^[0-9a-f]{40}$'; then
+      refuse "${want:-?}" "the hub names no signed release for it"; rm -rf "$lock"; return 1
+    fi
+    if [ ! -f "$BIN/fleet-release-fetch.py" ] || [ ! -f "$BIN/fleet-release-verify.py" ]; then
+      refuse "$want" "this client has no bin/fleet-release-fetch.py to check it with — run the install line once"
+      rm -rf "$lock"; return 1
+    fi
+    rel="$lock/release"
+    if ! out=$(python3 "$BIN/fleet-release-fetch.py" --hub "$HUB" --pubkey "$CONF_DIR/release.pub" \
+                 --timeout 60 "$want" "$rel" 2>&1 </dev/null) || [ ! -f "$rel/.release/manifest.json" ]; then
+      refuse "$want" "$(printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | tail -n 1 | cut -c1-160)"
+      rm -rf "$lock"; return 1
+    fi
+    ulog "verified $want: $(printf '%s\n' "$out" | grep '^fleet-release: ' | tail -n 1)"
+    inst="$rel/bin/fleet-install.sh"
+    if [ ! -f "$inst" ] || [ "$(head -c 2 "$inst")" != '#!' ]; then
+      refuse "$want" "the signed release carries no bin/fleet-install.sh"; rm -rf "$lock"; return 1
+    fi
+    # the verified tree's own installer, installing from that tree and nothing
+    # else (FLEET_INSTALL_HUB=0: no download, no hub step) — .client-version is
+    # written below, naming the hub
+    FLEET_INSTALL_SRC="file://${rel// /%20}" FLEET_INSTALL_VERSION="$want" FLEET_INSTALL_HUB=0 \
       FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
       FLEET_INSTALL_ASK=0 FLEET_INSTALL_HOST=0 FLEET_INSTALL_NO_NODE=1 \
       FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
       FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1
+    rc=$?
+    if [ "$rc" = 0 ] && [ -f "$tmp/bin/fleet" ]; then
+      # its protocol level is the one its own updater declares (the hub's Compat
+      # is held to that line, TestClientCompatPromise)
+      c=$(sed -n 's/^FLEET_CLIENT_COMPAT=\([0-9][0-9]*\)$/\1/p' "$tmp/bin/fleet-client-update.sh" 2>/dev/null | head -n 1)
+      printf 'version=%s\ncompat=%s\ncommit=%.7s\nhub=%s\nat=%s\n' "$want" "${c:-$FLEET_CLIENT_COMPAT}" "$want" "$HUB" "$(date +%s)" \
+        > "$tmp/.client-version"
+    fi
+  else
+    # the installer: the hub's (stable's own, through it) or stable's on GitHub
+    if [ -n "$HUB" ]; then src="$HUB/install"; else src="$RAW/$sha/bin/fleet-install.sh"; fi
+    if ! curl -fsSL --max-time 30 "$src" -o "$inst" 2>"$lock/err"; then
+      note "取不到 ${src}（$(tr -d '\n' <"$lock/err" | cut -c1-80)）"; rm -rf "$lock"; return 1
+    fi
+    [ "$(head -c 2 "$inst")" = '#!' ] || { note "$src 返回的不是安装脚本"; rm -rf "$lock"; return 1; }
+    # never asks (a stage runs in the background), never 承载, never a node: it
+    # only fills a staging dir with the part everyone has
+    if [ -n "$HUB" ]; then
+      FLEET_HUB_URL="$HUB" FLEET_INSTALL_HUB=1 FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
+        FLEET_INSTALL_ASK=0 FLEET_INSTALL_HOST=0 FLEET_INSTALL_NO_NODE=1 \
+        FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
+        FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1
+    else
+      FLEET_INSTALL_SRC="$RAW/$sha" FLEET_INSTALL_VERSION="$sha" FLEET_INSTALL_HUB=0 \
+        FLEET_INSTALL_HOME="$tmp" FLEET_INSTALL_BIN="$tmp/bin" \
+        FLEET_INSTALL_ASK=0 FLEET_INSTALL_HOST=0 FLEET_INSTALL_NO_NODE=1 \
+        FLEET_INSTALL_NO_RUN=1 FLEET_INSTALL_NO_DEPS=1 FLEET_INSTALL_RC=/dev/null \
+        FLEET_CONF_DIR="$CONF_DIR" sh "$inst" >"$lock/out" 2>&1
+    fi
+    rc=$?
   fi
-  rc=$?
   if [ "$rc" -ne 0 ] || [ ! -f "$tmp/bin/fleet" ] || ! sh -n "$tmp/bin/fleet" 2>/dev/null; then
     note "安装脚本失败（exit ${rc}）：$(grep -v '^ *$' "$lock/out" | tail -n 1 | cut -c1-100)"
     rm -rf "$tmp" "$lock"; return 1
@@ -502,7 +595,11 @@ cmd_start() {
       return 0 ;;
     10)
       local from='入口'; [ -n "$HUB" ] || from='stable'
-      note "${from}有新版（${HCOMMIT:-$HV}），后台取，下次启动生效"
+      if [ "$(state_get phase)" = failed ] && [ "$(state_get to)" = "$HV" ] && [ -n "$(state_get why)" ]; then
+        note "$(refuse_line "$HV" "$(state_get why)")"   # refused last time: why, not 「后台取」 again
+      else
+        note "${from}有新版（${HCOMMIT:-$HV}），后台取，下次启动生效"
+      fi
       stage_bg
       return 0 ;;
   esac

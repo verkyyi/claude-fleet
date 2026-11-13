@@ -32,6 +32,8 @@
 #                    `fleet update stable` take stable all the same
 #   D. proxy down    the hub's client_url fails → the install fails; nothing
 #                    comes from GitHub behind the hub (issue #2773)
+#   D2. http         a client_url that is plain http (not 127.0.0.1 / localhost)
+#                    is not used: the install refuses it, nothing installed
 #   E. 承载 follows  a checkout + `fleet update tick --root`: stable moved → the
 #                    next tick switches it (install-sync's `switched`, the
 #                    install now a link into fleet.versions/, issue #1894); an
@@ -200,6 +202,15 @@ out=$(envrun FLEET_INSTALL_HUB=1 sh "$HUBD/install" 2>&1); rc=$?
 if [ "$rc" != 0 ] && [ ! -f "$ROOT/.client-version" ] && ! printf '%s' "$out" | grep -q 'GitHub'; then
   st_ok_all "D client_url down: the install fails, nothing from GitHub"
 else st_miss "D no fallback: rc=$rc cv=$(cat "$ROOT/.client-version" 2>&1) out=$(printf '%s' "$out" | tail -3)"; fi
+
+# --- D2. a plain-http client_url is not used (only https; http on 127.0.0.1) ------
+hub_version "$S4" "http://hub.example.invalid/install/stable/$S4"
+sandbox d2
+out=$(envrun FLEET_INSTALL_HUB=1 sh "$HUBD/install" 2>&1); rc=$?
+if [ "$rc" = 1 ] && [ ! -f "$ROOT/.client-version" ] && printf '%s' "$out" | grep -q '不是 https'; then
+  st_ok_all "D2 an http client_url: refused (exit 1, nothing installed): $(printf '%s' "$out" | grep '不是 https')"
+else st_miss "D2 http client_url: rc=$rc cv=$(cat "$ROOT/.client-version" 2>&1) out=$(printf '%s' "$out" | tail -3)"; fi
+hub_version "$S4"
 
 # --- E. 承载: the checkout follows the same stable -------------------------------
 export GIT_CONFIG_GLOBAL="$WORK/gitconfig" GIT_CONFIG_SYSTEM=/dev/null
