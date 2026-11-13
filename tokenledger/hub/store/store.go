@@ -74,6 +74,9 @@ type Store struct {
 	// connection string), for SetReadOnly to reopen the writer.
 	src string
 
+	// rg is Ready's own state (ready.go).
+	rg readyGate
+
 	// BackfilledRollup is how many usage_hourly rows Open rebuilt from
 	// usage_events on this open, 0 when the rollup was already current. The
 	// hub logs it so an operator can see a first-run backfill happen.
@@ -135,6 +138,7 @@ func (s *Store) SetReadOnly() error {
 		return fmt.Errorf("reopen the writer read-only: %w", err)
 	}
 	ro.SetMaxOpenConns(1)
+	armStatementDeadline(ro)
 	old := s.write
 	s.write = ro
 	return old.Close()
@@ -181,13 +185,16 @@ func openStoreApplied(d dialect, src, name string, applied bool) (*Store, error)
 	read.SetMaxOpenConns(readPoolFor(d))
 
 	st := &Store{read: read, write: write, d: d, src: src}
-	if applied {
-		return st, nil
+	if !applied {
+		if st.BackfilledRollup, err = ensureRollup(st); err != nil {
+			st.Close()
+			return nil, err
+		}
 	}
-	if st.BackfilledRollup, err = ensureRollup(st); err != nil {
-		st.Close()
-		return nil, err
-	}
+	// From here on a statement with no deadline of its own gets one (task
+	// N9GH); the schema pass and the backfill above ran without it.
+	armStatementDeadline(write)
+	armStatementDeadline(read)
 	return st, nil
 }
 
@@ -376,6 +383,7 @@ func (s *Store) DB() *sql.DB { return s.write }
 
 // Close releases the database.
 func (s *Store) Close() error {
+	s.closeProbe()
 	// Close the readers first: they hold no locks, and closing the writer last
 	// means an in-flight write still has its connection to finish on.
 	err := s.read.Close()
