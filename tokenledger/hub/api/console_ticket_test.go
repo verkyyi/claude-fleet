@@ -191,12 +191,33 @@ func TestConsoleTicketRefusesEveryWrite(t *testing.T) {
 			t.Errorf("ticket GET %s = %d; want 403", p, code)
 		}
 	}
-	// a terminal session read along (task YP39): past the guard (the route's own
-	// answer — here no such session — not the ticket's refusal)
-	for _, p := range []string{ChatPathPrefix + "view?worker=x", ChatPathPrefix + "file?ref=x&worker=x"} {
-		if code, b := viewAsDo(t, h, ro, http.MethodGet, p, ""); strings.Contains(string(b), "只读票据") {
-			t.Errorf("ticket GET %s = %d %s; want past the read-only guard", p, code, b)
+	// the asking session read along (task YP39): past the guard (the route's own
+	// answer — here no such session — not the ticket's refusal), by its identity,
+	// its key alias or its closed-history form
+	fleet := fleetid.ClientFleetID(HashToken(tok))
+	own := []string{fleetid.WorkerID(fleet, assertFid), fleet + "/scratch-1", "fid:" + assertFid}
+	for _, w := range own {
+		for _, p := range []string{ChatPathPrefix + "view?worker=" + url.QueryEscape(w), ChatPathPrefix + "view?tool=toolu_1&worker=" + url.QueryEscape(w),
+			ChatPathPrefix + "file?ref=x&worker=" + url.QueryEscape(w)} {
+			if code, b := viewAsDo(t, h, ro, http.MethodGet, p, ""); strings.Contains(string(b), "只读票据") {
+				t.Errorf("ticket GET %s = %d %s; want past the read-only guard", p, code, b)
+			}
 		}
+	}
+	// any other session of the person's: refused before the route, step output too
+	other := fleetid.WorkerID(fleet, "11111111-2222-4333-8444-555555555555")
+	for _, w := range []string{"x", other, fleet + "/scratch-2", "fid:11111111-2222-4333-8444-555555555555"} {
+		for _, p := range []string{ChatPathPrefix + "view?worker=" + url.QueryEscape(w), ChatPathPrefix + "view?tool=toolu_1&worker=" + url.QueryEscape(w),
+			ChatPathPrefix + "view?cached=1&worker=" + url.QueryEscape(w), ChatPathPrefix + "file?ref=x&worker=" + url.QueryEscape(w)} {
+			if code, b := viewAsDo(t, h, ro, http.MethodGet, p, ""); code != http.StatusForbidden || !strings.Contains(string(b), "只读票据") {
+				t.Errorf("ticket GET %s = %d %s; want the read-only 403", p, code, b)
+			}
+		}
+	}
+	// a ticket session that names no session (minted before it carried one) reads none along
+	bare := &http.Cookie{Name: authz.CookieName, Value: authz.SignReadOnly(store.IdentityGitHub, pAlice, "alice", roleUser, h.srv.sessionKey(), time.Now(), time.Hour)}
+	if code, b := viewAsDo(t, h, bare, http.MethodGet, ChatPathPrefix+"view?worker="+url.QueryEscape(own[0]), ""); code != http.StatusForbidden {
+		t.Errorf("unscoped ticket GET view = %d %s; want 403", code, b)
 	}
 	req, _ := http.NewRequest(http.MethodGet, h.http.URL+"/v1/me", nil)
 	req.Header.Set("Upgrade", "websocket")

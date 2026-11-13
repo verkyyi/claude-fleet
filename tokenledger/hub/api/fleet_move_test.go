@@ -2,12 +2,15 @@ package api
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
 )
 
@@ -227,5 +230,24 @@ func TestNodeMoveRefusesAnotherNodesWorker(t *testing.T) {
 	if st, _ := moveCall(t, h, h.tokens["mac-d"], map[string]any{"action": "plan", "repo": writeRepo,
 		"worker_id": issueWID(f4.FleetID, 7), "node": "mac-c"}); st != 403 {
 		t.Fatalf("mac-d planning mac-c's worker = %d; want 403", st)
+	}
+}
+
+// The alerts sweep forgets a bundle nobody moved once it is past its TTL, with
+// no upload to trigger it; a fresh one stays.
+func TestMoveBundlesExpireOnTheSweep(t *testing.T) {
+	h := newFleetHarness(t)
+	now := time.Now()
+	for id, at := range map[string]time.Time{"op_stale": now.Add(-store.FleetMoveTTL - time.Minute), "op_fresh": now} {
+		if err := h.srv.Store.InsertFleetMoveBundle(store.FleetMove{ID: id, FromEndpoint: "ep_x", SHA256: "s", Size: 1, Created: at}, []byte("b")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.srv.NodeAlertTick(now.Add(-time.Hour), now)
+	if _, err := h.srv.Store.FleetMove("op_stale"); !errors.Is(err, sql.ErrNoRows) {
+		t.Errorf("stale bundle after the sweep = %v; want gone", err)
+	}
+	if _, err := h.srv.Store.FleetMove("op_fresh"); err != nil {
+		t.Errorf("fresh bundle after the sweep = %v; want kept", err)
 	}
 }

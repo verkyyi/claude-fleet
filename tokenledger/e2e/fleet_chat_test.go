@@ -69,6 +69,9 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 		case "/api/file":
 			w.Header().Set("Content-Type", "image/png")
 			w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
+			// what the hub must not pass on to its own origin
+			w.Header().Set("Set-Cookie", "relay=1; Path=/")
+			w.Header().Set("Content-Security-Policy", "default-src *")
 			io.WriteString(w, fakePNG)
 		case "/api/view":
 			f.mu.Lock()
@@ -80,6 +83,7 @@ func serveFakeChat(t *testing.T, conf string) *fakeChatService {
 			}
 			// 只读 (task F481): one state, one batch of items, as the service streams them
 			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Set-Cookie", "relay=1; Path=/")
 			io.WriteString(w, `data: {"t":"state","agent":"claude","busy":true}`+"\n\n")
 			io.WriteString(w, "id: 1\ndata: "+`{"t":"items","replace":true,"session":"s1","from":0,"items":[{"t":"text","d":"hi"},{"t":"tool_result","id":"x","text":"SECRET-OUTPUT"}],"q":`+strconvQuote(r.URL.RawQuery)+"}\n\n")
 			w.(http.Flusher).Flush()

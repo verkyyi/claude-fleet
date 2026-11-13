@@ -217,6 +217,7 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		Transport:     one,
 		FlushInterval: -1,
 		ModifyResponse: func(resp *http.Response) error {
+			chatRelayHeaders(resp, true)
 			// the first frame of a fresh read — the newest stretch, in place — is
 			// kept as the copy (the record stays the session's machine's)
 			if resp.StatusCode == http.StatusOK && fwd.Get("before") == "" && fwd.Get("tool") == "" && viewAsAsked(r) == "" && !s.consoleTicketCookie(r) && s.chatMirrorOn(person) {

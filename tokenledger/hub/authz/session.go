@@ -58,6 +58,11 @@ type Session struct {
 	// for, short-lived, never renewed, and admitted by the gate for reads only.
 	// An ordinary sign-in never carries it.
 	RO bool `json:"ro,omitempty"`
+	// ROWorkers are the worker ids a read-only ticket's session may read a
+	// terminal session along for (its conversation view and files): the
+	// session that asked for the ticket, by its identity and its key alias.
+	// None ⇒ no session is read along.
+	ROWorkers []string `json:"rw,omitempty"`
 }
 
 // Principal is the person this session is for: UID, else the subject.
@@ -89,7 +94,13 @@ func SignSid(sid, sub, uid, name, role, secret string, now time.Time, ttl time.D
 // SignReadOnly mints a read-only ticket session (RO) for the person, a sign-in
 // of its own (a new Sid), for ttl.
 func SignReadOnly(sub, uid, name, role, secret string, now time.Time, ttl time.Duration) string {
-	return sign(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix(), Sid: NewSid(), RO: true}, secret)
+	return SignReadOnlyWorkers(sub, uid, name, role, secret, now, ttl, nil)
+}
+
+// SignReadOnlyWorkers is SignReadOnly scoped to the worker ids it may read a
+// terminal session along for (Session.ROWorkers).
+func SignReadOnlyWorkers(sub, uid, name, role, secret string, now time.Time, ttl time.Duration, workers []string) string {
+	return sign(Session{Sub: sub, Aud: sessionAud, Exp: now.Add(ttl).Unix(), UID: uid, Name: name, Role: role, Iat: now.Unix(), Sid: NewSid(), RO: true, ROWorkers: workers}, secret)
 }
 
 func sign(sess Session, secret string) string {

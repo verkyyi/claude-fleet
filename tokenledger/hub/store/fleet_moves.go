@@ -127,15 +127,17 @@ func (s *Store) SetFleetMoveOperation(id, opID string) error {
 }
 
 // FleetMoveBundle is a bundle's bytes, for its target to download; it marks
-// the bundle fetched. sql.ErrNoRows when there is no such bundle or it was
-// already dropped.
+// the bundle fetched. sql.ErrNoRows when there is no such bundle, it was
+// already dropped, or it is older than FleetMoveTTL (expired, whether or not
+// the sweep has deleted it yet).
 func (s *Store) FleetMoveBundle(id string, at time.Time) ([]byte, FleetMove, error) {
 	m, err := s.FleetMove(id)
 	if err != nil {
 		return nil, m, err
 	}
 	var b []byte
-	if err := s.write.QueryRow(`SELECT bundle FROM fleet_moves WHERE id = ? AND bundle IS NOT NULL`, id).Scan(&b); err != nil {
+	if err := s.write.QueryRow(`SELECT bundle FROM fleet_moves WHERE id = ? AND bundle IS NOT NULL AND created >= ?`,
+		id, at.Add(-FleetMoveTTL).UTC().Format(rfc)).Scan(&b); err != nil {
 		return nil, m, err
 	}
 	_, _ = s.write.Exec(`UPDATE fleet_moves SET fetched_at = ? WHERE id = ?`, at.UTC().Format(rfc), id)

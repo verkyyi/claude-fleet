@@ -1499,8 +1499,10 @@ func checkExposure(addr, token string, noAuth, insecurePublic bool) error {
 		"bind to loopback, pass --token, or acknowledge with --insecure-public", addr)
 }
 
+// isLoopback: host is a loopback name or address. An empty host (--addr
+// :8787) listens on every interface, so it is not.
 func isLoopback(host string) bool {
-	if host == "localhost" || host == "" {
+	if host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(strings.Trim(host, "[]"))

@@ -42,6 +42,14 @@ func TestChatFile(t *testing.T) {
 	if cc := resp.Header.Get("Cache-Control"); strings.Contains(cc, "no-store") || !strings.Contains(cc, "immutable") {
 		t.Errorf("an image's Cache-Control %q; want the service's (kept by the browser)", cc)
 	}
+	// on the hub's origin: no cookie of the service's, no sniffing, sandboxed
+	if sc := strings.Join(resp.Header.Values("Set-Cookie"), "\n"); strings.Contains(sc, "relay=") {
+		t.Errorf("a file passed the service's Set-Cookie on: %q", sc)
+	}
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Content-Security-Policy") != "sandbox; default-src 'none'" {
+		t.Errorf("a file's headers %q %q; want nosniff and the sandbox policy",
+			resp.Header.Get("X-Content-Type-Options"), resp.Header.Get("Content-Security-Policy"))
+	}
 	svc.mu.Lock()
 	q := append([]string(nil), svc.queries...)
 	svc.mu.Unlock()

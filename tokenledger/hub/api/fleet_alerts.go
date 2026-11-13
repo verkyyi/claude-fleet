@@ -148,6 +148,7 @@ func (s *Server) NodeAlertTick(since, now time.Time) {
 	if err := s.Store.PruneFleetAlerts(now.Add(-fleetAlertKeep)); err != nil {
 		log.Printf("fleet alerts: prune: %v", err)
 	}
+	s.expireMoveBundles(now)
 	// Every alert to the admins (claude-fleet QSSW), last: this pass's raises
 	// go out on it.
 	s.AlertNotifyTick(since, now)

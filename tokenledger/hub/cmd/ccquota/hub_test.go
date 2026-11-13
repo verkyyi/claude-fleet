@@ -22,6 +22,33 @@ func TestBindHosts(t *testing.T) {
 // be refused BEFORE the hub opens a database or binds a port: the operator is
 // usually restarting a live hub to pick up a rate correction, and "your flag was
 // wrong" is only useful if it arrives before the downtime.
+// --no-auth serves loopback only: an empty host (--addr :8787) is every
+// interface, so it needs a token or --insecure-public like 0.0.0.0 does.
+func TestCheckExposureNoAuth(t *testing.T) {
+	for _, tc := range []struct {
+		addr     string
+		insecure bool
+		ok       bool
+	}{
+		{"127.0.0.1:8787", false, true},
+		{"localhost:8787", false, true},
+		{"[::1]:8787", false, true},
+		{":8787", false, false},
+		{"0.0.0.0:8787", false, false},
+		{"[::]:8787", false, false},
+		{"192.0.2.3:8787", false, false},
+		{":8787", true, true},
+	} {
+		err := checkExposure(tc.addr, "", true, tc.insecure)
+		if (err == nil) != tc.ok {
+			t.Errorf("checkExposure(%q, no-auth, insecure=%v) = %v; want ok=%v", tc.addr, tc.insecure, err, tc.ok)
+		}
+	}
+	if err := checkExposure(":8787", "tok", false, false); err != nil {
+		t.Errorf("a token on every interface = %v; want ok", err)
+	}
+}
+
 func TestHubRejectsBadRepriceFlags(t *testing.T) {
 	for _, tc := range []struct {
 		name, want string

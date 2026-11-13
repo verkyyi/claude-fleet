@@ -1110,10 +1110,25 @@ func loginReturn(w http.ResponseWriter, r *http.Request) string {
 
 // sameOrigin: a form POST must come from this host. SameSite=Lax already keeps
 // the session cookie off a cross-site POST; this is the second lock.
+//
+// Origin "null" is an opaque origin (a sandboxed frame, a data: page) — or one
+// of this hub's own pages under Referrer-Policy: no-referrer (the console's
+// sign-out form): a navigation's POST from there sends "null" and no Referer.
+// It passes only when the browser itself says same-origin (Sec-Fetch-Site,
+// which a page cannot set) or a Referer names this host.
 func sameOrigin(r *http.Request) bool {
 	o := r.Header.Get("Origin")
-	if o == "" || o == "null" {
-		ref := r.Header.Get("Referer")
+	ref := r.Header.Get("Referer")
+	switch {
+	case o == "null":
+		if r.Header.Get("Sec-Fetch-Site") == "same-origin" {
+			return true
+		}
+		if ref == "" {
+			return false
+		}
+		o = ref
+	case o == "":
 		if ref == "" {
 			return true // a non-browser client; the session cookie still has to be there
 		}

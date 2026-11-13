@@ -227,9 +227,21 @@ func (s *Server) revokeSession(r *http.Request) error {
 	}
 	now := time.Now()
 	if sess.Sid != "" {
-		return s.Store.RevokeSession(sess.Sid, pid, time.Unix(sess.Exp, 0), now)
+		return s.Store.RevokeSession(sess.Sid, pid, revokeUntil(sess, now, s.sessionTTL()), now)
 	}
 	return s.Store.CutSessions(pid, pid, now)
+}
+
+// revokeUntil is how long a sign-in's revocation is kept: past the latest exp
+// any value of it can carry — a sliding renewal re-signs for a whole ttl from
+// the moment it is made, so a copy renewed up to now lapses by now+ttl, never
+// just by the presented value's exp.
+func revokeUntil(sess *authz.Session, now time.Time, ttl time.Duration) time.Time {
+	until := now.Add(ttl)
+	if exp := time.Unix(sess.Exp, 0); exp.After(until) {
+		until = exp
+	}
+	return until
 }
 
 // logoutTo is where a signed-out browser goes: the signed-out page, or — when

@@ -106,3 +106,30 @@ func TestChatGateBounds(t *testing.T) {
 		t.Fatalf("half a minute later: %q; want admitted", why)
 	}
 }
+
+// A relayed answer on the hub's origin: the service's cookies dropped, never
+// sniffed, a file or a session view sandboxed whatever the service sent.
+func TestChatRelayHeaders(t *testing.T) {
+	for _, sandbox := range []bool{false, true} {
+		resp := &http.Response{Header: http.Header{}}
+		resp.Header.Add("Set-Cookie", "a=1; Path=/")
+		resp.Header.Add("Set-Cookie", "b=2; Path=/")
+		resp.Header.Set("X-Content-Type-Options", "")
+		resp.Header.Set("Content-Security-Policy", "default-src *")
+		resp.Header.Set("Content-Type", "image/png")
+		chatRelayHeaders(resp, sandbox)
+		if v := resp.Header.Values("Set-Cookie"); len(v) != 0 {
+			t.Errorf("sandbox=%v: Set-Cookie kept %q", sandbox, v)
+		}
+		if resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Content-Type") != "image/png" {
+			t.Errorf("sandbox=%v: headers %v", sandbox, resp.Header)
+		}
+		want := "default-src *"
+		if sandbox {
+			want = chatRelaySandbox
+		}
+		if got := resp.Header.Get("Content-Security-Policy"); got != want {
+			t.Errorf("sandbox=%v: CSP %q; want %q", sandbox, got, want)
+		}
+	}
+}
