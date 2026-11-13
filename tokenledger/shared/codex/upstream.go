@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -28,9 +27,9 @@ type upstreamVerdict struct {
 	By          string    `json:"by,omitempty"` // "agent" | "proxy"
 }
 
-func readUpstream(home string) upstreamVerdict {
+func readUpstream(home string, rf ReadFile) upstreamVerdict {
 	var v upstreamVerdict
-	b, err := os.ReadFile(filepath.Join(home, upstreamFile))
+	b, err := rf.read(filepath.Join(home, upstreamFile))
 	if err == nil && len(b) < 4096 {
 		_ = json.Unmarshal(b, &v)
 	}
@@ -62,7 +61,7 @@ func RecordUpstream(home string, auth *Auth, result Result, err error) error {
 	default:
 		return nil
 	}
-	old := readUpstream(home)
+	old := readUpstream(home, nil)
 	if old.Fingerprint == v.Fingerprint && old.State == v.State && old.Error == v.Error {
 		return nil
 	}
@@ -73,8 +72,8 @@ func RecordUpstream(home string, auth *Auth, result Result, err error) error {
 }
 
 // upstreamRejection is the standing refusal of this exact credential, if any.
-func upstreamRejection(home string, auth *Auth) *upstreamVerdict {
-	v := readUpstream(home)
+func upstreamRejection(home string, auth *Auth, rf ReadFile) *upstreamVerdict {
+	v := readUpstream(home, rf)
 	if v.State != "rejected" || v.Fingerprint == "" || v.Fingerprint != auth.fingerprint {
 		return nil
 	}
@@ -113,7 +112,7 @@ func HubLeaseRejected(home string) *UpstreamRejection {
 	if auth == nil || !auth.HubManaged || auth.accessFP == "" {
 		return nil
 	}
-	v := upstreamRejection(home, auth)
+	v := upstreamRejection(home, auth, nil)
 	if v == nil {
 		return nil
 	}

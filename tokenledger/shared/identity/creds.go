@@ -82,6 +82,13 @@ const keychainService = "Claude Code-credentials"
 // A returned ErrNoCredentials or ErrTokenExpired is expected operational
 // state, not a failure to report loudly.
 func LoadCredentials(home string) (*Credentials, error) {
+	return LoadCredentialsWith(home, nil, runtime.GOOS == "darwin")
+}
+
+// LoadCredentialsWith is LoadCredentials reading the home's file through rf,
+// and asking the macOS keychain only when keychain is set: a machine agent
+// serving several logins runs as root, whose keychain is none of theirs.
+func LoadCredentialsWith(home string, rf ReadFile, keychain bool) (*Credentials, error) {
 	if tok := os.Getenv("CCQUOTA_OAUTH_TOKEN"); tok != "" {
 		// No expiry is knowable for an injected token; trust the operator and
 		// let the API reject it if it is stale.
@@ -108,10 +115,10 @@ func LoadCredentials(home string) (*Credentials, error) {
 	}
 
 	p := filepath.Join(home, ".claude", ".credentials.json")
-	c, err := fromFile(p)
+	c, err := fromFileWith(p, rf)
 	try("credentials file "+p, c, err)
 
-	if runtime.GOOS == "darwin" {
+	if keychain {
 		// A locked or unreachable keychain is ordinary on a headless SSH
 		// session; fall back to whatever the file had — and when the file has
 		// nothing either, SAY that the keychain failed, and how.
@@ -158,8 +165,10 @@ func checkExpiry(c *Credentials) error {
 	return nil
 }
 
-func fromFile(path string) (*Credentials, error) {
-	b, err := os.ReadFile(path)
+func fromFile(path string) (*Credentials, error) { return fromFileWith(path, nil) }
+
+func fromFileWith(path string, rf ReadFile) (*Credentials, error) {
+	b, err := rf.read(path)
 	if err != nil {
 		// The caller names the path; keep the reason to the reason.
 		if errors.Is(err, os.ErrNotExist) {

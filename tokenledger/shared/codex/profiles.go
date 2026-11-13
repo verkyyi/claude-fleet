@@ -28,10 +28,10 @@ func registryPath(userHome string) string {
 	return filepath.Join(userHome, ".ccquota", "codex-profiles.json")
 }
 
-func readRegistry(userHome string) (registry, error) {
+func readRegistry(userHome string, rf ReadFile) (registry, error) {
 	var r registry
-	b, err := os.ReadFile(registryPath(userHome))
-	if os.IsNotExist(err) {
+	b, err := rf.read(registryPath(userHome))
+	if errors.Is(err, os.ErrNotExist) {
 		return r, nil
 	}
 	if err != nil || len(b) > 1<<20 {
@@ -56,7 +56,12 @@ func readRegistry(userHome string) (registry, error) {
 // Profiles includes the existing default home, named registrations, and
 // explicitly configured extra homes. Canonical paths are collected only once.
 func Profiles(userHome, defaultHome, extraHomes string) ([]Profile, error) {
-	r, err := readRegistry(userHome)
+	return ProfilesWith(userHome, defaultHome, extraHomes, nil)
+}
+
+// ProfilesWith is Profiles reading the registry through rf.
+func ProfilesWith(userHome, defaultHome, extraHomes string, rf ReadFile) ([]Profile, error) {
+	r, err := readRegistry(userHome, rf)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +122,7 @@ func updateRegistry(userHome string, change func(*registry) error) error {
 		return err
 	}
 	defer unlock()
-	r, err := readRegistry(userHome)
+	r, err := readRegistry(userHome, nil)
 	if err != nil {
 		return err
 	}

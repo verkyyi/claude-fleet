@@ -61,7 +61,7 @@ func TestFirstSessionAfterManagedLoginPrecedesNextScan(t *testing.T) {
 	}
 	loginAt := codex.LoginObservedAt(home, a)
 	p := &codexCollector{home: home, statePath: filepath.Join(t.TempDir(), "binding.json")}
-	if err := p.bindObserved(a.Identity.AccountUUID, a, loginAt.Add(time.Minute)); err != nil {
+	if err := p.bindObserved(a.Identity.AccountUUID, a, loginAt.Add(time.Minute), nil); err != nil {
 		t.Fatal(err)
 	}
 	fresh := scan.CodexTelemetry{Provider: "openai", StartedAt: loginAt.Add(time.Second)}

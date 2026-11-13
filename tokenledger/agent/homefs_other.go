@@ -56,23 +56,46 @@ func (d *homeDir) readFile(name string, own bool) ([]byte, error) {
 }
 
 func (d *homeDir) readFileMode(name string, own bool) ([]byte, os.FileMode, error) {
+	return d.readFileMax(name, own, homeFileMax)
+}
+
+func (d *homeDir) readFileMax(name string, own bool, max int64) ([]byte, os.FileMode, error) {
 	f, fi, err := d.open(name)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
-	if fi.Size() > homeFileMax {
+	if fi.Size() > max {
 		return nil, 0, &os.PathError{Op: "read", Path: d.at(name), Err: errHomeTooLarge}
 	}
-	b, err := io.ReadAll(io.LimitReader(f, homeFileMax+1))
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(b) > homeFileMax {
+	if int64(len(b)) > max {
 		return nil, 0, &os.PathError{Op: "read", Path: d.at(name), Err: errHomeTooLarge}
 	}
 	return b, fi.Mode().Perm(), nil
 }
+
+// openLoginDir off unix: plain path rules, dir still required inside ra's home.
+func openLoginDir(ra *RunAs, dir string) (*homeDir, error) {
+	if !underLogin(ra, dir) && filepath.Clean(dir) != filepath.Clean(ra.Home) {
+		return nil, &os.PathError{Op: "open", Path: dir, Err: errOutsideHome}
+	}
+	return openHomeDir(dir, false, 0)
+}
+
+func (d *homeDir) readlink(name string) (string, bool) {
+	fi, err := os.Lstat(d.at(name))
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	t, err := os.Readlink(d.at(name))
+	return t, err == nil
+}
+
+func (d *homeDir) openOwned(name string) (*os.File, error) { return d.openRead(name) }
 
 func (d *homeDir) exists(name string) bool {
 	_, err := os.Lstat(d.at(name))
@@ -135,3 +158,8 @@ func (d *homeDir) openRead(name string) (*os.File, error) {
 	f, _, err := d.open(name)
 	return f, err
 }
+
+const nonBlock = 0
+
+// readStoreFile off unix: no credential store here; a plain capped read.
+func readStoreFile(path string, uid uint32, max int64) ([]byte, error) { return readCapped(path, max) }

@@ -65,7 +65,7 @@ func TestHubManagedHomeIsNeverRefreshedLocally(t *testing.T) {
 			t.Fatalf("Maintain(force=%v) returned %+v", force, got)
 		}
 	}
-	if s := readRefreshState(home); s.State != "reauth_required" || s.Reason != "stale local attempt" {
+	if s := readRefreshState(home, nil); s.State != "reauth_required" || s.Reason != "stale local attempt" {
 		t.Fatalf("Maintain rewrote the renewal record of a hub-managed home: %+v", s)
 	}
 	// Only a lease the node agent failed to renew shows — as an expired

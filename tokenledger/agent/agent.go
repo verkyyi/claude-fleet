@@ -366,6 +366,9 @@ type Agent struct {
 	fleetRdQuiet    atomic.Bool
 	scanner         *scan.Scanner
 	codex           *scan.Scanner
+	codexOn         bool         // the Codex source is collected here
+	codexInitErr    string       // a machine tenant's last Codex registry error (logged once)
+	codexAcct       codexAccount // how a profile's credential is maintained and queried
 	codexProfiles   []*codexCollector
 	codexProfilesMu sync.RWMutex
 	claudeEnabled   bool
@@ -545,6 +548,8 @@ func New(cfg Config) (*Agent, error) {
 		limits:  limits.New(),
 		http:    &http.Client{Timeout: 60 * time.Second},
 	}
+	a.scanner.Open = a.loginOpener()
+	a.codexAcct = a.newCodexAccount()
 	if cfg.FleetAdmin && cfg.StateDir != "" {
 		// Account ops outlive this process (claude-fleet#2918): results the
 		// hub has not acked go out again, and one a restart cut off is
@@ -562,8 +567,16 @@ func New(cfg Config) (*Agent, error) {
 		case model.SourceClaude:
 			a.claudeEnabled = true
 		case model.SourceCodex:
+			a.codexOn = true
 			if err := a.initCodex(); err != nil {
-				return nil, err
+				if cfg.RunAs == nil {
+					return nil, err
+				}
+				// One login's Codex files stop only that login's Codex
+				// collection, never the machine's program: logged, and tried
+				// again every cycle (cycleCodex).
+				log.Printf("machine agent: %s: Codex collection off until this is fixed: %v", cfg.RunAs.Login, err)
+				a.codexInitErr = err.Error()
 			}
 		}
 	}
@@ -871,7 +884,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 	if a.claudeEnabled {
 		// A Codex-only installation has no Claude login. It must still work
 		// with the default source selection.
-		id, err := identity.Detect(a.cfg.Home)
+		id, err := identity.DetectWith(a.cfg.Home, a.loginReader(claudeConfigMax))
 		if err != nil && (errors.Is(err, os.ErrNotExist) || errors.Is(err, identity.ErrNoAccount)) && a.hasClaudeTranscripts() {
 			// No /login, but Claude Code runs here (claude-fleet#3204): its
 			// turns go to the unassigned pool instead of nowhere.
@@ -880,7 +893,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 					a.cfg.Home, err, identity.ClaudePoolAccount)
 				a.claudePoolSaid = true
 			}
-			id, err = identity.ClaudePool(a.cfg.Home), nil
+			id, err = identity.ClaudePoolWith(a.cfg.Home, a.loginReader(claudeConfigMax)), nil
 		}
 		if err == nil {
 			claudeErr = a.cycleClaude(ctx, id)
@@ -888,7 +901,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 			claudeErr = fmt.Errorf("identify this machine: %w", err)
 		}
 	}
-	if a.codex != nil {
+	if a.codexOn {
 		codexErr = a.cycleCodex(ctx)
 	}
 	return errors.Join(claudeErr, codexErr)
@@ -925,7 +938,7 @@ func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 	var creds *identity.Credentials
 	var credErr error
 	if !pool {
-		creds, credErr = identity.LoadCredentials(a.cfg.Home)
+		creds, credErr = a.loadClaudeCredentials()
 	}
 	if creds != nil {
 		id.SubscriptionType = creds.SubscriptionType

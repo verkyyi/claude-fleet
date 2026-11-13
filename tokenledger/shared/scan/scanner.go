@@ -45,6 +45,11 @@ type Scanner struct {
 	// machine, and the cost it removes is the reason a fast scan interval is
 	// affordable at all.
 	skipped int
+
+	// Open, when set, is how a transcript is opened for reading instead of
+	// os.Open: a machine agent reading a login's home hands in one that goes
+	// through no link and opens only the login's own regular files.
+	Open func(path string) (*os.File, error)
 }
 
 // Skipped reports how many transcripts the last Scan skipped untouched.
@@ -139,6 +144,11 @@ func (s *Scanner) transcripts() ([]string, error) {
 			if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 				return nil
 			}
+			if s.Open != nil && !d.Type().IsRegular() {
+				// a confined reader opens regular files only: a link or a
+				// device here is passed over, not reported every pass
+				return nil
+			}
 			// Skip a file that provably cannot have new content. The walk already
 			// stats each entry, so size and mtime are free here; opening and
 			// hashing 25,164 files to re-verify unchanged cursors is not.
@@ -165,7 +175,11 @@ func (s *Scanner) transcripts() ([]string, error) {
 }
 
 func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.UsageEvent, error) {
-	f, err := os.Open(path)
+	open := s.Open
+	if open == nil {
+		open = os.Open
+	}
+	f, err := open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}

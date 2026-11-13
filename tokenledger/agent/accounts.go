@@ -59,7 +59,7 @@ func (a *Agent) probeAccounts(ctx context.Context, observed map[string]bool) []*
 		if last, ok := a.lastAccountProbe[label]; ok && now.Sub(last) < accountProbeInterval {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(a.cfg.AccountsDir, label))
+		raw, err := a.readFileFor(filepath.Join(a.cfg.AccountsDir, label), true, smallFileMax)
 		if err != nil {
 			continue
 		}
@@ -67,7 +67,9 @@ func (a *Agent) probeAccounts(ctx context.Context, observed map[string]bool) []*
 		// token; its live short-lived token is in <label>.hub/. An unreadable
 		// lease is logged by name, once per probe interval like a failed probe
 		// (claude-fleet#1404) — the agent's own lease cycle is what repairs it.
-		token, err := hubAccountToken(a.cfg.AccountsDir, label, strings.TrimSpace(string(raw)))
+		token, err := hubAccountTokenRead(a.cfg.AccountsDir, label, strings.TrimSpace(string(raw)), func(p string) ([]byte, error) {
+			return a.readFileFor(p, true, smallFileMax)
+		})
 		if err != nil {
 			log.Printf("could not read the meter for %s: %v", label, err)
 			a.noteProbe(label, now)

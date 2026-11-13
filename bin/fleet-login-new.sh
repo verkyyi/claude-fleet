@@ -89,7 +89,8 @@
 #      unadopted, with a WARN naming the command.
 #      Elsewhere:
 #   8. the login's background services, as an admin: every launchd/*.plist.tmpl
-#      of that clone rendered in SYSTEM shape (fleet-install-apply.sh
+#      of THIS install (beside this script) rendered in SYSTEM shape (this
+#      install's fleet-install-apply.sh
 #      --render-system: Label com.claude-fleet.<login>.<unit>, UserName <login>,
 #      __HOME__ = its home) → /Library/LaunchDaemons + `launchctl bootstrap
 #      system`. That is the shape every guest login on a shared mini runs
@@ -98,13 +99,18 @@
 #      each unit "already current" and passes as a non-admin. `--no-daemons`
 #      skips this step for someone who WILL sign in at the GUI: their first
 #      graphical login installs gui LaunchAgents the historic way.
-#      The clone sits in the login's home, which macOS creates 700 — the admin
-#      cannot read it (issue #1213: the first real run listed "0 background
-#      services … nothing to install" and exited 0). So the templates and the
-#      clone's apply script are read AS THE LOGIN (`sudo -u <login> -H cat`)
-#      into this run's temp dir and rendered from there; the step prints
+#      What the admin runs and installs here — the unit list, the templates,
+#      the apply script and its lib — comes only from this install, never from
+#      the login's clone: that clone is the login's to change. The clone (in
+#      the login's 700 home, issue #1213) is only checked to exist, as the
+#      login (`sudo -u <login> -H test -d`): the units run its scripts, as the
+#      login. Each rendered plist is checked before anything is installed —
+#      Label com.claude-fleet.<login>.<unit>, UserName <login>, GroupName
+#      staff (or none), no Program / RootDirectory key, ProgramArguments[0] an
+#      absolute path under /bin, /usr/bin, /sbin or /usr/sbin — and a mismatch
+#      FAILS the run (exit 1) with nothing installed. The step prints
 #      `installed N/N`, and 0 templates is a FAILURE (exit 1) that names the
-#      dir and who read it, never a quiet success.
+#      dir, never a quiet success.
 #   7a. (a login the HUB opens — FLEET_LOGIN_JOIN_CODE + FLEET_LOGIN_HUB in the
 #      environment, set by the admin agent from the create op, issue #2652) the
 #      login joins the hub as its OWN node: this script redeems the one-time
@@ -209,7 +215,8 @@
 #      FLEET_BOOTSTRAP_CACHE (fleet-bootstrap-cache.sh's; `off` = no cache) ·
 #      FLEET_NODE_ROOT (the machine runtime, fleet-login-install.sh's) ·
 #      FLEET_HUB_URL / FLEET_DIST_SOURCE (passed to the login's install) ·
-#      FLEET_LOGIN_TEST_EUID (the EUID the root-mode test reads, never set by the gate).
+#      FLEET_LOGIN_TEST_EUID (the EUID the root-mode test reads, never set by the gate) ·
+#      FLEET_LOGIN_PLUTIL (plutil — the step-8 plist check; not found ⇒ python3 plistlib).
 set -u
 
 PROG=fleet-login-new
@@ -863,57 +870,86 @@ elif [ -n "$MSHA" ]; then
 fi
 
 # 8. the background services, system shape, as the admin
-if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
-  # Under --apply the clone exists — inside the login's home, which macOS made
-  # 700, so the admin's own process can neither list nor read it (issue #1213;
-  # #1210 ①). Everything in it is read AS THE LOGIN: `sudo -u <login> -H ls`
-  # for the unit list, `sudo -u <login> -H cat` for each template and for the
-  # clone's own fleet-install-apply.sh, each copied into this run's temp dir
-  # (the admin's; stdout is ours). The render then runs here, as the admin,
-  # with the clone's script when that version knows --render-system (the same
-  # render the login's own first-login apply will compare against), else with
-  # this install's — and root installs + bootstraps the result. A dry run has
-  # no clone yet — it previews the unit list from this install's templates.
-  STAGE="$TMPD/stage"; mkdir -p "$STAGE/launchd" "$STAGE/bin" "$TMPD/plists"
-  unit_names() { sed -n 's/^com\.claude-fleet\.\(.*\)\.plist\.tmpl$/\1/p' | sort; }
-  if [ "$APPLY" = 1 ]; then
-    TMPL_DIR="$ROOT/launchd"
-    UNITS=$(sudo -u "$LOGIN" -H ls -1 "$TMPL_DIR" 2>"$TMPD/ls.err" | unit_names)
-  else
-    TMPL_DIR="$BIN/../launchd"
-    UNITS=$(ls -1 "$TMPL_DIR" 2>/dev/null | unit_names)
+# plist_val <keypath> <plist>: a value (raw; an array or dict prints its count),
+# exit 1 when the key is absent or the file does not parse — plutil, else
+# python3's plistlib (a machine without plutil, e.g. the Linux selftest)
+plist_val() {
+  local pl=${FLEET_LOGIN_PLUTIL:-plutil}
+  if command -v "$pl" >/dev/null 2>&1; then "$pl" -extract "$1" raw -o - "$2" 2>/dev/null; return; fi
+  command -v python3 >/dev/null 2>&1 || return 2
+  python3 -I -c '
+import plistlib, sys
+try:
+    with open(sys.argv[2], "rb") as f: v = plistlib.load(f)
+    for k in sys.argv[1].split("."):
+        v = v[int(k)] if isinstance(v, list) else v[k]
+except Exception:
+    sys.exit(1)
+if isinstance(v, bool): print("true" if v else "false")
+elif isinstance(v, (list, dict)): print(len(v))
+else: print(v)' "$1" "$2"
+}
+# plist_check <plist> <unit>: the rendered plist is the system shape for THIS
+# login, nothing else — exact Label and UserName, GroupName staff or none, no
+# Program / RootDirectory, and a program from the system's own bin dirs. The
+# job runs as the login (UserName), so the scripts it names in the login's home
+# run as the login. Prints the first mismatch; exit 1 on one.
+plist_check() {
+  local f=$1 u=$2 want v k n
+  want=$(fleet_daemon_label "$u" system "$LOGIN")
+  plist_val Label "$f" >/dev/null; [ $? != 2 ] || { echo "no plutil and no python3 to read it"; return 1; }
+  v=$(plist_val Label "$f") || { echo "no Label (or not a plist)"; return 1; }
+  [ "$v" = "$want" ] || { echo "Label is '$v', not '$want'"; return 1; }
+  v=$(plist_val UserName "$f") || { echo "no UserName"; return 1; }
+  [ "$v" = "$LOGIN" ] || { echo "UserName is '$v', not '$LOGIN'"; return 1; }
+  if v=$(plist_val GroupName "$f"); then
+    [ "$v" = staff ] || { echo "GroupName is '$v', not 'staff'"; return 1; }
   fi
+  for k in Program RootDirectory; do
+    if plist_val "$k" "$f" >/dev/null; then echo "carries a $k key"; return 1; fi
+  done
+  n=$(plist_val ProgramArguments "$f") || { echo "no ProgramArguments"; return 1; }
+  case "$n" in ''|*[!0-9]*|0) echo "ProgramArguments is not a non-empty array"; return 1 ;; esac
+  v=$(plist_val ProgramArguments.0 "$f") || { echo "no ProgramArguments[0]"; return 1; }
+  case "$v" in
+    *..*|*//*) echo "ProgramArguments[0] '$v' is not a plain path"; return 1 ;;
+    /bin/?*|/usr/bin/?*|/sbin/?*|/usr/sbin/?*) ;;
+    *) echo "ProgramArguments[0] '$v' is not under /bin, /usr/bin, /sbin or /usr/sbin"; return 1 ;;
+  esac
+}
+if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
+  # Everything the admin runs or installs here comes from THIS install (the
+  # dir beside this script): the unit list, the templates, fleet-install-apply.sh
+  # and the fleet-daemon-lib.sh beside it. The login's clone (~<login>/.claude/
+  # fleet) is the login's to change, so nothing is read out of it for this
+  # step; it is only checked to exist, as the login — its home is 700 to the
+  # admin (issue #1213) — because the units run its scripts, as the login.
+  # The render runs here as the admin; each plist is checked (plist_check)
+  # before anything is installed, then root installs + bootstraps them.
+  TMPL_ROOT="$BIN/.."; TMPL_DIR="$TMPL_ROOT/launchd"; APPLY_SH="$BIN/fleet-install-apply.sh"
+  mkdir -p "$TMPD/plists"
+  unit_names() { sed -n 's/^com\.claude-fleet\.\(.*\)\.plist\.tmpl$/\1/p' | sort; }
+  UNITS=$(ls -1 "$TMPL_DIR" 2>/dev/null | unit_names)
   NU=$(printf '%s\n' "$UNITS" | sed '/^$/d' | wc -l | tr -d ' ')
   step "install $LOGIN's $NU background services as system LaunchDaemons (com.claude-fleet.$LOGIN.*, UserName $LOGIN — no GUI sign-in needed)"
   if [ "$APPLY" = 1 ]; then
-    show sudo -u "$LOGIN" -H ls -1 "$TMPL_DIR"
     if [ "$NU" = 0 ]; then
-      err=$(sed 's/^/: /' "$TMPD/ls.err" | head -n 1)
-      printf '%s: no launchd/com.claude-fleet.*.plist.tmpl in %s (read as %s)%s — 0 background services to install: the clone at stable carries no daemon templates\n' \
-        "$PROG" "$TMPL_DIR" "$LOGIN" "$err" >&2
+      printf '%s: no launchd/com.claude-fleet.*.plist.tmpl in %s (this install'"'"'s own, beside %s) — 0 background services to install: this install carries no daemon templates\n' \
+        "$PROG" "$TMPL_DIR" "$BIN" >&2
+      fail
+    fi
+    show sudo -u "$LOGIN" -H test -d "$ROOT/bin"
+    if ! sudo -u "$LOGIN" -H test -d "$ROOT/bin" 2>/dev/null; then
+      printf '%s: no claude-fleet install at %s (checked as %s) — the services run its scripts\n' "$PROG" "$ROOT" "$LOGIN" >&2
       [ "$DONLY" = 0 ] || printf '%s: --daemons-only needs %s'"'"'s own clone at %s — its first login installs it (fleet-login-bootstrap.sh), then re-run this\n' "$PROG" "$LOGIN" "$ROOT" >&2
       fail
     fi
-    say "  (the clone is in $LOGIN's 700 home: $NU templates + bin/fleet-install-apply.sh read as $LOGIN, rendered here as the admin)"
-    # shellcheck disable=SC2024  # the point: the login reads, the redirect is ours (admin-owned temp)
-    for u in $UNITS; do
-      t="launchd/com.claude-fleet.$u.plist.tmpl"
-      sudo -u "$LOGIN" -H cat "$ROOT/$t" > "$STAGE/$t" \
-        || { printf '%s: cannot read %s as %s\n' "$PROG" "$ROOT/$t" "$LOGIN" >&2; fail; }
-    done
-    APPLY_SH="$STAGE/bin/fleet-install-apply.sh"
-    # The apply script sources fleet-daemon-lib.sh beside itself (the one label /
-    # shape rule, #1495), so the clone's lib is staged with it; a clone whose
-    # script or lib cannot be read falls back to this install's pair.
-    # shellcheck disable=SC2024  # same: read as the login, written here
-    sudo -u "$LOGIN" -H cat "$ROOT/bin/fleet-install-apply.sh" > "$APPLY_SH" 2>/dev/null \
-      && grep -q -- '--render-system' "$APPLY_SH" \
-      && sudo -u "$LOGIN" -H cat "$ROOT/bin/fleet-daemon-lib.sh" > "$STAGE/bin/fleet-daemon-lib.sh" 2>/dev/null \
-      || APPLY_SH="$BIN/fleet-install-apply.sh"
+    say "  ($NU templates + fleet-install-apply.sh from this install, $TMPL_DIR — nothing read from $LOGIN's clone; each plist rendered and checked here as the admin before any install)"
   elif [ "$NU" = 0 ]; then
-    say "  WARN: no launchd/*.plist.tmpl in $TMPL_DIR — nothing to preview here; --apply reads the clone's (as $LOGIN) and fails on 0"
+    say "  WARN: no launchd/*.plist.tmpl in $TMPL_DIR — nothing to preview here; --apply installs from the same dir and fails on 0"
   fi
-  NI=0 NK=0
+  NI=0 NK=0 TODO=''
+  # render + check every unit first: a mismatch stops the run with nothing installed
   for u in $UNITS; do
     label=$(fleet_daemon_label "$u" system "$LOGIN"); dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
     # --daemons-only fills what is missing (issue #1223): a unit already in
@@ -924,9 +960,15 @@ if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
       NK=$((NK + 1)); continue
     fi
     if [ "$APPLY" = 1 ]; then
-      FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$STAGE" > "$src" \
+      FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$TMPL_ROOT" > "$src" \
         || { printf '%s: render %s failed (%s --render-system)\n' "$PROG" "$u" "$APPLY_SH" >&2; fail; }
+      why=$(plist_check "$src" "$u") \
+        || { printf '%s: the rendered %s.plist is not the system shape for %s — %s; nothing installed\n' "$PROG" "$label" "$LOGIN" "$why" >&2; fail; }
     fi
+    TODO="$TODO $u"
+  done
+  for u in $TODO; do
+    label=$(fleet_daemon_label "$u" system "$LOGIN"); dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
     run_shown "${SU}install -m 644 <$label.plist, rendered from launchd/com.claude-fleet.$u.plist.tmpl> $(printf %q "$dst")" \
       -- sudo install -m 644 "$src" "$dst"
     run sudo launchctl bootstrap system "$dst"

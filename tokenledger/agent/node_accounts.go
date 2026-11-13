@@ -832,7 +832,9 @@ func opMarkPath(home, login string) string {
 // readOpMark reads login's mark; false when there is none.
 func readOpMark(home, login string) (opMark, bool) {
 	var mk opMark
-	data, err := os.ReadFile(opMarkPath(home, login))
+	// under a tenant's home (an admin login's onboard dir) through homeDir:
+	// no link followed, a regular file, capped
+	data, err := readHomeFile(opMarkPath(home, login), false)
 	if err != nil {
 		return mk, false
 	}

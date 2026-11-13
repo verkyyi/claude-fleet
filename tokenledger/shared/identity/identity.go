@@ -48,9 +48,24 @@ var ErrNoAccount = errors.New("no Claude account is logged in")
 // are not here: they live alongside the OAuth token, and reading them is the
 // credential path's job — Detect stays usable on a machine where the token is
 // unreadable.
-func Detect(home string) (*model.Identity, error) {
+func Detect(home string) (*model.Identity, error) { return DetectWith(home, nil) }
+
+// ReadFile is how this package reads a login's files; nil is the plain
+// filesystem. A machine agent hands in one that reads inside the login's home
+// only, no link followed, regular files of the login's own, size-capped.
+type ReadFile func(path string) ([]byte, error)
+
+func (rf ReadFile) read(path string) ([]byte, error) {
+	if rf == nil {
+		return os.ReadFile(path)
+	}
+	return rf(path)
+}
+
+// DetectWith is Detect reading through rf.
+func DetectWith(home string, rf ReadFile) (*model.Identity, error) {
 	path := filepath.Join(home, ".claude.json")
-	b, err := os.ReadFile(path)
+	b, err := rf.read(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
@@ -110,12 +125,15 @@ func Local() *model.Identity {
 // Skipping the scan lost every turn such a login made; parking them in the
 // "claude:local" pool keeps them on the hub, under the endpoint and login that
 // spent them, exactly as Codex's unassigned pool does.
-func ClaudePool(home string) *model.Identity {
+func ClaudePool(home string) *model.Identity { return ClaudePoolWith(home, nil) }
+
+// ClaudePoolWith is ClaudePool reading through rf.
+func ClaudePoolWith(home string, rf ReadFile) *model.Identity {
 	id := Local()
 	id.Source = model.SourceClaude
 	id.AccountUUID = ClaudePoolAccount
 	id.DisplayName = "Claude (no login on this endpoint)"
-	if b, err := os.ReadFile(filepath.Join(home, ".claude.json")); err == nil {
+	if b, err := rf.read(filepath.Join(home, ".claude.json")); err == nil {
 		var cfg claudeConfig
 		if json.Unmarshal(b, &cfg) == nil {
 			id.MachineID = cfg.MachineID

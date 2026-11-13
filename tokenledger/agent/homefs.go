@@ -28,6 +28,7 @@ var (
 	errHomeLink       = errors.New("not a plain directory (a link, or not a directory)")
 	errHomeNotRegular = errors.New("not a regular file")
 	errHomeTooLarge   = errors.New("larger than the agent reads")
+	errOutsideHome    = errors.New("not inside the login's home")
 )
 
 // loginRootOf is the tenant whose home holds path, that home, and path's

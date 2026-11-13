@@ -62,12 +62,16 @@ exists — without it Remote Login admits every user), installs `--pubkey` as
 docs/CRED-SEPARATE.md «A new login») and
 **installs her 14 background services as system LaunchDaemons** —
 `/Library/LaunchDaemons/com.claude-fleet.alice.<unit>.plist`, `UserName alice`,
-rendered from that clone by `fleet-install-apply.sh --render-system` and
-`launchctl bootstrap system`'d — the shape every guest login on a shared mini
-runs. Her home is 700, so the templates are read out of the clone **as alice**
-(`sudo -u alice -H cat`, issue #1213) and rendered in the admin's temp dir; the
-step ends `installed 14/14`, and a clone with no templates fails the run (exit
-1) instead of installing nothing. It stops at the first failed step, refuses (exit 3) when the login or
+rendered by the admin's **own** install — its `launchd/` templates and its
+`fleet-install-apply.sh --render-system`, never anything read out of alice's
+clone — and `launchctl bootstrap system`'d — the shape every guest login on a
+shared mini runs. Her clone (in her 700 home, issue #1213) is only checked to
+exist, as alice: the units run its scripts, as alice. Each rendered plist is
+checked before anything is installed (Label `com.claude-fleet.alice.<unit>`,
+`UserName alice`, `GroupName staff` or none, no `Program` / `RootDirectory`,
+the program under `/bin`, `/usr/bin`, `/sbin` or `/usr/sbin`); a mismatch fails
+the run with nothing installed. The step ends `installed 14/14`, and an install
+with no templates fails the run (exit 1) instead of installing nothing. It stops at the first failed step, refuses (exit 3) when the login or
 `/Users/alice` already exists, never overwrites, and writes nothing in alice's
 home outside `.ssh/`, `.config/claude-fleet/accounts/`, `.zshrc` and
 `.claude/fleet/`. That `.zshrc` is the `~/.local/bin` PATH line (where Claude
@@ -494,10 +498,11 @@ sudo launchctl list | grep -c "com.claude-fleet.alice."              # = N
 ```
 
 It skips steps 1–7 and 9 (and refuses their options), needs the login and its
-home (else exit 4), and reads the templates from HER clone, as her — her home is
-0700 to you (#1213) — so her next apply finds every unit "already current". A
-unit whose plist is already in place is left alone, so a rerun only fills what
-is missing. No clone yet (she never logged in) is exit 1 naming it: her first
+home (else exit 4), and renders from YOUR install's templates and apply script —
+nothing is read out of her clone (her home is 0700 to you, #1213; it is only
+checked to exist, as her) — so run it from an install at the same version as
+hers and her next apply finds every unit "already current". A unit whose plist
+is already in place is left alone, so a rerun only fills what is missing. No clone yet (she never logged in) is exit 1 naming it: her first
 login installs it, then re-run.
 
 Nothing on her side needs re-running: the units start at bootstrap, and they

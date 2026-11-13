@@ -209,6 +209,20 @@ agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给
 标记）交还这个账号；订阅凭据只交给共享凭据代理（以 `as=<账号>` 说明是谁的），没有代理
 就不领——root 不往账号目录写凭据。
 
+**Codex 用量也以账号身份读**：每个 Codex 档案的续期与账号额度读取（`codex app-server`）不在 root
+进程里跑，而是由节点程序以账号身份起自己的 `ccquota codex machine-op`（`agent/codex_machine.go`；
+环境是干净的：账号的 `HOME`，`PATH` 只有发行版的 `tools/bin`、账号的 `~/.local/bin` 与系统目录）。
+root 只指定 Codex 的路径——机器配置的 `CCQUOTA_CODEX_BINARY`，否则发行版自带的 `tools/bin/codex`；
+两者都没有时由账号身份的那条命令自己找，root 从不在账号家目录或账号的 `PATH` 里找可执行文件。
+档案登记 `~/.ccquota/codex-profiles.json` 里的目录必须在账号自己的家里；登记坏了只关掉这个账号的
+Codex 采集（日志一行，修好后下一轮自动恢复），不挡整台机器的节点程序。
+
+**读账号家里的文件**：身份（`~/.claude.json`）、凭据文件、对话记录、Codex 登录与记录、`node.env`、
+探测结果和账号目录都只在账号家里读，经 `homeDir`（`agent/homefs.go`、`agent/login_files.go`）：
+不跟随链接、只读普通文件、有大小上限，账号自己写的文件还要求属于账号。唯一允许的链接是凭据分离后的
+`node.env`——它必须正好指向这个账号自己的凭据库 `/var/db/fleet-cred/<账号>/node.env`，且那个目录不归账号。
+root 的钥匙串不是任何账号的，机器模式下不读。
+
 **名册**：机器自己那条线标 `machine_link`（永不放会话），它带着的账号标 `via`；
 `machines[].links` 是这台机器开着的连接数。入口「机器」页每台卡片一行「1 条连接 · 账号：…」，
 `fleet hub machines` 多一列「连接」。

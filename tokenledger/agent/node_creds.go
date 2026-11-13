@@ -929,12 +929,17 @@ func writeGHHosts(dir, user, token string) error {
 // (file, keychain, hub lease) this was the one whose failure nobody was told
 // about, and an operator reading the agent log saw no meter and no reason.
 func hubAccountToken(dir, label, contents string) (string, error) {
+	return hubAccountTokenRead(dir, label, contents, os.ReadFile)
+}
+
+// hubAccountTokenRead is hubAccountToken reading the lease through read.
+func hubAccountTokenRead(dir, label, contents string, read func(string) ([]byte, error)) (string, error) {
 	if !strings.HasPrefix(contents, HubMarkerPrefix) {
 		return contents, nil
 	}
 	p := filepath.Join(dir, label+".hub", ".credentials.json")
 	src := "hub-managed account " + label + " (" + p + ")"
-	raw, err := os.ReadFile(p)
+	raw, err := read(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", errors.New(src + ": nothing leased yet — the agent writes it after a lease from the hub (is the hub reachable, and does it hold a Claude account for this login?)")

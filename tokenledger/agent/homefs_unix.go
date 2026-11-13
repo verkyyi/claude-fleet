@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -43,6 +44,28 @@ func openHomeDir(dir string, create bool, mode os.FileMode) (*homeDir, error) {
 		}
 		return &homeDir{fd: fd, path: dir}, nil
 	}
+	return openUnder(ra, home, rel, dir, create, mode)
+}
+
+// openLoginDir opens dir, which must be ra's home or a directory below it,
+// confined as openHomeDir confines a tenant's: it names its login itself, so it
+// needs no registered tenant (New reads a login's files before RunMachine
+// registers it). A dir outside ra's home is refused.
+func openLoginDir(ra *RunAs, dir string) (*homeDir, error) {
+	dir = filepath.Clean(dir)
+	home := filepath.Clean(ra.Home)
+	var rel []string
+	if dir != home {
+		rest, ok := strings.CutPrefix(dir, home+string(os.PathSeparator))
+		if !ok || ra.Home == "" {
+			return nil, &os.PathError{Op: "open", Path: dir, Err: errOutsideHome}
+		}
+		rel = strings.Split(rest, string(os.PathSeparator))
+	}
+	return openUnder(ra, home, rel, dir, false, 0)
+}
+
+func openUnder(ra *RunAs, home string, rel []string, dir string, create bool, mode os.FileMode) (*homeDir, error) {
 	fd, err := unix.Open(home, dirFlags, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: home, Err: err}
@@ -119,22 +142,49 @@ func (d *homeDir) readFile(name string, own bool) ([]byte, error) {
 
 // readFileMode is readFile plus the file's permission bits.
 func (d *homeDir) readFileMode(name string, own bool) ([]byte, os.FileMode, error) {
+	return d.readFileMax(name, own, homeFileMax)
+}
+
+// readFileMax is readFileMode with its own cap.
+func (d *homeDir) readFileMax(name string, own bool, max int64) ([]byte, os.FileMode, error) {
 	f, st, err := d.open(name, own)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer f.Close()
-	if st.Size > homeFileMax {
+	if st.Size > max {
 		return nil, 0, d.err("read", name, errHomeTooLarge)
 	}
-	b, err := io.ReadAll(io.LimitReader(f, homeFileMax+1))
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, 0, d.err("read", name, err)
 	}
-	if len(b) > homeFileMax {
+	if int64(len(b)) > max {
 		return nil, 0, d.err("read", name, errHomeTooLarge)
 	}
 	return b, os.FileMode(st.Mode & 0o777), nil
+}
+
+// readlink is name's link target when name is a symbolic link in d; ok false
+// when it is anything else (or missing).
+func (d *homeDir) readlink(name string) (string, bool) {
+	var st unix.Stat_t
+	if unix.Fstatat(d.fd, name, &st, unix.AT_SYMLINK_NOFOLLOW) != nil || st.Mode&unix.S_IFMT != unix.S_IFLNK {
+		return "", false
+	}
+	buf := make([]byte, 4096)
+	n, err := unix.Readlinkat(d.fd, name, buf)
+	if err != nil || n >= len(buf) {
+		return "", false
+	}
+	return string(buf[:n]), true
+}
+
+// openOwned opens name in d for reading: a regular file, no link followed,
+// owned by d's login (see open).
+func (d *homeDir) openOwned(name string) (*os.File, error) {
+	f, _, err := d.open(name, true)
+	return f, err
 }
 
 // exists says name is in d (not followed when it is a link).
@@ -282,4 +332,50 @@ func (d *homeDir) list() ([]string, error) {
 func (d *homeDir) openRead(name string) (*os.File, error) {
 	f, _, err := d.open(name, false)
 	return f, err
+}
+
+// nonBlock opens a FIFO without waiting for a writer (readCapped then refuses it).
+const nonBlock = unix.O_NONBLOCK
+
+// readStoreFile reads path in a credential store: its directory reached by its
+// path, not itself a link, owned by someone other than uid (the login) and
+// writable by no group or other; the file regular, not a link, not uid's, at
+// most max bytes.
+func readStoreFile(path string, uid uint32, max int64) ([]byte, error) {
+	dir := filepath.Dir(path)
+	dfd, err := unix.Open(dir, dirFlags|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: dir, Err: err}
+	}
+	defer unix.Close(dfd)
+	var st unix.Stat_t
+	if err := unix.Fstat(dfd, &st); err != nil {
+		return nil, &os.PathError{Op: "stat", Path: dir, Err: err}
+	}
+	if st.Uid == uid || st.Mode&0o022 != 0 {
+		return nil, &os.PathError{Op: "open", Path: dir, Err: errNotStoreLink}
+	}
+	fd, err := unix.Openat(dfd, filepath.Base(path), unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NONBLOCK|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	if err := unix.Fstat(fd, &st); err != nil {
+		return nil, &os.PathError{Op: "stat", Path: path, Err: err}
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil, &os.PathError{Op: "open", Path: path, Err: errHomeNotRegular}
+	}
+	if st.Uid == uid {
+		return nil, &os.PathError{Op: "open", Path: path, Err: errNotStoreLink}
+	}
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > max {
+		return nil, &os.PathError{Op: "read", Path: path, Err: errHomeTooLarge}
+	}
+	return b, nil
 }

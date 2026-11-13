@@ -4,6 +4,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -53,12 +54,35 @@ func ProfileID(home string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(p)))[:20]
 }
 
-func ReadAuth(home string) (*Auth, error) {
-	f, err := os.Open(filepath.Join(home, "auth.json"))
-	if err != nil {
-		return nil, errors.New("no readable Codex file credentials (log collection remains available)")
+// ReadFile is how this package reads a profile's small files (auth.json and
+// its renewal, observation and upstream records); nil is the plain
+// filesystem. A machine agent hands in one that reads inside a login's home
+// only, no link followed, regular files of the login's own (claude-fleet
+// agent/homefs.go).
+type ReadFile func(path string) ([]byte, error)
+
+// authFileMax is the most of an auth.json ReadAuth reads.
+const authFileMax = 2 << 20
+
+func ReadAuth(home string) (*Auth, error) { return ReadAuthWith(home, nil) }
+
+// ReadAuthWith is ReadAuth reading through rf.
+func ReadAuthWith(home string, rf ReadFile) (*Auth, error) {
+	var src io.Reader
+	if rf == nil {
+		f, err := os.Open(filepath.Join(home, "auth.json"))
+		if err != nil {
+			return nil, errors.New("no readable Codex file credentials (log collection remains available)")
+		}
+		defer f.Close()
+		src = io.LimitReader(f, authFileMax)
+	} else {
+		b, err := rf(filepath.Join(home, "auth.json"))
+		if err != nil {
+			return nil, errors.New("no readable Codex file credentials (log collection remains available)")
+		}
+		src = bytes.NewReader(b)
 	}
-	defer f.Close()
 	var doc struct {
 		Mode        string     `json:"auth_mode"`
 		APIKey      *string    `json:"OPENAI_API_KEY"`
@@ -70,7 +94,7 @@ func ReadAuth(home string) (*Auth, error) {
 			Refresh string `json:"refresh_token"`
 		} `json:"tokens"`
 	}
-	if err := json.NewDecoder(io.LimitReader(f, 2<<20)).Decode(&doc); err != nil {
+	if err := json.NewDecoder(src).Decode(&doc); err != nil {
 		return nil, errors.New("invalid Codex credential file")
 	}
 	hub := doc.Tokens.Refresh == HubManagedRefreshToken
@@ -303,4 +327,12 @@ func AccountIDFromIDToken(idToken string) string {
 func PlanFromIDToken(idToken string) string {
 	meta, _ := decodeClaims(idToken)["https://api.openai.com/auth"].(map[string]any)
 	return str(meta["chatgpt_plan_type"])
+}
+
+// read is rf's read of path, or the plain filesystem's.
+func (rf ReadFile) read(path string) ([]byte, error) {
+	if rf == nil {
+		return os.ReadFile(path)
+	}
+	return rf(path)
 }
