@@ -161,6 +161,26 @@ func relaySetup(ctx context.Context, home string) (relayPaths, bool) {
 	if !filepath.IsAbs(p.outbox) || !filepath.IsAbs(p.workers) {
 		return relayPaths{}, false
 	}
+	return confineRelayPaths(p, runAsOf(ctx))
+}
+
+// confineRelayPaths keeps a login's relay paths inside its home: the script
+// that names them runs as the login, and the machine agent works on them as
+// root. A required one outside is no relay; an optional one is dropped. No
+// login (a plain agent, running as itself): as they are.
+func confineRelayPaths(p relayPaths, ra *RunAs) (relayPaths, bool) {
+	if ra == nil {
+		return p, true
+	}
+	if !underLogin(ra, p.outbox) || !underLogin(ra, p.workers) {
+		return relayPaths{}, false
+	}
+	if p.movein != "" && !underLogin(ra, p.movein) {
+		p.movein = ""
+	}
+	if p.attach != "" && !underLogin(ra, p.attach) {
+		p.attach = ""
+	}
 	return p, true
 }
 
@@ -190,14 +210,19 @@ func (a *Agent) relayOutbox(ctx context.Context, conn nodeLink, p relayPaths) {
 }
 
 func (a *Agent) relayOutboxOnce(ctx context.Context, conn nodeLink, p relayPaths) {
-	ents, err := os.ReadDir(p.outbox)
+	d, err := openHomeDir(p.outbox, false, 0)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	ents, err := d.list()
 	if err != nil {
 		return
 	}
 	names := []string{}
-	for _, e := range ents {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") && !strings.HasPrefix(e.Name(), ".") {
-			names = append(names, e.Name())
+	for _, n := range ents {
+		if strings.HasSuffix(n, ".json") && !strings.HasPrefix(n, ".") {
+			names = append(names, n)
 		}
 	}
 	sort.Strings(names) // oldest first: the names start with a timestamp
@@ -205,7 +230,8 @@ func (a *Agent) relayOutboxOnce(ctx context.Context, conn nodeLink, p relayPaths
 	now := time.Now()
 	for _, n := range names {
 		file := filepath.Join(p.outbox, n)
-		raw, err := os.ReadFile(file)
+		// the login's own file only: what is in it goes out as its relay
+		raw, err := d.readFile(n, true)
 		if err != nil {
 			continue
 		}
@@ -248,7 +274,7 @@ func (a *Agent) relayAcked(opID string) bool {
 	delete(st.inflight, opID)
 	st.mu.Unlock()
 	if ok {
-		_ = os.Remove(f.file)
+		_ = removeHomeFile(f.file)
 	}
 	return ok
 }
@@ -274,18 +300,23 @@ func (a *Agent) relayRefused(p relayPaths, opID string, e *control.Error) bool {
 }
 
 func relayQuarantine(p relayPaths, file, why string) {
-	dir := filepath.Join(p.outbox, "refused")
-	if mkdirOwned(dir, 0o700) != nil {
-		_ = os.Remove(file)
+	from, err := openHomeDir(filepath.Dir(file), false, 0)
+	if err != nil {
 		return
 	}
-	dst := filepath.Join(dir, filepath.Base(file))
-	if os.Rename(file, dst) != nil {
-		_ = os.Remove(file)
+	defer from.Close()
+	name := filepath.Base(file)
+	to, err := openHomeDir(filepath.Join(p.outbox, "refused"), true, 0o700)
+	if err != nil {
+		_ = from.remove(name)
 		return
 	}
-	defer ownPath(dst + ".why")
-	_ = os.WriteFile(dst+".why", []byte(why+"\n"), 0o600)
+	defer to.Close()
+	if from.rename(name, to, name) != nil {
+		_ = from.remove(name)
+		return
+	}
+	_ = to.writeAtomic(name+".why", []byte(why+"\n"), 0o600)
 }
 
 // relayDeliver applies one relay the hub pushed, through claude-fleet, and
@@ -363,24 +394,7 @@ func relayWorkers(p relayPaths, m control.Message) error {
 		}
 		fmt.Fprintf(&b, "%s\t%s\t%s\n", r.WorkerID, r.Node, r.OriginWID)
 	}
-	if err := mkdirOwned(filepath.Dir(p.workers), 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(p.workers), ".hub-workers-*")
-	if err != nil {
-		return err
-	}
-	if _, err := tmp.WriteString(b.String()); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	ownPath(tmp.Name())
-	return os.Rename(tmp.Name(), p.workers)
+	return writeAtomic(p.workers, []byte(b.String()), 0o600)
 }
 
 // bad is a field that would break the TSV.

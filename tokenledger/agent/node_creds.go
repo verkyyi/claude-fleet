@@ -527,7 +527,7 @@ func (a *Agent) pruneCreds(l *credLease) (int, error) {
 		if !e.Type().IsRegular() || !safeLabel.MatchString(name) || kept["claude:"+name] {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, name))
+		b, err := readHomeFile(filepath.Join(dir, name), false)
 		if err != nil || !bytes.HasPrefix(b, []byte(HubMarkerPrefix)) {
 			continue
 		}
@@ -641,12 +641,19 @@ func removeClaudeCred(dir, label string, unstore func(kind, label string) error)
 			return err
 		}
 	}
-	if err := os.RemoveAll(filepath.Join(dir, label+".hub")); err != nil {
+	d, err := openHomeDir(dir, false, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
-	markerPath := filepath.Join(dir, label)
-	if cur, err := os.ReadFile(markerPath); err == nil && bytes.HasPrefix(cur, []byte(HubMarkerPrefix)) {
-		return os.Remove(markerPath)
+	defer d.Close()
+	if err := d.removeAll(label + ".hub"); err != nil {
+		return err
+	}
+	if cur, err := d.readFile(label, false); err == nil && bytes.HasPrefix(cur, []byte(HubMarkerPrefix)) {
+		return d.remove(label)
 	}
 	return nil
 }
@@ -657,9 +664,16 @@ func removeCodexAuth(home, label string, unstore func(kind, label string) error)
 	if unstore != nil {
 		return unstore("codex", label)
 	}
-	p := filepath.Join(home, "auth.json")
-	b, err := os.ReadFile(p)
-	if os.IsNotExist(err) {
+	d, err := openHomeDir(home, false, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	b, err := d.readFile("auth.json", false)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
@@ -673,7 +687,7 @@ func removeCodexAuth(home, label string, unstore func(kind, label string) error)
 	if json.Unmarshal(b, &auth) != nil || auth.Tokens.RefreshToken != CodexRefreshPlaceholder {
 		return nil // the person's own login, not the hub's lease
 	}
-	return os.Remove(p)
+	return d.remove("auth.json")
 }
 
 func (a *Agent) fetchCredLease(ctx context.Context) (*credLease, error) {
@@ -760,32 +774,6 @@ func (a *Agent) ghConfigDir() string {
 // here because it becomes a path.
 var safeLabel = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
 
-// writeAtomic writes data to path with mode via a same-directory rename, so a
-// CLI reading mid-write sees the old file or the new one, never half of one.
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	if err := mkdirOwned(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	ownPath(tmp.Name())
-	return os.Rename(tmp.Name(), path)
-}
-
 // writeClaudeCred hands one Claude account's short-lived token to the
 // credential proxy's store and writes its label marker. The JSON is the shape
 // Claude Code itself stores (claudeAiOauth), with no refresh token. The sink is
@@ -805,8 +793,12 @@ func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes 
 		return err
 	}
 	marker := []byte(HubMarkerPrefix + label + "\n")
-	markerPath := filepath.Join(dir, label)
-	if cur, err := os.ReadFile(markerPath); err == nil && bytes.Equal(cur, marker) {
+	d, err := openHomeDir(dir, true, 0o700)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if cur, err := d.readFile(label, false); err == nil && bytes.Equal(cur, marker) {
 		return nil
 	} else if err == nil && !bytes.HasPrefix(cur, []byte(HubMarkerPrefix)) {
 		// A long-lived token the operator stored here by hand: the hub
@@ -814,7 +806,7 @@ func writeClaudeCred(dir, label, accessToken string, expires *time.Time, scopes 
 		// token stays on the machine.
 		log.Printf("credentials: %s now comes from the hub; replacing the local token file", label)
 	}
-	return writeAtomic(markerPath, marker, 0o600)
+	return d.writeAtomic(label, marker, 0o600)
 }
 
 // claudeCredJSON is a leased Claude credential file's bytes.
@@ -882,16 +874,28 @@ var codexStoreKey = regexp.MustCompile(`(?m)^\s*cli_auth_credentials_store\s*=`)
 
 // ensureCodexFileStore makes config.toml say cli_auth_credentials_store =
 // "file". The line is PREPENDED when missing: a top-level TOML key must come
-// before the first [table], so appending could land it inside one.
+// before the first [table], so appending could land it inside one. The file
+// keeps its mode (a new one is 0600). Under a login's home it is read and
+// replaced through homeDir: a link, a FIFO or device, a file the login does
+// not own, or one over homeFileMax is an error and left as it is.
 func ensureCodexFileStore(path string) error {
-	cur, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
+	d, err := openHomeDir(filepath.Dir(path), true, 0o700)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	name := filepath.Base(path)
+	cur, mode, err := d.readFileMode(name, true)
+	if errors.Is(err, os.ErrNotExist) {
+		cur, mode, err = nil, 0o600, nil
+	}
+	if err != nil {
 		return err
 	}
 	if codexStoreKey.Match(cur) {
 		return nil
 	}
-	return writeAtomic(path, append([]byte("cli_auth_credentials_store = \"file\"\n"), cur...), 0o600)
+	return d.writeAtomic(name, append([]byte("cli_auth_credentials_store = \"file\"\n"), cur...), mode)
 }
 
 // writeGHHosts writes gh's hosts.yml for github.com with the person's token.
