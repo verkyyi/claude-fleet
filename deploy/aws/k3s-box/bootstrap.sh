@@ -115,7 +115,7 @@ host_file() {
 }
 
 # pod_snat_script: /usr/local/sbin/fleet-pod-snat.sh — load (or reload) the
-# nftables table fleet_pod_snat: pod traffic (POD_CIDR, k3s' 10.42.0.0/16)
+# nftables table fleet_pod_snat: pod traffic (POD_CIDR, k3s' default pod network)
 # leaving the default route's interface for anywhere but the pod and service
 # networks is SNATed to that interface's address, at a priority ahead of
 # flannel's MASQUERADE (srcnat - 10: the first nat chain to decide wins).
