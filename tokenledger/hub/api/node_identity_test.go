@@ -756,3 +756,113 @@ func TestNodeIdentityUsageUnderTheEnrolledLogin(t *testing.T) {
 		t.Fatalf("usage recorded under %q; want bob", login)
 	}
 }
+
+// --- a machine's own node program and a user pod's (task MPCX) ---
+
+// A machine's program keeps what a machine legitimately varies — a renamed
+// host nothing else holds, its service seat, the logins the hub opened on the
+// machine it enrolled as — and is held to its enrollment for the rest: another
+// machine program's name, a trusted name it did not join as, a user pod's
+// name, a login nobody opened there. Its door list is its own machine's.
+func TestNodeIdentityMachineReportIsHeld(t *testing.T) {
+	h := bobHarness(t)
+	enrollAs(t, h, "mac-a-root", "mac-a", "root")
+	enrollAs(t, h, "mac-b-root", "mac-b", "root")
+	if err := h.srv.changeAccount(FleetAccountRequest{Action: "adopt", PrincipalID: pCarol, Hostname: "mac-a", Login: "carol"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.srv.Store.SetFleetSetting(trustKey("mac-z"), TrustTrusted, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ep := mustEndpoint(t, h, "ep_mac-a-root")
+	for _, tc := range []struct {
+		host, user, wantHost, wantUser string
+	}{
+		{"Verkys-Mac-a", "root", "Verkys-Mac-a", "root"}, // a Mac's HostName: nothing else holds it
+		{"mac-a", "_fleetnode", "mac-a", "_fleetnode"},   // the core's seat
+		{"mac-a", "carol", "mac-a", "carol"},             // a login the hub opened there
+		{"mac-b", "root", "mac-a", "root"},               // another machine program's name
+		{"mac-z", "root", "mac-a", "root"},               // a trusted name it did not join as
+		{"u-alice1", "root", "mac-a", "root"},            // a user pod's name
+		{"mac-a", "alice", "mac-a", "root"},              // nobody opened alice on mac-a
+		{"mac-a", "bob", "mac-a", "root"},                // bob's login is on mac-e-mac-c
+	} {
+		id := h.srv.nodeSelfFrom(ep, tc.host, tc.user)
+		if id.Host != tc.wantHost || id.User != tc.wantUser {
+			t.Errorf("mac-a's program reporting %s@%s: held as %s@%s; want %s@%s",
+				tc.user, tc.host, id.User, id.Host, tc.wantUser, tc.wantHost)
+		}
+	}
+	// Its door list: mac-a's, whatever machine it names.
+	mc := dialAdminCaps(t, h, h.tokens["mac-a-root"], false, control.CapMachine)
+	beat(t, mc.c, control.Proto, control.Heartbeat{Hostname: "mac-b", OSUser: "root"})
+	waitFor(t, 3*time.Second, "the mac-b beat", func() bool {
+		r := h.srv.nodeRow("ep_mac-a-root")
+		return r != nil && r.Hostname == "mac-b"
+	})
+	rec := httptest.NewRecorder()
+	if host := h.srv.nodeMachineHost(rec, httptest.NewRequest(http.MethodGet, "/", nil), mustEndpoint(t, h, "ep_mac-a-root")); host != "mac-a" {
+		t.Fatalf("mac-a's program reporting mac-b: door list for %q (HTTP %d); want mac-a", host, rec.Code)
+	}
+}
+
+// A user pod's own node program — enrolled as root by the code the hub minted
+// for the pod, its token readable by the pod's person — speaks for its pod
+// only: its host never moves, it speaks for the pod's own login and no other,
+// it gets no admin seat, it is never the operator's, and it asks for no peer
+// certificate as anyone else. A real machine program's lanes are unchanged.
+func TestNodeIdentityPodProgramStaysInItsPod(t *testing.T) {
+	h := bobHarness(t)
+	h.srv.FleetAdmins = []string{"_fleetadmin", "frank"}
+	const pod = "u-bobpod1"
+	code, _ := MintJoinCode()
+	if err := h.srv.Store.CreateJoinCodeFor(HashToken(code), "pod-"+pod, store.NodeKindFixed, TrustTrusted,
+		store.NodeRoleManaged, pod, time.Now(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	st, raw := postJSON(t, h, "/v1/node/join", map[string]string{"code": code, "hostname": pod, "os_user": "root"})
+	if st != 200 {
+		t.Fatalf("the pod's join: %d %s", st, raw)
+	}
+	var join NodeJoinResponse
+	_ = json.Unmarshal(raw, &join)
+	if err := h.srv.changeAccount(FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: pod, Login: "bob"}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	ep := mustEndpoint(t, h, join.EndpointID)
+	if !h.srv.podEndpoint(ep.ID) {
+		t.Fatalf("the pod's program is not read as a pod's")
+	}
+	for _, tc := range []struct{ host, user, wantHost, wantUser string }{
+		{pod, "bob", pod, "bob"},
+		{"mac-e", "bob", pod, "bob"},
+		{"Bobs-Pod", "bob", pod, "bob"},
+		{pod, "alice", pod, "root"},
+		{pod, "frank", pod, "root"},
+		{pod, "_fleetnode", pod, "root"},
+	} {
+		if id := h.srv.nodeSelfFrom(ep, tc.host, tc.user); id.Host != tc.wantHost || id.User != tc.wantUser {
+			t.Errorf("the pod reporting %s@%s: held as %s@%s; want %s@%s", tc.user, tc.host, id.User, id.Host, tc.wantUser, tc.wantHost)
+		}
+	}
+	pc := dialAdminCaps(t, h, join.Token, false, control.CapMachine)
+	beat(t, pc.c, control.Proto, control.Heartbeat{Hostname: "mac-e", OSUser: "frank"})
+	waitFor(t, 3*time.Second, "the pod's beat", func() bool {
+		r := h.srv.nodeRow(ep.ID)
+		return r != nil && r.OSUser == "frank"
+	})
+	if st, out, raw := adminTokenCall(t, h, join.Token, http.MethodPost, map[string]string{"login": "_fleetadmin"}); st != http.StatusForbidden {
+		t.Errorf("the pod's admin-token: %d %+v %s; want 403", st, out, raw)
+	}
+	if got := h.srv.workerRecordOwner(ep); got == "operator" {
+		t.Errorf("the pod reporting frank: owner %q; want not the operator", got)
+	}
+	rec := httptest.NewRecorder()
+	if host := h.srv.nodeMachineHost(rec, httptest.NewRequest(http.MethodGet, "/", nil), ep); host != pod {
+		t.Errorf("the pod reporting mac-e: door list for %q (HTTP %d); want %s", host, rec.Code, pod)
+	}
+	key := newUserKey(t)
+	if st, g, raw := peerPost(t, h, join.Token, map[string]any{"target": "mac-c", "purpose": "view", "public_key": key}); st == 200 && g.Login != "bob" {
+		t.Errorf("the pod reporting frank@mac-e: peer cert as %q %s; want none, or bob's", g.Login, raw)
+	}
+}

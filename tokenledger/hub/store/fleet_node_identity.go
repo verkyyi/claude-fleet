@@ -192,6 +192,51 @@ func (s *Store) MachineEnrolledByOthers(endpointID, machine string) (bool, error
 	return n > 0, err
 }
 
+// MachineProgramEnrolledAs: a live endpoint other than endpointID enrolled as
+// machine (first label, any case) as root by any road but a device's — that
+// machine's own node program (task MPCX). A LIKE wildcard in the name can only
+// over-match, which reads as "another holds it".
+func (s *Store) MachineProgramEnrolledAs(endpointID, machine string) (bool, error) {
+	machine = lowerFirstLabel(machine)
+	if machine == "" {
+		return false, nil
+	}
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints e
+		WHERE e.retired_at IS NULL AND e.endpoint_id <> ? AND e.enrolled_user = 'root'
+		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
+		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
+		      AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL)`,
+		endpointID, machine, machine+".%", NodeRoleClient).Scan(&n)
+	return n > 0, err
+}
+
+// LoginEnrolledOn: a live endpoint enrolled as login on machine (first label,
+// any case) by any road but a device's — a login the hub or an operator
+// opened there (task MPCX).
+func (s *Store) LoginEnrolledOn(machine, login string) (bool, error) {
+	machine = lowerFirstLabel(machine)
+	if machine == "" || login == "" {
+		return false, nil
+	}
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints e
+		WHERE e.retired_at IS NULL AND e.enrolled_user = ?
+		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
+		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
+		      AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL)`,
+		login, machine, machine+".%", NodeRoleClient).Scan(&n)
+	return n > 0, err
+}
+
+// lowerFirstLabel is a machine name's first label, lower case.
+func lowerFirstLabel(machine string) string {
+	if i := strings.IndexByte(machine, '.'); i > 0 {
+		machine = machine[:i]
+	}
+	return strings.ToLower(machine)
+}
+
 // deviceHeldLogins are the logins a device road's endpoint never takes as its
 // enrollment from a report (task MPCX): a machine's own program enrolls as
 // root, and the admin role account comes only from its machine's install.

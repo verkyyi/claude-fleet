@@ -684,3 +684,4 @@
 0.1 node-identity-report-differs
 0.1 hub-forwarded-untrusted-peer
 0.1 node-identity-device-road
+0.1 node-identity-machine-report

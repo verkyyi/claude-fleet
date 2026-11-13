@@ -92,6 +92,9 @@
 #                                                   memberDevice) + hub/store enrolled_user (go test, when a toolchain is here)
 #   hub-forwarded-untrusted-peer                    tokenledger/hub/api edge.go (forwardedTrust, proxyPeer,
 #                                                   CCQUOTA_TRUSTED_PROXIES; go test, when a toolchain is here)
+#   node-identity-machine-report                    tokenledger/hub/api node_identity.go (nodeSelfFrom,
+#                                                   machineNameTaken, machineLoginOpen, podEndpoint)
+#                                                   (go test, when a toolchain is here)
 #   node-identity-device-road                       tokenledger/hub/api fleet_login_node.go (enrollDeviceNode),
 #                                                   node_identity.go (operatorEndpoint, ownerlessOperator),
 #                                                   fleet.go (recordFleets) + hub/store fleet.go (machineHolderOK)
@@ -1190,6 +1193,28 @@ drill_hub_forwarded_untrusted_peer() {
     1) return 1 ;;
     2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；两条测试按名核对在' ;;
     3) WHAT='没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+  esac
+  SECS=$(since "$t0")
+}
+
+# ---- node-identity-machine-report (task MPCX): a machine's own node program
+# keeps a renamed host nothing else holds, its service seat and the logins the
+# hub opened on its machine; anything else it reports is held to its
+# enrollment. A user pod's program is held to its pod.
+drill_node_identity_machine_report() {
+  CAP=120; local t0 out tests
+  tests='TestNodeIdentityMachineReportIsHeld TestNodeIdentityPodProgramStaysInItsPod TestNodeIdentityMachineIsTheEnrollments TestMachineLinkCarriesEveryLogin TestMachineLinkSessionLandsOnItsLogin'
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+  done
+  grep -q 'case id.Machine && !s.machineLoginOpen(id.EnrolledHost, user, pod):' "$ROOT/tokenledger/hub/api/node_identity.go" \
+    || { WHY="a machine program's reported login is no longer held to the logins opened on its machine"; return 1; }
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
+    0) WHAT='机器程序报别的机器程序的名字、没入册的可信名、个人 pod 名、那台没开过的登录，都按入册身份算；改名的 Mac、服务座位、那台开过的登录照旧；个人 pod 的程序只代表它自己的 pod：机器名不动、只认 pod 的登录、不领座位、不是运营者、入口名单只是自己的；多登录机器的通道照旧（go test 五条）' ;;
+    1) return 1 ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
+    3) WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }

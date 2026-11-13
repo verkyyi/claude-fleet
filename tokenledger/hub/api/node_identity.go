@@ -24,12 +24,17 @@ import (
 // endpoint an operator's or the hub's code enrolled keeps a renamed host's
 // report, as before (its login is held either way).
 //
-// One kind of endpoint keeps its report: a machine's own node program
-// (enrolled as root — `fleet node install` — by an operator's or the hub's
-// code, never a member's device road). It speaks for its machine whatever
-// service login it runs demoted under (a person's pod, the _fleetnode seat),
-// and a Mac's HostName may differ from the LocalHostName it joined as; nothing
-// it reports reaches past the machine root already holds.
+// A machine's own node program (enrolled as root — `fleet node install` — by
+// an operator's or the hub's code, never a member's device road) is held the
+// same way, with what it legitimately varies left to it: a Mac's HostName may
+// differ from the LocalHostName it joined as, so a renamed host keeps its
+// report unless it names a trusted machine it did not join as, a machine
+// another node program enrolled as, or a user pod; and it speaks for the
+// logins the hub opened on the machine it enrolled as (an account row there,
+// an endpoint enrolled there) and the machine's service seat (_fleetnode /
+// fleetnode) — any other login it reports is held to root. A user pod's
+// program (podEndpoint) is held to its pod: its token is readable by the
+// pod's person, so its host never moves and only the pod's own logins count.
 
 // nodeIdent is an endpoint's identity as the hub reads it.
 type nodeIdent struct {
@@ -110,10 +115,13 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 	principals, byDevice := s.deviceEnrolled(ep.ID)
 	id.ByDevice, id.Member = byDevice, s.membersOnly(principals, byDevice)
 	id.Machine = et.EnrolledUser == "root" && !id.Member
+	pod := id.Machine && s.podEndpoint(ep.ID)
 	if id.EnrolledHost != "" && !sameEnrolledName(id.EnrolledHost, host) {
 		switch {
 		case host == "":
 			id.Host = id.EnrolledHost // it never said: the enrollment's, as before
+		case id.Machine && (pod || s.nameBorrowed(host, et) || s.machineNameTaken(ep.ID, host)):
+			id.Host, id.HostDrift = id.EnrolledHost, true
 		case !id.Machine && (id.Member || s.nameBorrowed(host, et)):
 			id.Host, id.HostDrift = id.EnrolledHost, true
 		}
@@ -122,11 +130,59 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 		switch {
 		case user == "":
 			id.User = id.EnrolledUser
+		case id.Machine && !s.machineLoginOpen(id.EnrolledHost, user, pod):
+			id.User, id.UserDrift = id.EnrolledUser, true
 		case !id.Machine:
 			id.User, id.UserDrift = id.EnrolledUser, true
 		}
 	}
 	return id
+}
+
+// machineSeatLogins are the logins a machine's own node program runs demoted
+// under on a machine `fleet node install` set up (the core's service seat).
+var machineSeatLogins = map[string]bool{"_fleetnode": true, "fleetnode": true}
+
+// machineNameTaken: host is a name a machine's program may not report as its
+// own (task MPCX) — one another machine's program enrolled as, or a user pod's
+// (the hub minted that name for a pod; a machine never renames into it). An
+// unreadable answer is a yes.
+func (s *Server) machineNameTaken(endpointID, host string) bool {
+	if isUserPodName(host) {
+		return true
+	}
+	taken, err := s.Store.MachineProgramEnrolledAs(endpointID, host)
+	return err != nil || taken
+}
+
+// machineLoginOpen: login is one a machine's program speaks for on machine,
+// the machine it enrolled as (task MPCX) — an active account the hub opened
+// there, a live endpoint enrolled there as that login (a lane, the admin seat,
+// an operator's login), or the machine's service seat. A pod's program gets
+// no seat: its node runs as the pod's own login. An unreadable answer is no.
+func (s *Server) machineLoginOpen(machine, login string, pod bool) bool {
+	if machine == "" || login == "" {
+		return false
+	}
+	if machineSeatLogins[login] {
+		return !pod
+	}
+	for _, name := range []string{machine, firstLabel(machine)} {
+		accts, err := s.Store.ActiveAccountsOn(name)
+		if err != nil {
+			return false
+		}
+		for _, a := range accts {
+			if a.Login == login {
+				return true
+			}
+		}
+		if name == firstLabel(machine) {
+			break
+		}
+	}
+	ok, err := s.Store.LoginEnrolledOn(machine, login)
+	return err == nil && ok
 }
 
 // nameBorrowed: host is a trusted machine the endpoint did not enroll as
