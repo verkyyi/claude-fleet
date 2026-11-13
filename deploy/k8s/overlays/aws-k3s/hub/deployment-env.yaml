@@ -46,7 +46,7 @@ spec:
             # hub's peer for a proxied request is traefik's pod, and on this box
             # traefik and people's pods (fleet-workers, allowed to reach :8787
             # for their node link) draw addresses from the same pod range
-            # (10.42.0.0/16), so no CIDR list tells them apart. Setting it needs
+            # (k3s' pod network), so no CIDR list tells them apart. Setting it needs
             # traefik on an address of its own first; until then
             # CCQUOTA_TRUSTED_PROXIES_MODE=log with a list shows, a line a
             # minute, which peers send X-Forwarded-*.

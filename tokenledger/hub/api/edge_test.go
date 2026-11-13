@@ -277,7 +277,7 @@ func TestTrustedProxies(t *testing.T) {
 	traefik, _ := ParseTrustedProxies("192.0.2.7")
 	pod := func(r *http.Request) {
 		fwdHost("hub.example.com")(r)
-		r.RemoteAddr = "10.42.0.99:5555"
+		r.RemoteAddr = "203.0.113.99:5555"
 		r.Header.Set("X-Forwarded-Proto", "https")
 	}
 
@@ -292,8 +292,8 @@ func TestTrustedProxies(t *testing.T) {
 
 	// any other peer: its X-Forwarded-* are gone before anything reads them
 	got := edgeRun(s, pod)
-	if got.host != "core.tokenman.io" || got.remote != "10.42.0.99:5555" || got.xff != "" || got.xfh != "" ||
-		got.proto != "" || got.https || got.ip != "10.42.0.99" {
+	if got.host != "core.tokenman.io" || got.remote != "203.0.113.99:5555" || got.xff != "" || got.xfh != "" ||
+		got.proto != "" || got.https || got.ip != "203.0.113.99" {
 		t.Errorf("from a pod: %+v; want the pod itself, no forwarded headers", got)
 	}
 	if n := s.UntrustedForwardedCount(); n != 1 {
@@ -301,12 +301,12 @@ func TestTrustedProxies(t *testing.T) {
 	}
 	// no forwarded host configured: the client address is still the peer's
 	got = edgeRun(&Server{TrustedProxies: traefik}, pod)
-	if got.ip != "10.42.0.99" || got.xff != "" || got.https {
+	if got.ip != "203.0.113.99" || got.xff != "" || got.https {
 		t.Errorf("trusted proxies alone, from a pod: %+v", got)
 	}
 	// a peer that sends none is not counted
 	s2 := &Server{TrustedProxies: traefik}
-	edgeRun(s2, func(r *http.Request) { r.Header.Del("X-Forwarded-For"); r.RemoteAddr = "10.42.0.99:5555" })
+	edgeRun(s2, func(r *http.Request) { r.Header.Del("X-Forwarded-For"); r.RemoteAddr = "203.0.113.99:5555" })
 	if n := s2.UntrustedForwardedCount(); n != 0 {
 		t.Errorf("counted %d for a request without forwarded headers", n)
 	}
@@ -318,7 +318,7 @@ func TestTrustedProxies(t *testing.T) {
 		t.Errorf("replica hop: %+v; want the forwarded host and client", got)
 	}
 	got = edgeRun(rs, func(r *http.Request) { pod(r); r.Header.Set(replicaTokenHeader, "wrong") })
-	if got.host != "core.tokenman.io" || got.ip != "10.42.0.99" {
+	if got.host != "core.tokenman.io" || got.ip != "203.0.113.99" {
 		t.Errorf("a wrong replica token: %+v; want the pod itself", got)
 	}
 
@@ -337,8 +337,8 @@ func TestTrustedProxies(t *testing.T) {
 		t.Errorf("unset, from a pod: %+v; want as before", got)
 	}
 
-	if l, err := ParseTrustedProxies("10.42.0.0/16, 192.0.2.7 ::ffff:198.51.100.3 2001:db8::/32"); err != nil || len(l) != 4 ||
-		l[0].String() != "10.42.0.0/16" || l[1].String() != "192.0.2.7/32" || l[2].String() != "198.51.100.3/32" {
+	if l, err := ParseTrustedProxies("198.18.0.0/15, 192.0.2.7 ::ffff:198.51.100.3 2001:db8::/32"); err != nil || len(l) != 4 ||
+		l[0].String() != "198.18.0.0/15" || l[1].String() != "192.0.2.7/32" || l[2].String() != "198.51.100.3/32" {
 		t.Errorf("ParseTrustedProxies = %v %v", l, err)
 	}
 	if _, err := ParseTrustedProxies("10.0.0.0/8 traefik"); err == nil {
