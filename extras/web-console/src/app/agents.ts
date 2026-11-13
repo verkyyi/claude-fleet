@@ -47,11 +47,34 @@ export function togglePerm(cur: readonly string[], p: string, on: boolean, all: 
   return all.filter((x) => next.has(x));
 }
 
+// consentPerms(asked, verified, all): the ticks the consent page starts with.
+// A verified client (a metadata document at its own address) starts with what
+// it asked; an unverified one (registered with a name of its own choosing)
+// starts with read alone — what it asked is shown beside each box, and the
+// person ticks the rest.
+export function consentPerms(asked: readonly string[] | undefined, verified: boolean, all: readonly string[] = PERMS): string[] {
+  return verified ? initialPerms(asked, all) : all.filter((p) => p === LOCKED);
+}
+
+// redirectHost: where the consent sends the person back to, for the page to
+// lead with; a loopback address is a program on the person's own computer.
+export function redirectHost(uri: string): { host: string; local: boolean } {
+  try {
+    const u = new URL(uri);
+    const h = u.hostname.replace(/^\[|\]$/g, "");
+    return { host: u.host, local: h === "localhost" || h === "::1" || /^127\./.test(h) };
+  } catch {
+    return { host: "", local: false };
+  }
+}
+
 export const DAYS = [1, 7, 30, 90, 365] as const;
 export const DEFAULT_DAYS = 30;
 export const daysLabel = (d: number) => (d === 365 ? tr("1 年", "1 year") : tr(`${d} 天`, d === 1 ? "1 day" : `${d} days`));
 // a server default that is not one of the choices is still a choice
-export const dayChoices = (d: number) => (DAYS as readonly number[]).includes(d) ? [...DAYS] : [...DAYS, d].sort((a, b) => a - b);
+// (and none past max, when the hub caps this connection)
+export const dayChoices = (d: number, max?: number) =>
+  ((DAYS as readonly number[]).includes(d) ? [...DAYS] : [...DAYS, d].sort((a, b) => a - b)).filter((x) => !max || x <= max);
 
 export type Client = "claude-code" | "codex" | "gemini" | "claude-ai" | "other";
 export const CLIENTS: { id: Client; name: string }[] = [

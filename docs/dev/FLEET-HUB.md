@@ -1336,7 +1336,9 @@ Claude Code, Codex, Gemini CLI, claude.ai — as that person. Each connection is
 grant row (`fleet_agent_grants`, `store/fleet_agent_grants.go`): the person, the
 scopes they ticked (read always · talk `worker:message` · start `worker:start` ·
 stop `worker:stop`+`worker:resume` · answer `worker:answer`, off by default), an
-expiry (30 days default, a year at most), a revocation, a call count.
+expiry (30 days default, a year at most; a self-registered DCR client at most 30 days,
+its consent page marked unverified, led by its redirect host, write permissions unticked),
+a revocation, a call count.
 
 - **Two ways in, one row.** A personal key `tm_…` minted on the console (我的 → Agent,
   `POST /v1/me/agents`, shown once, stored as SHA-256), or OAuth: the hub is its own

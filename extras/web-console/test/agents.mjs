@@ -6,7 +6,7 @@
 // Run: node --experimental-strip-types test/agents.mjs
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DAYS, DEFAULT_DAYS, DEFAULT_PERMS, PERMS, dayChoices, expiresText, initialPerms, permLabel, rawQuery, snippetFor, togglePerm } from '../src/app/agents.ts';
+import { DAYS, DEFAULT_DAYS, DEFAULT_PERMS, PERMS, consentPerms, dayChoices, expiresText, initialPerms, permLabel, rawQuery, redirectHost, snippetFor, togglePerm } from '../src/app/agents.ts';
 
 assert.deepEqual(PERMS, ['read', 'talk', 'start', 'stop', 'answer']);
 assert.deepEqual(DEFAULT_PERMS, ['read', 'talk']);
@@ -27,6 +27,17 @@ assert.deepEqual([...DAYS], [1, 7, 30, 90, 365]);
 assert.equal(DEFAULT_DAYS, 30);
 assert.deepEqual(dayChoices(30), [1, 7, 30, 90, 365]);
 assert.deepEqual(dayChoices(14), [1, 7, 14, 30, 90, 365], 'a server default off the list is still offered');
+assert.deepEqual(dayChoices(30, 30), [1, 7, 30], 'nothing past the hub\'s cap');
+
+// an unverified (self-registered) agent starts at read alone; a verified one at what it asked
+assert.deepEqual(consentPerms(['read', 'talk', 'start'], false), ['read'], 'unverified: write boxes start unticked');
+assert.deepEqual(consentPerms(undefined, false), ['read']);
+assert.deepEqual(consentPerms(['read', 'talk', 'start'], true), ['read', 'talk', 'start'], 'verified: what it asked');
+assert.deepEqual(redirectHost('http://127.0.0.1:53111/callback'), { host: '127.0.0.1:53111', local: true });
+assert.deepEqual(redirectHost('http://localhost:4000/cb'), { host: 'localhost:4000', local: true });
+assert.deepEqual(redirectHost('http://[::1]:4000/cb'), { host: '[::1]:4000', local: true });
+assert.deepEqual(redirectHost('https://evil.example/cb'), { host: 'evil.example', local: false });
+assert.deepEqual(redirectHost('nope'), { host: '', local: false });
 
 const snips = { 'claude-code': 'claude mcp add …', codex: '[mcp_servers.tokenman]', generic: '{"url": …}' };
 assert.equal(snippetFor('claude-code', snips), 'claude mcp add …');
@@ -57,4 +68,6 @@ const agents = read('pages/agents.tsx');
 for (const s of ['"/v1/me/agents"', '"/v1/me/agents/revoke"']) assert.ok(agents.includes(s), s);
 const consent = read('pages/oauth-consent.tsx');
 for (const s of ['/v1/me/oauth/request?${query}', '"/v1/me/oauth/approve"', '{ query, permissions: perms, days, approve }', 'window.location.assign(r.data.redirect)']) assert.ok(consent.includes(s), s);
+// an unverified agent: the notice, the redirect host leads, the cap is passed on
+for (const s of ['consentPerms(ask.permissions, isVerified(ask)', 'Unverified app', 'max={ask.max_days}', 'asked={verified ? undefined : ask.permissions}']) assert.ok(consent.includes(s), s);
 console.log('agents: ok');

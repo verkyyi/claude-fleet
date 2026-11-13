@@ -6,8 +6,13 @@
 // (POST /v1/me/oauth/approve) — then the browser goes where the hub says. A
 // request the hub refuses is said plainly, with no buttons. The query is sent
 // back VERBATIM: the hub checks the very string it handed out.
+//
+// An unverified agent (registered by itself, kind dcr: its name is whatever
+// it says) is led by where it sends the person back to, not by its name; the
+// page says it is unverified, its boxes start at read alone with what it asked
+// marked beside each, and its expiry offers no more than the hub's max_days.
 import { useEffect, useState } from "react";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert, LoaderCircle, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,13 +20,16 @@ import { BRAND } from "@/shared/brand";
 import { lang, tr } from "@/shared/i18n";
 import { sendJSON, useMe } from "@/shared/api";
 import { Wordmark } from "@/shared/Wordmark";
-import { DEFAULT_DAYS, PERMS, initialPerms, rawQuery } from "../agents";
+import { DEFAULT_DAYS, PERMS, consentPerms, rawQuery, redirectHost } from "../agents";
 import { ExpirySelect, PermBoxes } from "../agent-parts";
 
 type Ask = {
   client: { id: string; name: string; kind: "cimd" | "dcr"; host: string };
   redirect_uri: string; permissions?: string[]; all_permissions?: string[]; days?: number;
+  max_days?: number; verified?: boolean;
 };
+// an older hub sends no verified: the kind alone says it
+const isVerified = (a: Ask) => a.verified ?? a.client.kind !== "dcr";
 type Read = { ask: Ask } | { error: string } | null;
 
 const plain = (j: { error?: string; error_description?: string } | null) =>
@@ -45,7 +53,7 @@ export default function OAuthConsentPage() {
       if (r?.ok && j?.client) {
         const ask = j as Ask;
         setRead({ ask });
-        setPerms(initialPerms(ask.permissions, ask.all_permissions?.length ? ask.all_permissions : PERMS));
+        setPerms(consentPerms(ask.permissions, isVerified(ask), ask.all_permissions?.length ? ask.all_permissions : PERMS));
         setDays(ask.days || DEFAULT_DAYS);
       } else setRead({ error: r ? plain(j) : tr("入口暂时没有回应，请稍后刷新。", "The hub isn't answering; refresh in a moment.") });
     });
@@ -63,6 +71,8 @@ export default function OAuthConsentPage() {
 
   const who = me?.name || me?.login || "";
   const ask = read && "ask" in read ? read.ask : null;
+  const verified = ask ? isVerified(ask) : true;
+  const back = ask ? redirectHost(ask.redirect_uri) : { host: "", local: false };
   return (
     <main className="bg-background flex min-h-dvh items-start justify-center px-4 py-8 sm:items-center">
       <div className="grid w-full max-w-md gap-5">
@@ -83,18 +93,42 @@ export default function OAuthConsentPage() {
             </CardContent>
           ) : ask ? (
             <>
-              <CardHeader>
-                <CardTitle className="font-display text-xl leading-snug">
-                  {tr(`「${ask.client.name}」想以你的身份使用 ${BRAND}`, `${ask.client.name} wants to use ${BRAND} as you`)}
-                </CardTitle>
-                <CardDescription className="break-words">
-                  {ask.client.host ? <span className="font-mono">{ask.client.host}</span> : null}
-                  {who ? <>{ask.client.host ? " · " : ""}{tr(`登录身份：${who}`, `signed in as ${who}`)}</> : null}
-                </CardDescription>
-              </CardHeader>
+              {verified ? (
+                <CardHeader>
+                  <CardTitle className="font-display text-xl leading-snug">
+                    {tr(`「${ask.client.name}」想以你的身份使用 ${BRAND}`, `${ask.client.name} wants to use ${BRAND} as you`)}
+                  </CardTitle>
+                  <CardDescription className="break-words">
+                    {ask.client.host ? <span className="font-mono">{ask.client.host}</span> : null}
+                    {who ? <>{ask.client.host ? " · " : ""}{tr(`登录身份：${who}`, `signed in as ${who}`)}</> : null}
+                  </CardDescription>
+                </CardHeader>
+              ) : (
+                <CardHeader className="grid gap-3">
+                  <p role="note" className="border-warn/50 bg-warn/10 flex items-start gap-2 rounded-lg border px-3 py-2 text-[13px] leading-relaxed">
+                    <TriangleAlert className="text-warn mt-0.5 size-4 shrink-0" aria-hidden />
+                    <span><b>{tr("未验证的应用", "Unverified app")}</b>{" — "}{tr(
+                      `它的名字是它自己报的，${BRAND} 无法确认是谁做的。只有在你刚刚亲手连接它时才允许。`,
+                      `the name below is self-reported; ${BRAND} can't confirm who made it. Only allow if you just connected it yourself.`)}</span>
+                  </p>
+                  <CardTitle className="font-display text-xl leading-snug">
+                    {tr(`一个应用想以你的身份使用 ${BRAND}`, `An app wants to use ${BRAND} as you`)}
+                  </CardTitle>
+                  <div className="grid gap-1">
+                    <p className="text-muted-foreground text-xs">{tr("授权后会把你送回", "Approving sends you back to")}</p>
+                    <p className="font-mono text-lg font-semibold break-all">{back.host || ask.redirect_uri}</p>
+                    {back.local ? <p className="text-muted-foreground text-xs">{tr("这台电脑上运行的程序", "a program running on this computer")}</p> : null}
+                  </div>
+                  <CardDescription className="break-words">
+                    {ask.client.name ? tr(`自称「${ask.client.name}」（名字由它自己填写）`, `Calls itself “${ask.client.name}” (name given by the app itself)`) : null}
+                    {who ? <>{ask.client.name ? " · " : ""}{tr(`登录身份：${who}`, `signed in as ${who}`)}</> : null}
+                  </CardDescription>
+                </CardHeader>
+              )}
               <CardContent className="grid gap-4">
-                <PermBoxes all={ask.all_permissions?.length ? ask.all_permissions : PERMS} value={perms} onChange={setPerms} disabled={!!busy} />
-                <ExpirySelect value={days} onChange={setDays} disabled={!!busy} />
+                <PermBoxes all={ask.all_permissions?.length ? ask.all_permissions : PERMS} value={perms} onChange={setPerms} disabled={!!busy}
+                  asked={verified ? undefined : ask.permissions} />
+                <ExpirySelect value={days} onChange={setDays} disabled={!!busy} max={ask.max_days} />
                 <p className="text-muted-foreground text-[12.5px] leading-relaxed">
                   {tr("随时可以在「我的 · Agent」里收回。", "You can revoke it any time under Me · Agents.")}
                 </p>

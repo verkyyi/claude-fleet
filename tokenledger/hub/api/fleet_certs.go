@@ -647,6 +647,9 @@ type deviceLogin struct {
 	osUser     string // the login the node's agent runs as (purpose=node)
 	invite     string // the invite the newcomer's install carried (claude-fleet#2261)
 	source     string // where start came from (clientSource): deviceMaxPerSource
+	fromIP     string // the address start came from, as the hub reads it (chatClientIP) — shown on the page
+	fromPlace  string // that address's place from the offline city database, "" when none
+	started    time.Time
 	expires    time.Time
 	state      deviceState
 	issued     *CertResponse
@@ -831,8 +834,10 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		purpose: req.Purpose,
 		osUser:  sanitizeJoinField(req.OSUser),
 		source:  clientSource(r).String(),
+		started: now,
 		expires: now.Add(deviceTTL),
 	}
+	l.fromIP, l.fromPlace = s.requestOrigin(r)
 	if inv := strings.TrimSpace(req.Invite); validInviteCode(inv) {
 		l.invite = inv
 	}
@@ -920,34 +925,15 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 			}
 		})
 		page.setPurpose(purpose, devName)
-		var resp *CertResponse
-		var err error
-		switch {
-		case approve:
-			resp, _, err = s.approveDeviceLogin(r, pid, code, now)
-		default:
-			if !s.devices.withUser(code, now, func(l *deviceLogin) {
-				if l.state == devicePending {
-					l.state = deviceDenied
-				} else {
-					err = errLoginGone
-				}
-			}) {
-				err = errLoginGone
-			}
+		if approve && purpose == purposeNode && r.FormValue("node_ack") != "1" {
+			// Adding a node needs the extra tick, checked here and not only
+			// by the browser: nothing is issued, the login stays pending and
+			// the same confirmation is shown again, asking for it.
+			page.AckMissing = true
+		} else {
+			s.finishLoginPost(w, r, &page, pid, code, approve, now)
+			return
 		}
-		switch {
-		case errors.Is(err, errLoginGone):
-			page.Error = pageT(loc, "login.err.gone")
-		case err != nil:
-			page.Error = i18n.Interpolate(pageT(loc, "login.err.issue"), map[string]string{"err": err.Error()})
-		case !approve:
-			page.Done, page.Denied = true, true
-		default:
-			page.Done, page.Login, page.Until = true, strings.Join(resp.Principals, ","), resp.ValidBefore.Local().Format("01-02 15:04")
-		}
-		renderLoginPage(w, page)
-		return
 	}
 
 	// GET: show what is being confirmed.
@@ -960,6 +946,8 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 		if l.state == devicePending {
 			page.KeyFP = l.keyFP
 			page.setPurpose(l.purpose, l.name)
+			page.Device, page.FromIP, page.FromPlace = l.name, l.fromIP, l.fromPlace
+			page.Ago = agoText(loc, now.Sub(l.started))
 		}
 	}) || page.KeyFP == "" {
 		page.Error = pageT(loc, "login.err.gone")
@@ -995,6 +983,39 @@ func (s *Server) handleFleetLoginPage(w http.ResponseWriter, r *http.Request) {
 	page.Login = strings.Join(logins, ",")
 	page.Confirm = true
 	renderLoginPage(w, page)
+}
+
+// finishLoginPost approves or refuses the pending login under code and
+// renders the outcome.
+func (s *Server) finishLoginPost(w http.ResponseWriter, r *http.Request, page *loginPage, pid, code string, approve bool, now time.Time) {
+	loc := page.Lang
+	var resp *CertResponse
+	var err error
+	switch {
+	case approve:
+		resp, _, err = s.approveDeviceLogin(r, pid, code, now)
+	default:
+		if !s.devices.withUser(code, now, func(l *deviceLogin) {
+			if l.state == devicePending {
+				l.state = deviceDenied
+			} else {
+				err = errLoginGone
+			}
+		}) {
+			err = errLoginGone
+		}
+	}
+	switch {
+	case errors.Is(err, errLoginGone):
+		page.Error = pageT(loc, "login.err.gone")
+	case err != nil:
+		page.Error = i18n.Interpolate(pageT(loc, "login.err.issue"), map[string]string{"err": err.Error()})
+	case !approve:
+		page.Done, page.Denied = true, true
+	default:
+		page.Done, page.Login, page.Until = true, strings.Join(resp.Principals, ","), resp.ValidBefore.Local().Format("01-02 15:04")
+	}
+	renderLoginPage(w, *page)
 }
 
 // codeNoMachineLogin is the poll's code for a login denied because the
@@ -1166,6 +1187,15 @@ type loginPage struct {
 	Confirm bool
 	Done    bool
 	Denied  bool
+	// What the page says about where the request came from: the name the
+	// requesting computer gave itself, the address start came from and its
+	// place (when the hub has a city database), and how long ago.
+	Device    string
+	FromIP    string
+	FromPlace string
+	Ago       string
+	// AckMissing: a node confirmation came back without its extra tick.
+	AckMissing bool
 }
 
 // loginTmpl is the page the QR opens — a way-in page (entry_pages.go). The
@@ -1183,7 +1213,15 @@ var loginTmpl = template.Must(template.New("login").Funcs(pageFuncs(i18n.EN)).Pa
 <p class="label">{{t "login.keyfp"}}</p><p class="mono">{{.KeyFP}}</p>
 <p class="label">{{t "login.validity"}}</p>
 {{if .Node}}<p class="label">{{.NodeNoteHTML}}</p>{{end}}</div>
+<div class="card"><p class="label">{{t "login.purpose"}}</p><p>{{if .Node}}{{t "login.purpose.node"}}{{else}}{{t "login.purpose.login"}}{{end}}</p>
+<p class="label">{{t "login.from"}}</p><p><span class="mono">{{if .FromIP}}{{.FromIP}}{{else}}{{t "login.from.unknown"}}{{end}}</span>{{if .FromPlace}} · {{.FromPlace}}{{end}}</p>
+<p class="label">{{t "login.started"}}</p><p>{{.Ago}}</p>
+{{if .Device}}<p class="label">{{t "login.device"}}</p><p>{{.Device}}</p>{{end}}
+<p class="label">{{t "login.from.check"}}</p></div>
+{{if .Node}}<p class="alert bad" role="alert">` + alertIcon + `<span><b>{{t "login.node.warn"}}</b></span></p>{{end}}
 <form method="post" action="/fleet/login"><input type="hidden" name="code" value="{{.Code}}">
+{{if .Node}}{{if .AckMissing}}<p class="alert bad" role="alert">` + alertIcon + `<span>{{t "login.node.ack.missing"}}</span></p>{{end}}
+<label class="ack"><input type="checkbox" name="node_ack" value="1" required><span>{{t "login.node.ack"}}</span></label>{{end}}
 <div class="row"><button class="btn outline" name="action" value="deny">{{t "login.btn.deny"}}</button><button class="btn primary" name="action" value="approve">{{t "login.btn.approve"}}</button></div></form>
 {{end}}
 </main></div></body></html>`))
@@ -1202,6 +1240,35 @@ func (p *loginPage) setPurpose(purpose, machine string) {
 	}
 	p.Node = machine
 	p.Title = i18n.Interpolate(pageT(p.Lang, "login.title.node"), map[string]string{"machine": machine})
+}
+
+// requestOrigin is where r came from, for the confirmation page: the address
+// as the hub reads it everywhere (chatClientIP) and, when the hub has the
+// offline city database, its place ("" when unknown).
+func (s *Server) requestOrigin(r *http.Request) (ip, place string) {
+	a := chatClientIP(r)
+	if !a.IsValid() {
+		return "", ""
+	}
+	if db := s.chatGeo(); db != nil {
+		co, pr, ci := db.lookup(a)
+		var parts []string
+		for _, p := range []string{co, pr, ci} {
+			if p != "" && (len(parts) == 0 || parts[len(parts)-1] != p) {
+				parts = append(parts, p)
+			}
+		}
+		place = strings.Join(parts, " ")
+	}
+	return a.String(), place
+}
+
+// agoText says how long ago a login was started, in whole minutes.
+func agoText(loc string, d time.Duration) string {
+	if d < time.Minute {
+		return pageT(loc, "login.ago.now")
+	}
+	return i18n.Interpolate(pageT(loc, "login.ago.min"), map[string]string{"n": strconv.Itoa(int(d / time.Minute))})
 }
 
 // DoneHTML is the confirmation's closing sentence, its values bolded and

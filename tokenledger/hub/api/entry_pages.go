@@ -154,6 +154,8 @@ h1+.alert{margin-top:24px}
 .label{font-size:13px;color:var(--muted-foreground)}
 .label+*{margin-top:2px}
 .card .label:not(:first-child){margin-top:12px}
+.ack{display:flex;gap:10px;align-items:flex-start;margin:4px 0 0;font-weight:500;line-height:1.5}
+.ack input{margin-top:4px;width:16px;height:16px;flex:none;accent-color:var(--primary)}
 .big{font:500 30px/1.2 var(--fleet-font-mono);letter-spacing:.08em}
 .mono{font:13px/1.5 var(--fleet-font-mono);word-break:break-all}
 .ask{margin:0 0 20px;padding:10px 14px;border-radius:calc(var(--radius) - 2px);background:var(--muted);color:var(--foreground);font:500 14px/1.5 var(--fleet-font-mono);user-select:all;overflow-wrap:anywhere}
