@@ -41,6 +41,15 @@ spec:
             # CCQUOTA_SITE_HOSTS (host=on|sandbox) its own front page — all three
             # from ConfigMap ccquota-site. CCQUOTA_FLEET_PUBLIC_URL stays the
             # address machines dial and WeChat calls back on.
+            #
+            # CCQUOTA_TRUSTED_PROXIES (task MPCX, edge.go) is NOT set here: the
+            # hub's peer for a proxied request is traefik's pod, and on this box
+            # traefik and people's pods (fleet-workers, allowed to reach :8787
+            # for their node link) draw addresses from the same pod range
+            # (10.42.0.0/16), so no CIDR list tells them apart. Setting it needs
+            # traefik on an address of its own first; until then
+            # CCQUOTA_TRUSTED_PROXIES_MODE=log with a list shows, a line a
+            # minute, which peers send X-Forwarded-*.
             - name: CCQUOTA_FLEET_PUBLIC_URL
               value: "https://core.tokenman.io"
             - name: CCQUOTA_PUBLIC_URL

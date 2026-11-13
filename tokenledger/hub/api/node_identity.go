@@ -225,3 +225,50 @@ func (s *Server) auditIdentityDrift(ep *store.Endpoint, id nodeIdent, now time.T
 // errNodeDrift is the refusal of a road that needs the node to be what it
 // enrolled as.
 var errNodeDrift = errors.New("this node reports a login other than the one it enrolled as")
+
+// routeSelf is the machine and login a link is routed to by (task MPCX): the
+// identity nodeSelf holds it to — so a report naming another person's machine
+// or login moves none of their relays, chats, terminals, service logs, svc
+// runs or previews onto this link — except one shape: a link whose machine
+// name moved (a member's renamed laptop) to a name nothing else on the hub
+// holds — no other endpoint reports it, no login is open on it, it is no
+// machine the hub has a trust word for — keeps that name, since its sessions
+// are listed under it. Its login stays held either way.
+func (s *Server) routeSelf(ep *store.Endpoint, id nodeIdent) (host, user string) {
+	host, user = id.Host, id.User
+	if id.HostDrift && id.ReportedHost != "" && !s.hostClaimed(ep.ID, id.ReportedHost) {
+		host = id.ReportedHost
+	}
+	return host, user
+}
+
+// hostClaimed: host names a machine the hub knows apart from endpointID — a
+// trust word for it, a login open on it, or another endpoint reporting it. An
+// unreadable answer is a yes.
+func (s *Server) hostClaimed(endpointID, host string) bool {
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return true
+	}
+	if _, ok := settings[trustKey(host)]; ok {
+		return true
+	}
+	if accts, err := s.Store.ActiveAccountsOn(host); err != nil || len(accts) > 0 {
+		return true
+	}
+	if fl := firstLabel(host); fl != host {
+		if accts, err := s.Store.ActiveAccountsOn(fl); err != nil || len(accts) > 0 {
+			return true
+		}
+	}
+	rows, err := s.Store.Nodes()
+	if err != nil {
+		return true
+	}
+	for _, n := range rows {
+		if n.EndpointID != endpointID && (sameMachine(n.Hostname, host) || sameMachine(host, n.Hostname)) {
+			return true
+		}
+	}
+	return false
+}

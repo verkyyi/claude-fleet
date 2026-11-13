@@ -1126,3 +1126,22 @@ BREAK-IT：`admin-handover-cut-op`（`bin/fleet-break-it-admin-selftest.sh`）�
 - **谁来跑**：普通 agent（每个登录自己的、管理员登录的）跑 `follow --scope login`，成功后结束（launchd KeepAlive / systemd Restart=always / credsep 启动器把它在新的 `node.env` 上拉起来）；托管机器的整机节点程序先 `verify`，再按 prepCmd 以每个登录的身份跑 `rewrite --scope login`，最后以 root 跑 `rewrite --scope machine`——守护看到 `machine.env` 变了就重启它，连到新地址。`*.key.ok` 一并改写，签名头在新地址照样被认；下次连上 `nodesig.Ensure` 也会重写它。
 - **跟不过去的情形（要人手一次）**：没有托管守护、凭据又隔离了的登录（`node.env` 是凭据存储的链接）——登录这半报 `LEFT`、agent 不退出、继续连旧地址（旧名字还在转发时照常工作），在那台机器上 `sudo ~/.claude/fleet/bin/fleet-hub-move.py rewrite --scope machine --from <旧> --to <新>` 一次后重启它的 agent；入口地址写在 `--hub` 参数或别的单元里的 agent（跟过一次仍连旧地址，`hub-move.json` 让它不再反复退出，日志说改哪里）；没有服务管理器、被 nohup 拉起的 agent 退出后不会自己回来。集群里的 pod / 门的 `FLEET_HUB_URL`、`render.py --hub` 是入口自己的部署项，随部署改。
 - **验收**：`fleet hub set fleet.node_url https://<新>` 后看 agent 日志里 `hub moved: <旧> → <新>`、`/v1/nodes` 里每台重新在线；`grep -r <旧> /var/db/fleet-node ~/.config/claude-fleet` 只剩 `.hub-prev`。`bin/fleet-hub-move-selftest.sh`，`tokenledger/agent` 的 `go test -run 'HubMove|MovedHub|UnverifiedMove|FollowNothing'`，`tokenledger/hub` 的 `go test ./api -run TestNodeURL`。
+
+## 28. 系统 sshd 只让入口的证书进托管登录（计划，任务 MPCX；未实施）
+
+**今天**：管理员 agent 把入口的 SSH 用户 CA 写进系统 sshd（`tokenledger/agent/node_sshca.go`：`/etc/ssh/fleet_user_ca.pub` + 一行 `TrustedUserCAKeys` 的 drop-in），没有设 `AuthorizedPrincipalsFile`。sshd 的默认规则是「证书的主体名里有目标用户名就放行」，所以入口签的证书能登这台机器上的**任何**账号——包括 root、`_fleetnode` / `_fleetadmin` 这些角色账号和运营者自己没托管的账号。入口签证书时只写这个人的登录名（`shared/sshca`），这条规则平时不起作用；它决定的是「入口本身出问题时能走多远」。入口端口（§16）的 sshd 已经是 `AuthorizedPrincipalsFile none`，不在此列。
+
+**要设的**：同一个 drop-in 再加一行 `AuthorizedPrincipalsFile /etc/ssh/fleet_principals/%u`；每个托管登录一份 `/etc/ssh/fleet_principals/<login>`（root:root 0644，内容就是登录名一行）。没有这份文件的账号，证书一律不认；普通的 `authorized_keys` 登录不受影响。
+
+**怎么铺开**（三拍，每拍各自能撤）：
+
+1. **先写文件、不改 sshd**：节点守护（`bin/fleet-node-supervisor.py`）每一轮按它的托管登录名单（`logins/<login>.env`）写齐 / 删掉 `fleet_principals/` 下的文件——新的 root 核心动作，只写这一个目录、文件名必须是名单里的登录；开号那一步同一个动作里先写好这份文件，不等下一轮。`fleet doctor` 加一行报「名单里的登录 / 有文件的登录」，对不上就 WARN。
+2. **按机器打开**：入口设置（如 `fleet.node_sshd_principals`，按机器）为 on 的机器，写 drop-in 的那一处加上这一行，照今天的做法先 `sshd -t`、再核 `sshd -T` 真的生效、失败就还原；先开测试机（§17），再开一台真机观察一周。
+3. **默认打开**：全部机器 on 之后，`fleet doctor` 缺这一行就 FAIL；撤回 = 去掉这一行、`sshd -t`、reload（macOS 下一次连接就生效）。
+
+**会坏的**：
+
+- 用入口证书进 **root、角色账号、运营者自己没托管的账号**：不再能进（这正是目的）。运营者要靠证书进自己的账号，就得把它列进名单（一份显式的「运营者登录」文件），否则改用自己的钥匙。
+- **开号到写文件之间**：如果文件只在每轮里写，新登录第一次连会被拒，所以开号动作必须同时写。
+- **机器本来就设了** `AuthorizedPrincipalsFile` / `AuthorizedPrincipalsCommand`：sshd 认第一条，我们这行不生效——`sshd -T` 核对会发现，按今天 `TrustedUserCAKeys` 冲突的办法报出来、不覆盖。
+- **个人 pod 里的 sshd**（`docs/dev/MANAGED-LINUX.md`）是镜像里配的，不走这条路，要在镜像里单独加。

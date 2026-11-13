@@ -2,11 +2,16 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // One hub, two audiences (task PNWW). The hub answers on its own hosts
@@ -32,20 +37,53 @@ import (
 //	                         edition for that host; any other host keeps
 //	                         CCQUOTA_SITE's.
 //
+// Who may send X-Forwarded-* at all (task MPCX) is a fourth setting, off when
+// unset (every peer, as before):
+//
+//	CCQUOTA_TRUSTED_PROXIES       the addresses (CIDRs or single addresses) of
+//	                              the proxies right in front of the hub — the
+//	                              socket peer a proxied request arrives from,
+//	                              not the client or an edge further out. A
+//	                              request from any other peer has its
+//	                              X-Forwarded-For / -Host / -Proto removed
+//	                              before anything reads them; a request another
+//	                              replica handed over (its replica token) is
+//	                              taken as that replica took it.
+//	CCQUOTA_TRUSTED_PROXIES_MODE  enforce (the default once a list is set) or
+//	                              log: every peer's headers are honoured as
+//	                              before, and a line a minute counts the
+//	                              requests that carried them from peers outside
+//	                              the list, by peer — to learn the list before
+//	                              enforcing it.
+//
 // The edge is taken once, at the top of the chain (forwardedTrust): it
 // rewrites r.Host, X-Forwarded-For / RemoteAddr and X-Forwarded-Proto, so every
 // reader below — the preview host match, the client IP (chatClientIP,
 // entryReportSource), isHTTPS, sameOrigin, the terminal's Origin check,
 // hubURL — needs no change and a WebSocket upgrade passes as any request.
 
-// forwardedTrust is the outermost handler: off (no CCQUOTA_FORWARDED_HOSTS) it
-// is not in the chain at all; on, a request whose X-Forwarded-Host is a listed
-// host is rewritten to it, any other passes untouched.
+// forwardedTrust is the outermost handler: off (no CCQUOTA_FORWARDED_HOSTS and
+// no CCQUOTA_TRUSTED_PROXIES) it is not in the chain at all. On, a request
+// from a peer CCQUOTA_TRUSTED_PROXIES does not list loses its X-Forwarded-*
+// (log mode: keeps them, counted); then a request whose X-Forwarded-Host is a
+// listed host is rewritten to it, any other passes untouched.
 func (s *Server) forwardedTrust(next http.Handler) http.Handler {
-	if len(s.ForwardedHosts) == 0 {
+	if len(s.ForwardedHosts) == 0 && len(s.TrustedProxies) == 0 {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(s.TrustedProxies) > 0 && hasForwarded(r) && !s.proxyPeer(r) {
+			s.untrusted.note(r.RemoteAddr, s.TrustedProxiesLogOnly, time.Now())
+			if !s.TrustedProxiesLogOnly {
+				for _, k := range forwardedHeaders {
+					r.Header.Del(k)
+				}
+			}
+		}
+		if len(s.ForwardedHosts) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
 		fh := r.Header.Get("X-Forwarded-Host")
 		if i := strings.IndexByte(fh, ','); i >= 0 {
 			fh = fh[:i]
@@ -66,6 +104,124 @@ func (s *Server) forwardedTrust(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// forwardedHeaders are the headers a proxy in front speaks in: the client's
+// address, the host and the scheme it asked for.
+var forwardedHeaders = []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"}
+
+func hasForwarded(r *http.Request) bool {
+	for _, k := range forwardedHeaders {
+		if len(r.Header.Values(k)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// proxyPeer: r's socket peer is one CCQUOTA_TRUSTED_PROXIES lists, or r was
+// handed over by another replica of this hub (which applied the same rule).
+func (s *Server) proxyPeer(r *http.Request) bool {
+	if s.Replica != nil && s.relayHopped(r) {
+		return true
+	}
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	a := ap.Addr().Unmap()
+	for _, p := range s.TrustedProxies {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseTrustedProxies reads CCQUOTA_TRUSTED_PROXIES: space- (or comma-)
+// separated CIDRs or single addresses.
+func ParseTrustedProxies(v string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, f := range strings.FieldsFunc(v, func(r rune) bool { return r == ' ' || r == ',' || r == '\t' || r == '\n' }) {
+		if p, err := netip.ParsePrefix(f); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(f)
+		if err != nil {
+			return nil, errors.New("want a CIDR or an address, got " + f)
+		}
+		a = a.Unmap()
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
+}
+
+// ParseTrustedProxiesMode reads CCQUOTA_TRUSTED_PROXIES_MODE: log is true for
+// "log", false for "" or "enforce".
+func ParseTrustedProxiesMode(v string) (logOnly bool, err error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "enforce":
+		return false, nil
+	case "log":
+		return true, nil
+	}
+	return false, errors.New("want enforce or log, got " + v)
+}
+
+// untrustedForwarded counts the requests that carried X-Forwarded-* from a
+// peer outside CCQUOTA_TRUSTED_PROXIES, and says so in one line a minute.
+type untrustedForwarded struct {
+	mu    sync.Mutex
+	total int64
+	since time.Time
+	peers map[string]int
+}
+
+const untrustedForwardedEvery = time.Minute
+
+func (u *untrustedForwarded) note(remote string, logOnly bool, now time.Time) {
+	peer := remote
+	if h, _, err := net.SplitHostPort(remote); err == nil {
+		peer = h
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.total++
+	if u.peers == nil {
+		u.peers = map[string]int{}
+		u.since = now
+	}
+	if len(u.peers) < 64 {
+		u.peers[peer]++
+	} else {
+		u.peers["other"]++
+	}
+	if now.Sub(u.since) < untrustedForwardedEvery && u.total > 1 {
+		return
+	}
+	keys := make([]string, 0, len(u.peers))
+	n := 0
+	for k, c := range u.peers {
+		keys = append(keys, k+"×"+strconv.Itoa(c))
+		n += c
+	}
+	sort.Strings(keys)
+	what := "removed"
+	if logOnly {
+		what = "honoured (CCQUOTA_TRUSTED_PROXIES_MODE=log)"
+	}
+	log.Printf("edge: %d request(s) carried X-Forwarded-* from peers outside CCQUOTA_TRUSTED_PROXIES since %s (%d in all), %s: %s",
+		n, u.since.UTC().Format(time.RFC3339), u.total, what, strings.Join(keys, " "))
+	u.peers, u.since = map[string]int{}, now
+}
+
+// UntrustedForwardedCount is how many requests carried X-Forwarded-* from a
+// peer outside CCQUOTA_TRUSTED_PROXIES since the hub started.
+func (s *Server) UntrustedForwardedCount() int64 {
+	s.untrusted.mu.Lock()
+	defer s.untrusted.mu.Unlock()
+	return s.untrusted.total
 }
 
 // forwardedHost: h (a host, maybe with a port) is one CCQUOTA_FORWARDED_HOSTS

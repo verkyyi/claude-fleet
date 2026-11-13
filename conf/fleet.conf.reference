@@ -2832,3 +2832,16 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 front proxy must pass X-Forwarded-* on only from the
 #                                 edge (traefik forwardedHeaders.trustedIPs) · 可选
 #                                 (unset = r.Host as always)
+#   CCQUOTA_TRUSTED_PROXIES       the proxies right in front of the hub (CIDRs or
+#                                 addresses, space-separated): the socket peer a proxied
+#                                 request arrives from. X-Forwarded-For / -Host / -Proto
+#                                 from any other peer are removed before the hub reads
+#                                 them (client address, per-source budgets, https, the
+#                                 forwarded host); another replica's hand-over keeps
+#                                 them (task MPCX, api/edge.go) · 可选 (unset = every
+#                                 peer's, as before)
+#   CCQUOTA_TRUSTED_PROXIES_MODE  enforce | log: log reads every peer's as before and
+#                                 writes one line a minute counting, by peer, the
+#                                 requests that carried them from outside the list —
+#                                 to learn the list before enforcing it · 可选
+#                                 (unset = enforce once a list is set)

@@ -892,6 +892,23 @@ func runHub(args []string) error {
 	if err != nil {
 		return fmt.Errorf("CCQUOTA_FORWARDED_HOSTS: %w", err)
 	}
+	// Whose X-Forwarded-* the hub reads (task MPCX, api/edge.go): unset, every
+	// peer's, as before.
+	trustedProxies, err := api.ParseTrustedProxies(os.Getenv("CCQUOTA_TRUSTED_PROXIES"))
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_TRUSTED_PROXIES: %w", err)
+	}
+	trustedProxiesLogOnly, err := api.ParseTrustedProxiesMode(os.Getenv("CCQUOTA_TRUSTED_PROXIES_MODE"))
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_TRUSTED_PROXIES_MODE: %w", err)
+	}
+	if len(trustedProxies) > 0 {
+		mode := "enforced: X-Forwarded-* from any other peer is removed"
+		if trustedProxiesLogOnly {
+			mode = "log only: every peer's X-Forwarded-* is read, the others counted"
+		}
+		log.Printf("trusted proxies (CCQUOTA_TRUSTED_PROXIES): %v — %s", trustedProxies, mode)
+	}
 
 	if bad := placeholderAdmins(splitList(os.Getenv("CCQUOTA_ADMINS"))); len(bad) > 0 {
 		return fmt.Errorf("CCQUOTA_ADMINS: %s is the docs' placeholder — put an address you can receive mail at: the first admin signs in with the code sent there", strings.Join(bad, ", "))
@@ -922,11 +939,14 @@ func runHub(args []string) error {
 		SiteHosts:   siteHosts,
 		// The hosts a trusted edge forwards (task PNWW, api/edge.go).
 		ForwardedHosts: forwardedHosts,
-		SiteFS:         web.Site(),
-		DocsFS:         web.Docs(),
-		ConsoleFS:      web.Console(),
-		ThemeFS:        web.Theme(),
-		FleetAdmins:    splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
+		// The peers whose X-Forwarded-* it reads (task MPCX, api/edge.go).
+		TrustedProxies:        trustedProxies,
+		TrustedProxiesLogOnly: trustedProxiesLogOnly,
+		SiteFS:                web.Site(),
+		DocsFS:                web.Docs(),
+		ConsoleFS:             web.Console(),
+		ThemeFS:               web.Theme(),
+		FleetAdmins:           splitList(os.Getenv("CCQUOTA_FLEET_ADMIN_USERS")),
 		// A person's grant on their own logins (claude-fleet#1410).
 		FleetPersonScopes:     fleetPersonScopes(),
 		FleetPersonConfigKeys: splitList(os.Getenv("CCQUOTA_FLEET_PERSON_CONFIG_KEYS")),

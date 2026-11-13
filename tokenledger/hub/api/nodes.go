@@ -233,7 +233,7 @@ type nodeConn struct {
 }
 
 // privileged says the hub routes account ops or refreshes to this link — the
-// links held to their enrolled machine and login (task MPCX).
+// links held to their enrolled machine and login without exception (task MPCX).
 func (c *nodeConn) privileged() bool { return c.accountNode() || c.canOAuthRefresh }
 
 // withoutCap is caps less one.
@@ -706,15 +706,19 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 	// Only a machine's own program opens its logins: the endpoint that
 	// enrolled as root (task MPCX), not any link whose hello says machine.
 	nc.machineOpener = nc.machineLink && nc.canLoginJoin && (self.Machine || self.machineByLegacy(true))
-	nc.osUser.Store(ep.OSUser)
 	nc.proto.Store(int64(hello.Proto))
-	nc.host.Store(ep.Hostname)
+	// Every link is routed to by the machine and login nodeSelf holds it to
+	// (task MPCX, routeSelf) — an account / refresh link, and equally the
+	// link a person's relay, chat, terminal, service log or svc run is
+	// carried over: a report naming another machine or login moves no
+	// traffic to it. A machine's own program and a host an operator's join
+	// renamed keep their report, as nodeSelf says.
+	routeHost, routeUser := s.routeSelf(ep, self)
 	if nc.privileged() {
-		// An account / refresh link is routed to by its machine and login:
-		// the ones it enrolled as, whatever it reports (task MPCX).
-		nc.osUser.Store(self.User)
-		nc.host.Store(self.Host)
+		routeHost, routeUser = self.Host, self.User // no renamed exception
 	}
+	nc.osUser.Store(routeUser)
+	nc.host.Store(routeHost)
 	if self.drift() {
 		nc.driftAudited.Store(true)
 		s.auditIdentityDrift(ep, self, time.Now())
@@ -828,13 +832,13 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 				hb.OSUser = ep.OSUser
 			}
 			// A report that is not its enrollment is said once per
-			// connection (task MPCX); an account / refresh link keeps being
-			// routed to as the machine and login it enrolled as.
+			// connection (task MPCX); the link keeps being routed to as the
+			// machine and login nodeSelf holds it to.
 			self := s.nodeSelfFrom(ep, hb.Hostname, hb.OSUser)
 			if self.drift() && nc.driftAudited.CompareAndSwap(false, true) {
 				s.auditIdentityDrift(ep, self, time.Now())
 			}
-			routeHost, routeUser := hb.Hostname, hb.OSUser
+			routeHost, routeUser := s.routeSelf(ep, self)
 			if nc.privileged() {
 				routeHost, routeUser = self.Host, self.User
 			}

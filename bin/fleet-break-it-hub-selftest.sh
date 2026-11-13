@@ -90,6 +90,8 @@
 #                                                   shared/release (Build, Fetch, Unpack; go test, when a toolchain is here)
 #   node-identity-report-differs                    tokenledger/hub/api node_identity.go (nodeSelf, nodeAdminOK,
 #                                                   memberDevice) + hub/store enrolled_user (go test, when a toolchain is here)
+#   hub-forwarded-untrusted-peer                    tokenledger/hub/api edge.go (forwardedTrust, proxyPeer,
+#                                                   CCQUOTA_TRUSTED_PROXIES; go test, when a toolchain is here)
 #   machine-agent-wrong-login                       tokenledger/hub/api node_machine.go (loginEndpoint, serveMachine)
 #                                                   + tokenledger/agent node_machine.go / runas.go (go test, when a toolchain is here)
 #   usage-unattributed                              tokenledger/agent (the claude:local pool) + hub/api
@@ -1147,7 +1149,7 @@ drill_release_tampered() {
 # machine's program.
 drill_node_identity_report_differs() {
   CAP=120; local t0 out tests f
-  tests='TestNodeIdentityReReportGetsNoPeerCert TestNodeIdentityAdminIsTheEnrollments TestNodeIdentityMachineIsTheEnrollments TestNodeIdentityLoginCodeNamesItsLogin TestPeerCertOwnerOnlyShortAndAudited TestPeerCertLoginBoundOnBothEnds TestNodeAdminToken'
+  tests='TestNodeIdentityReReportGetsNoPeerCert TestNodeIdentityAdminIsTheEnrollments TestNodeIdentityMachineIsTheEnrollments TestNodeIdentityLoginCodeNamesItsLogin TestNodeIdentityReReportIsNotRoutedTo TestNodeIdentityOperatorJoinKeepsItsHostname TestPeerCertOwnerOnlyShortAndAudited TestPeerCertLoginBoundOnBothEnds TestNodeAdminToken'
   t0=$(now)
   for out in $tests; do
     grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
@@ -1156,11 +1158,34 @@ drill_node_identity_report_differs() {
     || { WHY="a node's admin role no longer reads the login it enrolled as"; return 1; }
   grep -q '"endpoints", "enrolled_user"' "$ROOT/tokenledger/hub/store/store.go" \
     || { WHY="endpoints.enrolled_user is gone"; return 1; }
+  grep -q 'routeHost, routeUser := s.routeSelf(ep, self)' "$ROOT/tokenledger/hub/api/nodes.go" \
+    || { WHY="a link is no longer routed to by the identity nodeSelf holds it to"; return 1; }
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
-    0) WHAT='成员设备改报别人的登录 / 机器（用量上报或心跳）领不到对等证书与中继；报管理员登录名不是管理员节点、不当刷新中继、不收开号；报 root 与别的机器名不替那台机器写入口、不领管理员座位令牌；开号加入码只认它的登录；真机器、真座位、本人两个登录照旧（go test 七条）' ;;
+    0) WHAT='成员设备改报别人的登录 / 机器（用量上报或心跳）领不到对等证书与中继，也不被挑来承载那个人的中继、聊天、终端、服务日志、svc、预览；报管理员登录名不是管理员节点、不当刷新中继、不收开号；报 root 与别的机器名不替那台机器写入口、不领管理员座位令牌；开号加入码只认它的登录；真机器、真座位、本人两个登录、运营者入册后改了名的机器照旧（go test 九条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
-    3) WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；九条测试按名核对在' ;;
+    3) WHAT='没有 go：九条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+  esac
+  SECS=$(since "$t0")
+}
+
+# ---- hub-forwarded-untrusted-peer (task MPCX): X-Forwarded-For / -Host /
+# -Proto are read only from a peer CCQUOTA_TRUSTED_PROXIES lists (or another
+# replica's hand-over); anyone else's are removed before any reader sees them.
+drill_hub_forwarded_untrusted_peer() {
+  CAP=120; local t0 out tests
+  tests='TestTrustedProxies TestForwardedTrust'
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+  done
+  grep -q 'CCQUOTA_TRUSTED_PROXIES' "$ROOT/tokenledger/hub/cmd/ccquota/hub.go" \
+    || { WHY="the hub no longer reads CCQUOTA_TRUSTED_PROXIES"; return 1; }
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
+    0) WHAT='列出的代理与副本转交照旧带来来源地址、主机与 https；别的对端带的 X-Forwarded-* 读之前删掉并计数；log 模式照旧读、只计数；不设与以前一样（go test 两条）' ;;
+    1) return 1 ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；两条测试按名核对在' ;;
+    3) WHAT='没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }
