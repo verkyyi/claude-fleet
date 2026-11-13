@@ -324,3 +324,104 @@ func TestNodeIdentityOperatorJoinKeepsItsHostname(t *testing.T) {
 		t.Fatalf("a trusted name it did not join as: %+v; want mac-a, held", id)
 	}
 }
+
+// (4) Routing reads the same identity (task MPCX): a member's device node that
+// re-reports another person's machine and login — with every relay
+// capability — is never the link that person's SSH relay, entry relay, chat,
+// terminal, service log, svc run or preview is carried over; the person's own
+// link on that machine is. The operator-enrolled renamed host keeps its
+// report (TestNodeIdentityOperatorJoinKeepsItsHostname) and is still routed
+// to under it.
+func TestNodeIdentityReReportIsNotRoutedTo(t *testing.T) {
+	h, _, n := peerHarness(t)
+	caps := []string{control.CapSSHRelay, control.CapEntryRelay, control.CapChat, control.CapTerm,
+		control.CapServiceLog, control.CapSvcRun, control.CapPreview}
+	relink := func(x *fleetNode, host, login string) {
+		t.Helper()
+		x.c.CloseNow()
+		x.tnode = dialHello(t, h, x.token, control.Hello{HeartbeatMS: 5000, Capabilities: caps, AttachmentGeneration: "gen-1"})
+		beat(t, x.c, control.Proto, control.Heartbeat{Hostname: host, OSUser: login})
+		waitFor(t, 3*time.Second, login+"@"+host+" relinked", func() bool {
+			c := h.srv.nodes.get(x.id)
+			r := h.srv.nodeRow(x.id)
+			return c != nil && c.canSSHRelay && r != nil && r.Hostname == host && r.OSUser == login
+		})
+	}
+	alice := sshRelayIdentity{Principal: pAlice}
+
+	bob := memberDeviceNode(t, h, pBob, "bob-mbp", "bob", false)
+	reReport(t, h, bob, "mac-e", "alice", true)
+	relink(bob, "mac-e", "alice")
+	if c := h.srv.nodes.get(bob.id); c.hostname() != "bob-mbp" || c.user() != "bob" {
+		t.Errorf("bob's device is routed to as %s@%s; want bob@bob-mbp", c.user(), c.hostname())
+	}
+
+	notBob := func(what, id string, err error) {
+		t.Helper()
+		if id == bob.id {
+			t.Errorf("%s for alice@mac-e picked bob's device (%v)", what, err)
+		}
+	}
+	pick := func() {
+		t.Helper()
+		id, _, err := h.srv.sshRelayNode(alice, "mac-e")
+		notBob("ssh relay", id, err)
+		id, _, err = h.srv.peerSSHRelayNode("mac-e", "alice")
+		notBob("peer ssh relay", id, err)
+		id, _, err = h.srv.entryRelayNode("mac-e", "alice")
+		notBob("entry relay", id, err)
+		id, _, err = h.srv.chatRelayNode("mac-e", "alice")
+		notBob("chat", id, err)
+		id, _, err = h.srv.termRelayNode("mac-e", "alice")
+		notBob("terminal", id, err)
+		id, _ = h.srv.svcLogLane("mac-e", "alice")
+		notBob("service log", id, nil)
+		for _, l := range h.srv.nodes.svcLanes(func(host, login string) bool { return host == "mac-e" && login == "alice" }) {
+			notBob("svc lane", l.id, nil)
+		}
+		id, _, err = h.srv.previewNode(store.Preview{Endpoint: bob.id, Machine: "mac-e", Login: "alice", TokenHash: HashToken(bob.token)})
+		notBob("preview", id, err)
+	}
+	// Alice's own link on mac-e is offline: nothing — bob's device is no stand-in.
+	n["alice5"].c.CloseNow()
+	waitFor(t, 3*time.Second, "alice's link gone", func() bool { return h.srv.nodes.get(n["alice5"].id) == nil })
+	pick()
+	if id, _, err := h.srv.chatRelayNode("mac-e", "alice"); err == nil {
+		t.Errorf("chat for alice@mac-e with her link down: %s; want none", id)
+	}
+
+	// Alice's own link back: it is the one picked.
+	relink(n["alice5"], "mac-e", "alice")
+	pick()
+	if id, _, err := h.srv.chatRelayNode("mac-e", "alice"); err != nil || id != n["alice5"].id {
+		t.Errorf("chat for alice@mac-e: %s %v; want her own link %s", id, err, n["alice5"].id)
+	}
+	if id, _, err := h.srv.peerSSHRelayNode("mac-e", "alice"); err != nil || id != n["alice5"].id {
+		t.Errorf("peer ssh relay for alice@mac-e: %s %v; want her own link %s", id, err, n["alice5"].id)
+	}
+
+	// Bob's device under its own name is still his.
+	if id, _, err := h.srv.chatRelayNode("bob-mbp", "bob"); err != nil || id != bob.id {
+		t.Errorf("chat for bob@bob-mbp: %s %v; want his device %s", id, err, bob.id)
+	}
+
+	// His laptop renamed to a name nothing else holds: its sessions are
+	// listed under the new name, and it is routed to under it — as bob.
+	reReport(t, h, bob, "bob-mbp-2", "bob", false)
+	waitFor(t, 3*time.Second, "routed as bob@bob-mbp-2", func() bool {
+		c := h.srv.nodes.get(bob.id)
+		return c != nil && c.hostname() == "bob-mbp-2" && c.user() == "bob"
+	})
+	if id, _, err := h.srv.chatRelayNode("bob-mbp-2", "bob"); err != nil || id != bob.id {
+		t.Errorf("chat for bob@bob-mbp-2: %s %v; want his device %s", id, err, bob.id)
+	}
+	// ... but a renamed laptop never takes another login with it.
+	reReport(t, h, bob, "bob-mbp-2", "alice", false)
+	waitFor(t, 3*time.Second, "the login held", func() bool {
+		c := h.srv.nodes.get(bob.id)
+		return c != nil && c.user() == "bob"
+	})
+	if id, _, err := h.srv.chatRelayNode("bob-mbp-2", "alice"); err == nil && id == bob.id {
+		t.Errorf("chat for alice@bob-mbp-2 picked bob's device")
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,6 +121,14 @@ type Server struct {
 	// hosts a trusted edge forwards in X-Forwarded-Host ("*.<suffix>" allowed);
 	// empty takes no forwarded host.
 	ForwardedHosts []string
+	// TrustedProxies is CCQUOTA_TRUSTED_PROXIES (task MPCX, edge.go): the
+	// peers whose X-Forwarded-* the hub reads; empty reads every peer's, as
+	// before. TrustedProxiesLogOnly (CCQUOTA_TRUSTED_PROXIES_MODE=log) keeps
+	// reading every peer's and only counts the others.
+	TrustedProxies        []netip.Prefix
+	TrustedProxiesLogOnly bool
+	// untrusted counts X-Forwarded-* from peers outside TrustedProxies.
+	untrusted untrustedForwarded
 	// Optional human portal; machine addresses stay separate.
 	PortalURL       string   // CCQUOTA_PORTAL: optional canonical human HTTPS origin
 	PortalAliases   []string // exact legacy browser hosts; never preview wildcards

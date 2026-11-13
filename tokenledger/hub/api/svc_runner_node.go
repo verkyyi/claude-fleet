@@ -150,8 +150,16 @@ func (r *NodeSvcRunner) allLanes(allowed func(host, login string) bool) []svcLan
 		if held[id] || !ok || !pc.HasCap(control.CapSvcRun) || !control.Compatible(n.Proto) {
 			continue
 		}
-		if n.Hostname != "" && n.OSUser != "" && allowed(n.Hostname, n.OSUser) {
-			out = append(out, svcLane{id: id, peer: &pc, host: n.Hostname, login: n.OSUser})
+		// The roster row is the node's own word; a lane is the machine and
+		// login it is routed to by (task MPCX, routeSelf), as on this replica.
+		host, login := n.Hostname, n.OSUser
+		if ep, err := s.Store.EndpointByID(id); err == nil {
+			host, login = s.routeSelf(ep, s.nodeSelfFrom(ep, host, login))
+		} else {
+			continue
+		}
+		if host != "" && login != "" && allowed(host, login) {
+			out = append(out, svcLane{id: id, peer: &pc, host: host, login: login})
 		}
 	}
 	return out

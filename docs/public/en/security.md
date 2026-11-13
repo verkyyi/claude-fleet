@@ -13,7 +13,7 @@ On a managed machine, the Claude Code and Codex subscription credentials sit und
 
 **Can anyone else get into my workspace? The other members on the same machine cannot.** (live)
 Each person is their own system account on the machine, with a home directory of mode `700`; sessions run in that account, so one person's sessions cannot read another's files, keys or sessions. The certificate that connects into your account is signed by the hub for your sign-in only; the entry port accepts only the keys the hub registered for you.
-The exception, said plainly: **the machine's administrator (anyone with root or sudo) can see everything on that machine** — as on any shared server. So personal accounts on managed machines never have administrator rights, and every hosted customer has a hub of its own, shared with no one else.
+The exception, said plainly: **the machine's administrator (anyone with root or sudo) can see everything on that machine** — as on any shared server. The same holds one level up: the hub signs the certificates every machine accepts, so whoever controls the hub can reach every login on the machines it manages. So personal accounts on managed machines never have administrator rights, and every hosted customer has a hub of its own, shared with no one else.
 
 ## Three principles
 
@@ -44,8 +44,9 @@ A session runs the agent and also third-party code it pulls in (npm packages, MC
 | Relay pass | The login (under the role account in a separated login) | Not in a separated login | 4 hours (when the hub has a relay signing key configured; a hub without one issues the old non-expiring pass, and gate 7 reads red) | Revocation list, effective at once | live · gate 7 |
 | Machine identity, a login's node token | The node daemon / the role account | No | Long-lived; presented as a signature with its own key, never a string that could be copied | The hub revokes the whole machine or that login | live |
 | Connection certificate (for a person connecting in) | The person's own computer | Not by sessions on managed machines | 12 hours, renewed automatically; 5 minutes between machines | Revocation list | live; "renew only when less than 20% is left before connecting" is planned |
-| Hub web sign-in | The person's browser | No | 7 days | The hub revokes all of a person's at once | live; shortening to 24 hours with a sliding renewal on use is planned |
-| Release signing private key | In the hub today | No | Long-lived, rotated yearly | A revocation signed with the offline root key | moving it into the release pipeline and adding an offline root key is planned · gate 1 |
+| Hub web sign-in | The person's browser | No | 24 hours, renewed while in use (once less than 20% is left) | The hub revokes all of a person's at once | live |
+| Release signing private key | The release pipeline only (a protected environment of its CI); a hub holds only the public keys | No | Long-lived, rotated yearly | A revocation signed with the offline root key | live · gate 1 |
+| SSH user certificate authority | The hub (a key file mounted from its own secret) | No | Long-lived | Replacing the key on the hub and on every machine | live |
 
 **Revocation takes effect at once, even with the hub away.** (live · gate 6) The hub pushes the revocation list to the relay and to every machine's entry port, which keep it locally and check only that local copy on every request; a revoked pass or certificate stops working at once even if it has not expired. If the hub goes down, the relay and the doors keep verifying against the list they hold, and short-lived credentials already issued keep working.
 
@@ -60,7 +61,8 @@ A session runs the agent and also third-party code it pulls in (npm packages, MC
 | The admin program | Hold up or refuse account creation and removal on that machine | Create or remove any account without an order the hub signed | The people on that machine waiting for an account to be created or removed |
 | The credential proxy | The few subscription accounts it holds | Anyone's home directory or keys, root | People using those subscriptions (their quota used by someone else); the hub swapping the accounts stops it |
 | The root core | Everything on that machine | — | Everyone on that machine — which is why it is off the network, minimal, and accepts only a fixed table |
-| The release signing private key | The equivalent of root on every machine | — | Everyone — which is why it is moving out of the hub and into the release pipeline only (gate 1, planned) |
+| The hub | Every login on every machine it manages: it holds the SSH certificate authority each machine's sshd trusts, and it starts sessions, issues passes, and holds the subscription credentials in its credential store | Make a version the machines install — the release signing key is not on the hub (gate 1) | Everyone on every machine it manages — which is why every hosted customer has a hub of its own |
+| The release signing private key | The equivalent of root on every machine | — | Everyone — which is why it lives only in the release pipeline, and the offline root key can revoke it (gate 1) |
 
 ## What the hub records, and who can see it
 
@@ -72,7 +74,7 @@ Each machine's entry port also records every entry: which login, from where, wit
 
 When you talk to your conversation at the site's `/chat`, the model is told what you are using right now: the kind of device (phone / tablet / computer), its system, the browser, the page language, how wide the screen is, your local time and time zone, and the rough city your IP address is in (the city only) — one line at the start of the conversation, and another only when the device, the city or the day changes. The full IP address, browser identifier and network type are given only when the model asks for them with its `browser_context` tool, and only within your own conversation.
 
-The address and the city are what the hub saw, worked out from an offline database on the hub — no outside service is asked. None of it is written to a log; it stays in your own conversation's record.
+The address and the city are what the hub saw, worked out from an offline database on the hub — no outside service is asked. The chat writes none of it to a log; it stays in your own conversation's record. (The hub's request log records the address of a refused request — a 401 or 403 — and nothing else about it.)
 
 ## Reporting a security problem
 
