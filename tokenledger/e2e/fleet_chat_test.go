@@ -415,3 +415,36 @@ func chatCode(t *testing.T, resp *http.Response) string {
 	_ = json.Unmarshal(b, &v)
 	return v.Code
 }
+
+// The hub's origin carries only what a chat route returns: a page (or any
+// type the route never answers with) from the home is a 502, never relayed;
+// a JSON answer goes through with nosniff.
+func TestChatRelayRefusesOtherTypes(t *testing.T) {
+	h, svc, host, login := chatHarness(t)
+	setChatHome(t, h, pAlice, host, login)
+	alice := personCookie(pAlice, "alice")
+	for _, c := range []struct {
+		ct   string
+		want int
+	}{
+		{"text/html; charset=utf-8", http.StatusBadGateway},
+		{"application/javascript", http.StatusBadGateway},
+		{"application/json", http.StatusOK},
+	} {
+		svc.mu.Lock()
+		svc.conversation = func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", c.ct)
+			io.WriteString(w, `<script>parent.x=1</script>`)
+		}
+		svc.mu.Unlock()
+		r := chatDo(t, h, "GET", "/v1/chat/conversation", alice, nil, "")
+		b, _ := io.ReadAll(r.Body)
+		r.Body.Close()
+		if r.StatusCode != c.want || r.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: %d nosniff=%q %s; want %d", c.ct, r.StatusCode, r.Header.Get("X-Content-Type-Options"), b, c.want)
+		}
+		if c.want != http.StatusOK && strings.Contains(string(b), "<script>") {
+			t.Errorf("%s: the body was relayed: %s", c.ct, b)
+		}
+	}
+}

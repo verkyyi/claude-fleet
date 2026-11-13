@@ -188,6 +188,9 @@ RENEW_NAMESPACE = "fleet-renew@claude-fleet"
 # 登录即登记 (claude-fleet#2212): the device key buys the node pass.
 LOGIN_NODE_PATH = "/v1/fleet/login/node"
 LOGIN_NODE_NAMESPACE = "fleet-login-node@claude-fleet"
+# A login's start is signed by the key it registers: the hub then lets the
+# confirmation move a key that was revoked or registered to someone else.
+LOGIN_START_NAMESPACE = "fleet-login-start@claude-fleet"
 # Exit code: the hub has no login-node door (or refuses the name) — scan instead.
 NO_DOOR = 4
 # The renewal's check (claude-fleet#2112): the client lease, as fleet-client-lease.py asks it.
@@ -982,6 +985,14 @@ def scan(hub, invert, purpose="", qr=False):
     invite = pending_invite()
     if invite:
         body["invite"] = invite
+    ts = int(time.time())
+    try:
+        body["sig"] = subprocess.run(["ssh-keygen", "-Y", "sign", "-f", KEY, "-n", LOGIN_START_NAMESPACE],
+                                     input=("fleet-login-start %d" % ts).encode(), capture_output=True,
+                                     check=True).stdout.decode()
+        body["ts"] = ts
+    except (OSError, subprocess.CalledProcessError):
+        pass  # tolerant by design: an unsigned start is what an older client sends
     try:
         code, st = post(hub + "/v1/fleet/login/start", body)
     except (urllib.error.URLError, OSError) as e:

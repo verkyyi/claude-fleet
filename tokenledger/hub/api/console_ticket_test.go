@@ -214,6 +214,10 @@ func TestConsoleTicketRefusesEveryWrite(t *testing.T) {
 			}
 		}
 	}
+	// a file with no session named: refused before the route (a ref alone reads nothing)
+	if code, b := viewAsDo(t, h, ro, http.MethodGet, ChatPathPrefix+"file?ref=x", ""); code != http.StatusForbidden || !strings.Contains(string(b), "只读票据") {
+		t.Errorf("ticket GET file without worker = %d %s; want the read-only 403", code, b)
+	}
 	// a ticket session that names no session (minted before it carried one) reads none along
 	bare := &http.Cookie{Name: authz.CookieName, Value: authz.SignReadOnly(store.IdentityGitHub, pAlice, "alice", roleUser, h.srv.sessionKey(), time.Now(), time.Hour)}
 	if code, b := viewAsDo(t, h, bare, http.MethodGet, ChatPathPrefix+"view?worker="+url.QueryEscape(own[0]), ""); code != http.StatusForbidden {
@@ -300,5 +304,61 @@ func TestConsoleTicketRefusals(t *testing.T) {
 	}
 	if _, _, in := h.srv.personSessionValue(ro.Value); in {
 		t.Error("a read-only ticket's value works as a bearer")
+	}
+}
+
+// A browser already signed in keeps its sign-in: the same person's ticket is
+// spent and opens on the full session, no cookie set; another person's ticket
+// is refused with nothing spent, so it still opens in a clean browser.
+func TestConsoleTicketKeepsASignedInBrowser(t *testing.T) {
+	h, admin, user := rolesHarness(t)
+	tok, a := ticketNode(t, h, "alicebox-t", "alicebox", aliceLogin, "acct-b")
+	open := func(path string, c *http.Cookie) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, h.http.URL+path, nil)
+		req.AddCookie(c)
+		resp, err := noFollow.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	setsSession := func(resp *http.Response) bool {
+		for _, c := range resp.Cookies() {
+			if c.Name == authz.CookieName {
+				return true
+			}
+		}
+		return false
+	}
+
+	_, tk, raw := ticketAsk(t, h, tok, a, map[string]any{"next": "/app/sessions"})
+	if tk.Path == "" {
+		t.Fatalf("ticket: %s", raw)
+	}
+	// alice's own browser: opens on her session, ticket spent
+	resp := open(tk.Path, user)
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/app/sessions" || setsSession(resp) {
+		t.Fatalf("own browser open = %d %q cookie=%v; want the page, no cookie", resp.StatusCode, resp.Header.Get("Location"), setsSession(resp))
+	}
+	if loc, again := ticketOpen(t, h, tk.Path); again != nil || !strings.Contains(loc, "/signin") {
+		t.Errorf("after the own-browser open = %q %v; want spent", loc, again)
+	}
+	if code, _ := viewAsDo(t, h, user, http.MethodGet, "/v1/me", ""); code != http.StatusOK {
+		t.Errorf("alice's session after the ticket = %d; want still signed in", code)
+	}
+
+	// another person's browser: refused, nothing spent, their cookie untouched
+	_, tk2, raw := ticketAsk(t, h, tok, a, nil)
+	if tk2.Path == "" {
+		t.Fatalf("ticket: %s", raw)
+	}
+	resp = open(tk2.Path, admin)
+	if resp.StatusCode != http.StatusConflict || setsSession(resp) {
+		t.Fatalf("other person's browser open = %d cookie=%v; want 409, no cookie", resp.StatusCode, setsSession(resp))
+	}
+	if _, ro := ticketOpen(t, h, tk2.Path); ro == nil {
+		t.Errorf("the refused ticket did not open in a clean browser")
 	}
 }

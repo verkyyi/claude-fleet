@@ -52,6 +52,16 @@
 #                  by another key, a hub that stops serving releases → refused:
 #                  nothing staged, the home untouched, one line saying why, the
 #                  next start says it again (not 「后台取」), update.state failed
+#   M. served      (fc_served, fleet-client-lib.sh) against the same signing hub
+#                  and a fake curl: the staged version keeps its verified tree
+#                  (.release-tree: the manifest + the bin/ files it does not
+#                  install) and a served file comes from it, no download and no
+#                  hub; pinned, no kept tree: a download matching the hub's
+#                  signed manifest → in place (installed.list), other bytes (a
+#                  matching header or not), a path the manifest lacks, a
+#                  release signed by another key, a hub with no releases →
+#                  refused, nothing left; no key: the header matching → in
+#                  place, a missing or other header → refused
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -288,6 +298,9 @@ else
     > "$RH/rel/$S1/tokenledger/hub/api/fleetclient/manifest"
   mkdir -p "$RH/rel/$S1/.release"
   printf '{"schema": 1, "sha": "%s", "prev": "", "seq": 7, "artifacts": []}\n' "$S1" > "$RH/rel/$S1/.release/manifest.json"
+  # served only (fc_served, leg M): in the release, never installed
+  printf '#!/bin/sh\necho SERVED-A\n' > "$RH/rel/$S1/bin/fleet-served-a.sh"
+  chmod +x "$RH/rel/$S1/bin/fleet-served-a.sh"
   printf '%s\n' "$S1" > "$RH/rel/stable"
   # a hostile /install: anything that runs it leaves a mark
   printf '#!/bin/sh\ntouch "%s/hostile-ran"\nexit 1\n' "$WORK" > "$RH/install"
@@ -363,6 +376,94 @@ else
     [ "$rc" = 0 ] && cmp -s "$RH/key" "$CONF/release.pub" && grep -q SIGNED "$ROOT.versions/$S1/bin/fleet" \
       && st_ok_all "L no key yet: the hub's taken once, the release checked against it" \
       || st_miss "L first pin: rc=$rc err=$(cat "$WORK/err") pub=$(cat "$CONF/release.pub" 2>&1)"
+
+    # --- M. served: the kept verified tree, else the signed manifest ----------
+    FCSRV="$WORK/fcsrv"; FCB="$WORK/fcbin"; mkdir -p "$FCSRV" "$FCB"
+    cat > "$FCB/curl" <<'SH'
+#!/bin/sh
+# a fake curl: <url>'s path under $FCSRV, the header as a hub sends it
+hdr='' out='' url=''
+while [ $# -gt 0 ]; do
+  case $1 in -D) hdr=$2; shift 2 ;; -o) out=$2; shift 2 ;; --connect-timeout|--max-time) shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac
+done
+printf '%s\n' "$url" >> "$FCSRV.log"
+p=${url#*://}; f="$FCSRV/${p#*/}"
+[ -f "$f" ] || exit 22
+cp "$f" "$out"
+s=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$f")
+[ -e "$FCSRV/.badhdr" ] && s=0000000000000000000000000000000000000000000000000000000000000000
+if [ -e "$FCSRV/.nohdr" ]; then printf 'HTTP/1.1 200 OK\r\n\r\n' > "$hdr"
+else printf 'HTTP/1.1 200 OK\r\nX-Ccquota-Sha256: %s\r\n\r\n' "$s" > "$hdr"; fi
+SH
+    chmod +x "$FCB/curl"
+    fcs() {   # <root> <path> — fc_served through the fake curl; "rc=<n> <FC_WHY>"
+      : > "$FCSRV.log"; : > "$RH/hub.log"
+      PATH="$FCB:$PATH" FCSRV="$FCSRV" sh -c '. "$1/fleet-client-lib.sh"; fc_served "$2" "$3"; echo "rc=$? $FC_WHY"' _ "$BIN" "$1" "$2" 2>&1
+    }
+    SA="$RH/rel/$S1/bin/fleet-served-a.sh"
+    # the staged version kept its verified tree: taken from it, no download, no hub
+    KV="$ROOT.versions/$S1"
+    if [ -f "$KV/.release-tree/.release/manifest.json" ] && cmp -s "$KV/.release-tree/bin/fleet-served-a.sh" "$SA" \
+       && [ ! -e "$KV/.release-tree/bin/fleet" ] && [ ! -e "$KV/.release-tree/tokenledger" ] && [ ! -e "$KV/bin/fleet-served-a.sh" ]; then
+      st_ok_all "M the staged version keeps the verified tree's manifest + the bin/ files it does not install"
+    else st_miss "M kept tree: $(cd "$KV" 2>/dev/null && find .release-tree -maxdepth 2 2>&1 | tr '\n' ' ')"; fi
+    : > "$KV/installed.list"
+    out=$(fcs "$KV" bin/fleet-served-a.sh)
+    if [ "$out" = "rc=0 " ] && cmp -s "$KV/bin/fleet-served-a.sh" "$SA" && [ -x "$KV/bin/fleet-served-a.sh" ] \
+       && [ ! -s "$FCSRV.log" ] && [ ! -s "$RH/hub.log" ] && grep -q '^bin/fleet-served-a.sh	' "$KV/installed.list"; then
+      st_ok_all "M kept tree: the served file taken from it — no download, nothing asked of the hub, on installed.list"
+    else st_miss "M kept tree: $out curl=$(tr '\n' ' ' < "$FCSRV.log") hub=$(tr '\n' ' ' < "$RH/hub.log")"; fi
+    # no kept tree: a client the install line put in (version + hub, the checker)
+    FR="$WORK/fcroot"
+    fcroot() {
+      rm -rf "$FR"; mkdir -p "$FR/bin"; cp "$BIN/fleet-release-fetch.py" "$BIN/fleet-release-verify.py" "$FR/bin/"
+      printf 'version=%s\ncompat=1\ncommit=%.7s\nhub=%s\n' "$S1" "$S1" "$RHUB" > "$FR/.client-version"; : > "$FR/installed.list"
+      rm -rf "${FCSRV:?}"/* "$FCSRV"/.nohdr "$FCSRV"/.badhdr; mkdir -p "$FCSRV/install/stable/$S1/bin"
+    }
+    nothing_left() { [ ! -e "$FR/bin/$1" ] && [ -z "$(find "$FR/bin" -name '*.fetch.*')" ]; }
+    cp "$RH/key" "$CONF/release.pub"
+    fcroot; cp "$SA" "$FCSRV/install/stable/$S1/bin/"
+    out=$(fcs "$FR" bin/fleet-served-a.sh)
+    if [ "$out" = "rc=0 " ] && cmp -s "$FR/bin/fleet-served-a.sh" "$SA" && grep -q "^/v1/fleet/release/$S1" "$RH/hub.log" \
+       && grep -q '^bin/fleet-served-a.sh	' "$FR/installed.list"; then
+      st_ok_all "M pinned: a download matching the hub's signed manifest → in place, on installed.list"
+    else st_miss "M pinned ok: $out hub=$(tr '\n' ' ' < "$RH/hub.log")"; fi
+    fcroot; printf '#!/bin/sh\necho OTHER\n' > "$FCSRV/install/stable/$S1/bin/fleet-served-a.sh"
+    out=$(fcs "$FR" bin/fleet-served-a.sh)
+    case $out in "rc=1 取不到 bin/fleet-served-a.sh"*"已签名发布清单"*) nothing_left fleet-served-a.sh \
+      && st_ok_all "M pinned: other bytes (their own header matching) → refused, nothing left: ${out#rc=1 }" || st_miss "M pinned mismatch left files" ;;
+      *) st_miss "M pinned mismatch: $out" ;; esac
+    fcroot; printf '#!/bin/sh\necho NEW\n' > "$FCSRV/install/stable/$S1/bin/fleet-unreleased.sh"
+    out=$(fcs "$FR" bin/fleet-unreleased.sh)
+    case $out in "rc=1 已签名的发布"*"里没有 bin/fleet-unreleased.sh"*) nothing_left fleet-unreleased.sh && [ ! -s "$FCSRV.log" ] \
+      && st_ok_all "M pinned: a path the signed manifest lacks → refused before any download" || st_miss "M not in manifest: downloaded or left files" ;;
+      *) st_miss "M not in manifest: $out" ;; esac
+    fcroot; cp "$SA" "$FCSRV/install/stable/$S1/bin/"; : > "$RH/badsig"
+    out=$(fcs "$FR" bin/fleet-served-a.sh); rm -f "$RH/badsig"
+    case $out in "rc=1 核对不了 bin/fleet-served-a.sh"*) nothing_left fleet-served-a.sh && [ ! -s "$FCSRV.log" ] \
+      && st_ok_all "M pinned: a manifest signed by another key → refused, nothing downloaded" || st_miss "M badsig: downloaded or left files" ;;
+      *) st_miss "M badsig: $out" ;; esac
+    fcroot; cp "$SA" "$FCSRV/install/stable/$S1/bin/"; : > "$RH/nostore"
+    out=$(fcs "$FR" bin/fleet-served-a.sh); rm -f "$RH/nostore"
+    case $out in "rc=1 核对不了 bin/fleet-served-a.sh"*) nothing_left fleet-served-a.sh \
+      && st_ok_all "M pinned: no signed manifest to be had → refused: ${out#rc=1 }" || st_miss "M nostore left files" ;;
+      *) st_miss "M nostore: $out" ;; esac
+    # no key pinned: the hub's header, required
+    rm -f "$CONF/release.pub"
+    fcroot; cp "$SA" "$FCSRV/install/stable/$S1/bin/"
+    out=$(fcs "$FR" bin/fleet-served-a.sh)
+    [ "$out" = "rc=0 " ] && cmp -s "$FR/bin/fleet-served-a.sh" "$SA" && [ ! -s "$RH/hub.log" ] \
+      && st_ok_all "M no key: the header matching → in place (no release asked for)" || st_miss "M unpinned ok: $out"
+    fcroot; cp "$SA" "$FCSRV/install/stable/$S1/bin/"; : > "$FCSRV/.nohdr"
+    out=$(fcs "$FR" bin/fleet-served-a.sh)
+    case $out in "rc=1 取不到 bin/fleet-served-a.sh"*"X-Ccquota-Sha256"*) nothing_left fleet-served-a.sh \
+      && st_ok_all "M no key: no X-Ccquota-Sha256 → refused, nothing left" || st_miss "M nohdr left files" ;;
+      *) st_miss "M nohdr: $out" ;; esac
+    fcroot; cp "$SA" "$FCSRV/install/stable/$S1/bin/"; : > "$FCSRV/.badhdr"
+    out=$(fcs "$FR" bin/fleet-served-a.sh)
+    case $out in "rc=1 取不到 bin/fleet-served-a.sh"*"对不上"*) nothing_left fleet-served-a.sh \
+      && st_ok_all "M no key: a header naming other bytes → refused, nothing left" || st_miss "M badhdr left files" ;;
+      *) st_miss "M badhdr: $out" ;; esac
   fi
   kill "$RELHUB_PID" 2>/dev/null; RELHUB_PID=''
 fi

@@ -325,6 +325,19 @@ func (s *Server) handleConsoleTicket(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodHead {
 		return // a link preview spends nothing
 	}
+	// A browser already signed in keeps its sign-in: the ticket's read-only
+	// session never replaces a full one. The same person's is the more
+	// capable of the two — the ticket is spent and the page opens on it;
+	// another person's is refused, the ticket left for another browser.
+	full, fullPID, signedIn := s.personSession(r)
+	if signedIn && full.RO {
+		signedIn = false
+	}
+	if signedIn && fullPID != c.Person {
+		s.auditConsoleTicket(c, "refused:browser signed in as another person", now)
+		httpError(w, http.StatusConflict, "this browser is signed in as another person: open the link in a browser (or private window) that is not signed in")
+		return
+	}
 	spent, err := s.Store.SpendSigNonce(consoleTicketNonceKey, c.ID, now, consoleTicketTTL+time.Minute)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "could not read the ticket")
@@ -344,6 +357,11 @@ func (s *Server) handleConsoleTicket(w http.ResponseWriter, r *http.Request) {
 	if (role != roleUser && role != roleAdmin) || sub == "" {
 		s.auditConsoleTicket(c, "refused:not on the list", now)
 		http.Redirect(w, r, appURL("/signin")+"?e=expired", http.StatusFound)
+		return
+	}
+	if signedIn {
+		s.auditConsoleTicket(c, "OK on the browser's own sign-in "+c.Next, now)
+		http.Redirect(w, r, c.Next, http.StatusFound)
 		return
 	}
 	ttl := time.Duration(c.TTLSec) * time.Second

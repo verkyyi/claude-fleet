@@ -110,26 +110,72 @@ func TestChatGateBounds(t *testing.T) {
 // A relayed answer on the hub's origin: the service's cookies dropped, never
 // sniffed, a file or a session view sandboxed whatever the service sent.
 func TestChatRelayHeaders(t *testing.T) {
-	for _, sandbox := range []bool{false, true} {
-		resp := &http.Response{Header: http.Header{}}
+	for _, route := range []string{"conversation", "file", chatViewRoute} {
+		sandbox := route != "conversation"
+		resp := &http.Response{Header: http.Header{}, StatusCode: http.StatusOK, ContentLength: -1}
 		resp.Header.Add("Set-Cookie", "a=1; Path=/")
 		resp.Header.Add("Set-Cookie", "b=2; Path=/")
 		resp.Header.Set("X-Content-Type-Options", "")
 		resp.Header.Set("Content-Security-Policy", "default-src *")
-		resp.Header.Set("Content-Type", "image/png")
-		chatRelayHeaders(resp, sandbox)
-		if v := resp.Header.Values("Set-Cookie"); len(v) != 0 {
-			t.Errorf("sandbox=%v: Set-Cookie kept %q", sandbox, v)
+		resp.Header.Set("Content-Type", "application/json; charset=utf-8")
+		if err := chatRelayHeaders(resp, route); err != nil {
+			t.Errorf("%s: %v", route, err)
 		}
-		if resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Content-Type") != "image/png" {
-			t.Errorf("sandbox=%v: headers %v", sandbox, resp.Header)
+		if v := resp.Header.Values("Set-Cookie"); len(v) != 0 {
+			t.Errorf("%s: Set-Cookie kept %q", route, v)
+		}
+		if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: headers %v", route, resp.Header)
 		}
 		want := "default-src *"
 		if sandbox {
 			want = chatRelaySandbox
 		}
 		if got := resp.Header.Get("Content-Security-Policy"); got != want {
-			t.Errorf("sandbox=%v: CSP %q; want %q", sandbox, got, want)
+			t.Errorf("%s: CSP %q; want %q", route, got, want)
+		}
+	}
+}
+
+// Only the types a route returns cross onto the hub's origin: JSON, NDJSON
+// and event streams everywhere, any type for a (sandboxed) file; anything
+// else — a page, a script, an unnamed body — is refused.
+func TestChatRelayTypes(t *testing.T) {
+	for _, c := range []struct {
+		route, ct string
+		status    int
+		length    int64
+		ok        bool
+	}{
+		{"conversation", "application/json; charset=utf-8", 200, -1, true},
+		{"turn", "application/x-ndjson; charset=utf-8", 200, -1, true},
+		{"warm", "text/event-stream", 200, -1, true},
+		{chatViewRoute, "text/event-stream; charset=utf-8", 200, -1, true},
+		{"studio/open", "text/html; charset=utf-8", 200, -1, false},
+		{"migration", "text/html", 200, -1, false},
+		{"warm", "application/javascript", 200, -1, false},
+		{"conversation", "image/svg+xml", 200, -1, false},
+		{chatViewRoute, "text/html", 200, -1, false},
+		{"conversation", "", 200, -1, false},
+		{"conversation", "", 200, 0, true},
+		{"stop", "", http.StatusNoContent, -1, true},
+		{"conversation", "not a type;;", 200, -1, false},
+		{"file", "image/png", 200, -1, true},
+		{"file", "text/html", 200, -1, true}, // under chatRelaySandbox
+	} {
+		resp := &http.Response{Header: http.Header{}, StatusCode: c.status, ContentLength: c.length}
+		if c.ct != "" {
+			resp.Header.Set("Content-Type", c.ct)
+		}
+		err := chatRelayHeaders(resp, c.route)
+		if (err == nil) != c.ok {
+			t.Errorf("%s %q (%d): err %v; want ok=%v", c.route, c.ct, c.status, err, c.ok)
+		}
+		if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s %q: no nosniff", c.route, c.ct)
+		}
+		if c.route == "file" && resp.Header.Get("Content-Security-Policy") != chatRelaySandbox {
+			t.Errorf("file %q: CSP %q", c.ct, resp.Header.Get("Content-Security-Policy"))
 		}
 	}
 }
