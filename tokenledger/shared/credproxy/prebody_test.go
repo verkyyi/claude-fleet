@@ -176,21 +176,34 @@ func TestAnthropicAllowList(t *testing.T) {
 		}
 	}
 
-	// Log only (the default): an off-list request goes on, marked on its audit line.
+	// Log only (the default): an off-list request goes on, marked on its audit
+	// line. Served in this goroutine: the audit line is written after the answer
+	// has gone out, so only a returned ServeHTTP says it is there.
 	h := newHarness(t, false, nil)
 	h.hub.set(func() { h.hub.bind[PassPrefix+"a"] = "acct" })
-	if st, _ := h.do(t, "/v1/proxy/anthropic/v1/messages/batches", PassPrefix+"a", `{}`, nil); st != 200 {
-		t.Fatalf("log only: %d; want 200", st)
+	auditOf := func(path string) map[string]any {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		r.Header.Set("Authorization", "Bearer "+PassPrefix+"a")
+		w := httptest.NewRecorder()
+		h.mu.Lock()
+		n := len(h.audit)
+		h.mu.Unlock()
+		h.p.Handler().ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s: %d %s; want 200", path, w.Code, w.Body)
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if len(h.audit) != n+1 {
+			t.Fatalf("%s: %d audit lines; want one", path, len(h.audit)-n)
+		}
+		var m map[string]any
+		_ = json.Unmarshal([]byte(h.audit[n]), &m)
+		return m
 	}
-	if st, _ := h.do(t, "/v1/proxy/anthropic/v1/messages", PassPrefix+"a", `{}`, nil); st != 200 {
-		t.Fatalf("on the list: %d", st)
-	}
-	h.mu.Lock()
-	lines := append([]string(nil), h.audit...)
-	h.mu.Unlock()
-	var off, on map[string]any
-	_ = json.Unmarshal([]byte(lines[len(lines)-2]), &off)
-	_ = json.Unmarshal([]byte(lines[len(lines)-1]), &on)
+	off := auditOf("/v1/proxy/anthropic/v1/messages/batches")
+	on := auditOf("/v1/proxy/anthropic/v1/messages")
 	if off["would_refuse"] == nil || on["would_refuse"] != nil {
 		t.Fatalf("audit: off %v / on %v", off["would_refuse"], on["would_refuse"])
 	}
