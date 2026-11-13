@@ -31,7 +31,7 @@
 // x-api-key dropped; Codex: Authorization + chatgpt-account-id overwritten;
 // DeepSeek: Authorization dropped, x-api-key set);
 // the body passes byte for byte; the response streams chunk by chunk; a
-// refusal reads the request body first; a permanent refusal (a forged /
+// refusal before the body is read closes the connection; a permanent refusal (a forged /
 // expired / revoked pass, no account) is a 403, which neither client retries;
 // only a hub that cannot answer is a 503. Every request is one audit line —
 // principal, worker_id, account, status, bytes — never a header or a body.
@@ -93,6 +93,16 @@ const oauthBeta = "oauth-2025-04-20"
 
 // maxBody bounds one request body (a long conversation with images).
 const maxBody = 64 << 20
+
+// refusedDrain is the most of an unread body a refusal reads before it answers.
+// A refusal before the body is read closes the connection (Connection: close),
+// so the rest is never parsed as a next request (issue #1912).
+const refusedDrain = 64 << 10
+
+// bodyReadTimeout bounds reading one body. The server has no ReadTimeout — net/http
+// cancels a request's context when the connection's read deadline passes, which
+// would cut a stream that outlives it — so the deadline is set around the read only.
+const bodyReadTimeout = 5 * time.Minute
 
 // Resolution is the hub's answer for one pass + provider (api.CredProxyResolve).
 type Resolution struct {
@@ -215,7 +225,14 @@ type Config struct {
 	// the Bedrock fallback (task PNWW) — a test seam, or an operator's own
 	// endpoint. Whether a request falls back at all is the hub's answer.
 	BedrockURL string
+	// AnthropicAllow is what a /v1/proxy/anthropic/ request off AnthropicAllowSpec
+	// meets (CCQUOTA_CREDPROXY_ANTHROPIC_ALLOW): AnthropicAllowEnforce refuses it
+	// (403); anything else lets it through with would_refuse on its audit line.
+	AnthropicAllow string
 }
+
+// AnthropicAllowEnforce is the AnthropicAllow that refuses (default: log only).
+const AnthropicAllowEnforce = "enforce"
 
 // Proxy is the handler.
 type Proxy struct {
@@ -429,9 +446,18 @@ func (p *Proxy) Handler() http.Handler {
 // same line (TestCodexAllowMatchesPython).
 const CodexAllowSpec = "POST responses, POST responses/compact, POST alpha/search, GET models"
 
-var codexAllow = func() map[string]map[string]bool {
+var codexAllow = parseAllowSpec(CodexAllowSpec)
+
+// AnthropicAllowSpec is what a session reaches under /v1/proxy/anthropic/: the
+// requests Claude Code and fleet's own callers make. Off the list is logged
+// (would_refuse) unless Config.AnthropicAllow is AnthropicAllowEnforce.
+const AnthropicAllowSpec = "POST v1/messages, POST v1/messages/count_tokens, GET api/hello"
+
+var anthropicAllow = parseAllowSpec(AnthropicAllowSpec)
+
+func parseAllowSpec(spec string) map[string]map[string]bool {
 	m := map[string]map[string]bool{}
-	for _, e := range strings.Split(CodexAllowSpec, ",") {
+	for _, e := range strings.Split(spec, ",") {
 		f := strings.Fields(e)
 		if m[f[1]] == nil {
 			m[f[1]] = map[string]bool{}
@@ -439,26 +465,34 @@ var codexAllow = func() map[string]map[string]bool {
 		m[f[1]][f[0]] = true
 	}
 	return m
-}()
+}
 
 // codexRefused says why a /v1/proxy/codex/ request is refused, or "": one
 // spelling per path — no %, \, //, ./ or ../ (the node broker's rule), never an
 // absolute URI — on the list, by its method.
 func codexRefused(r *http.Request) string {
-	const pfx = "/v1/proxy/codex/"
+	return allowRefused(r, "/v1/proxy/codex/", codexAllow, "Codex CLI")
+}
+
+// anthropicRefused is codexRefused for /v1/proxy/anthropic/.
+func anthropicRefused(r *http.Request) string {
+	return allowRefused(r, "/v1/proxy/anthropic/", anthropicAllow, "Claude Code")
+}
+
+func allowRefused(r *http.Request, pfx string, allow map[string]map[string]bool, client string) string {
 	if !strings.HasPrefix(r.RequestURI, "/") {
 		return "absolute-URI proxying disabled"
 	}
 	bare := r.URL.EscapedPath()
 	if strings.ContainsAny(bare, "%\\") || path.Clean(bare) != bare || !strings.HasPrefix(bare, pfx) {
-		return "not a plain /v1/proxy/codex/ path"
+		return "not a plain " + pfx + " path"
 	}
-	meths, ok := codexAllow[strings.TrimPrefix(bare, pfx)]
+	meths, ok := allow[strings.TrimPrefix(bare, pfx)]
 	if !ok {
-		return bare + " is not a path Codex CLI uses"
+		return bare + " is not a path " + client + " uses"
 	}
 	if !meths[r.Method] {
-		return r.Method + " " + bare + " is not a request Codex CLI makes"
+		return r.Method + " " + bare + " is not a request " + client + " makes"
 	}
 	return ""
 }
@@ -535,22 +569,50 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		a.ms = p.cfg.Now().Sub(t0).Milliseconds()
 		p.cfg.Audit(a.line())
 	}()
-	// Read the body FIRST: a refusal that leaves it unread on a keep-alive
-	// connection gets it parsed as the next request (issue #1912).
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
-	a.in = int64(len(body))
-	if err != nil {
-		a.status, a.why = refuse(w, provider, http.StatusBadRequest, "invalid_request_error", "could not read the request body")
-		return
+	// The body is read once the request has shown it is worth reading: a path
+	// on the list, a pass of the right shape (an fcp-h2 verified here) and —
+	// for a request whose resolve does not need the body — the hub's yes.
+	// Until then w answers with Connection: close after reading at most
+	// refusedDrain, so an unread body is never parsed as the next request
+	// (issue #1912) and a refused one is never held in memory.
+	direct := w
+	w = &unreadBody{ResponseWriter: direct, body: r.Body}
+	var body []byte
+	read := false
+	readBody := func() bool {
+		if read {
+			return true
+		}
+		rc := http.NewResponseController(direct)
+		_ = rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)) // unsupported (a test recorder): no deadline
+		b, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+		_ = rc.SetReadDeadline(time.Time{})
+		a.in = int64(len(b))
+		if err != nil {
+			a.status, a.why = refuse(w, provider, http.StatusBadRequest, "invalid_request_error", "could not read the request body")
+			return false
+		}
+		if len(b) > maxBody {
+			a.status, a.why = refuse(w, provider, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body too large")
+			return false
+		}
+		body, read, w = b, true, direct
+		return true
 	}
-	if len(body) > maxBody {
-		a.status, a.why = refuse(w, provider, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body too large")
-		return
-	}
+	var err error
 	if provider == Codex {
 		if why := codexRefused(r); why != "" {
 			a.status, a.why = refuse(w, provider, http.StatusForbidden, "permission_error", why)
 			return
+		}
+	}
+	if provider == Claude {
+		if why := anthropicRefused(r); why != "" {
+			if p.cfg.AnthropicAllow == AnthropicAllowEnforce {
+				a.status, a.why = refuse(w, provider, http.StatusForbidden, "permission_error", why)
+				return
+			}
+			a.wouldRefuse = why
 		}
 	}
 	pass := ""
@@ -572,6 +634,9 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 			a.why = why
 			return
 		}
+	}
+	if provider == Codex && !readBody() {
+		return // Codex's resolve reads the body: its continuation refs route it
 	}
 	if provider == Codex && strings.HasSuffix(r.URL.Path, "/alpha/search") && !codexRoute(r, body).Independent {
 		a.status, a.why = refuse(w, provider, http.StatusConflict, "invalid_request_error", "standalone search requires self-contained search_query input")
@@ -604,6 +669,9 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 	a.principal, a.worker, a.pass = res.Principal, res.WorkerID, res.ID
 	if !res.Valid && provider == Claude && res.Error == ClaudePoolUnavailable {
 		// no subscription can take it: Bedrock may, when the hub allows (PNWW)
+		if !readBody() {
+			return
+		}
 		if p.tryBedrock(w, r, pass, body, &a) {
 			return
 		}
@@ -644,6 +712,9 @@ func (p *Proxy) serve(w http.ResponseWriter, r *http.Request, provider string) {
 		return
 	}
 
+	if !readBody() {
+		return
+	}
 	target, route := p.target(provider, r.URL)
 	a.route = route
 	send := func(res Resolution) (*http.Response, error) {
@@ -857,6 +928,30 @@ func stream(w http.ResponseWriter, body io.Reader) int64 {
 	}
 }
 
+// unreadBody is the ResponseWriter until the body is read: an answer before
+// then reads at most refusedDrain of it and closes the connection.
+type unreadBody struct {
+	http.ResponseWriter
+	body    io.Reader
+	drained bool
+}
+
+func (u *unreadBody) WriteHeader(code int) {
+	if !u.drained {
+		u.drained = true
+		u.Header().Set("Connection", "close")
+		_, _ = io.CopyN(io.Discard, u.body, refusedDrain)
+	}
+	u.ResponseWriter.WriteHeader(code)
+}
+
+func (u *unreadBody) Write(b []byte) (int, error) {
+	if !u.drained {
+		u.WriteHeader(http.StatusOK)
+	}
+	return u.ResponseWriter.Write(b)
+}
+
 // refuse answers in the provider's own error shape.
 func refuse(w http.ResponseWriter, provider string, code int, typ, msg string) (int, string) {
 	return refuseCode(w, provider, code, typ, typ, msg)
@@ -925,6 +1020,7 @@ type audit struct {
 	account, why            string
 	rebindFrom              string
 	fallback, fallbackFrom  string
+	wouldRefuse             string
 	status                  int
 	in, out, ms, tokens     int64
 	stale                   bool
@@ -945,6 +1041,9 @@ func (a audit) line() string {
 	}
 	if a.fallbackFrom != "" {
 		m["fallback_from"] = a.fallbackFrom
+	}
+	if a.wouldRefuse != "" {
+		m["would_refuse"] = a.wouldRefuse // off AnthropicAllowSpec, let through (log only)
 	}
 	b, _ := json.Marshal(m)
 	return string(b)

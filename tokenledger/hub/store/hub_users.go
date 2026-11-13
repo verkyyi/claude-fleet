@@ -109,6 +109,30 @@ func NormIdentitySubject(kind, subject string) string {
 	return subject
 }
 
+// TrialQuotaKey is the key a trial is counted under — never a way of signing
+// in, nor what is shown: an address drops its +tag, and a Gmail address its
+// dots and the googlemail spelling, so one mailbox's aliases share one trial.
+// Any other kind is its subject as stored.
+func TrialQuotaKey(kind, subject string) string {
+	subject = NormIdentitySubject(kind, subject)
+	if kind != IdentityEmail {
+		return subject
+	}
+	at := strings.LastIndexByte(subject, '@')
+	if at <= 0 {
+		return subject
+	}
+	local, domain := subject[:at], subject[at+1:]
+	if i := strings.IndexByte(local, '+'); i > 0 {
+		local = local[:i]
+	}
+	if domain == "gmail.com" || domain == "googlemail.com" {
+		domain = "gmail.com"
+		local = strings.ReplaceAll(local, ".", "")
+	}
+	return local + "@" + domain
+}
+
 const hubUserCols = `principal_id, github_id, login, role, machine_login, added_by, added_at, last_seen`
 
 func scanHubUser(row interface{ Scan(...any) error }) (*HubUser, error) {

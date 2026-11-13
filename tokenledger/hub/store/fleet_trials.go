@@ -182,10 +182,56 @@ func (s *Store) StartTrialAs(pid, kind, subject string, now time.Time) error {
 	} else if t != nil && t.Principal != pid {
 		return ErrTrialWayTaken
 	}
+	if other, err := s.trialAliasHolder(kind, subject); err != nil {
+		return err
+	} else if other != "" && other != pid {
+		return ErrTrialWayTaken
+	}
 	_, err := s.write.Exec(s.d.insertIgnore(`INSERT OR IGNORE INTO fleet_trials
 		(principal, state, started_at, waiting_since, last_seen, kind, subject) VALUES (?, ?, ?, ?, ?, ?, ?)`),
 		pid, TrialWaiting, now.Unix(), now.Unix(), now.Unix(), kind, subject)
 	return err
+}
+
+// trialAliasHolder is the person whose trial an alias of the address subject
+// started (TrialQuotaKey), "" for none or a kind other than an address. The
+// rows keep the address as signed in with; the key is worked out here.
+func (s *Store) trialAliasHolder(kind, subject string) (string, error) {
+	if kind != IdentityEmail {
+		return "", nil
+	}
+	key := TrialQuotaKey(kind, subject)
+	at := strings.LastIndexByte(key, '@')
+	if at <= 0 {
+		return "", nil
+	}
+	domains := []string{key[at+1:]}
+	if domains[0] == "gmail.com" {
+		domains = append(domains, "googlemail.com")
+	}
+	for _, d := range domains {
+		rows, err := s.write.Query(`SELECT principal, subject FROM fleet_trials WHERE kind = ? AND subject LIKE ?`, kind, "%@"+d)
+		if err != nil {
+			return "", err
+		}
+		for rows.Next() {
+			var pid, sub string
+			if err := rows.Scan(&pid, &sub); err != nil {
+				rows.Close()
+				return "", err
+			}
+			if TrialQuotaKey(kind, sub) == key {
+				rows.Close()
+				return pid, nil
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return "", err
+		}
+	}
+	return "", nil
 }
 
 // TrialByWay is the trial the way kind + subject started; nil, nil for none.
