@@ -472,7 +472,7 @@ func openPostgres(url string, readOnly bool) (*sql.DB, error) {
 		cfg.RuntimeParams["default_transaction_read_only"] = "on"
 	}
 	// Keepalive + TCP_USER_TIMEOUT: a connection the network silently dropped
-	// errors in ~30 s instead of the kernel's ~15 minutes (task N9GH).
+	// errors in ~10 s instead of the kernel's ~15 minutes (task N9GH).
 	pgnet.Apply(&cfg.Config)
 	return sql.OpenDB(&pgConnector{base: stdlib.GetConnector(*cfg)}), nil
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,6 +32,31 @@ func TestReadyFollowsTheMigrations(t *testing.T) {
 	s.Close()
 	if err := s.Ready(ctx); err == nil {
 		t.Fatal("a closed database reads ready")
+	}
+}
+
+// Probes that ask at once share one check and all read ready (task N9GH:
+// kubelet, the deploy probe and the health prober overlapped, and every one
+// but the first got a 503 for the others' check).
+func TestReadyConcurrentProbesShareOneCheck(t *testing.T) {
+	s := newStore(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 32)
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			errs <- s.Ready(ctx)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a concurrent probe on a healthy store: %v", err)
+		}
 	}
 }
 

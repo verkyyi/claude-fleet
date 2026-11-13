@@ -80,11 +80,20 @@ need_settings() {
 
 ecr_registry() { printf '%s' "${HUB_IMAGE%%/*}"; }
 
-# ── 0. the host: networkd keeps off the pod network, upgrades restart nothing ──
-# 2026-11-13 06:17Z (task N9GH): unattended-upgrades installed libc6, needrestart
-# restarted systemd-networkd, and networkd re-took cni0 / flannel.1 / every
-# veth — dropping routes it had not made. The hub pods' open connections to RDS
-# went silent and the hub was down 16 minutes. Three files make that a no-op:
+# ── 0. the host: a networkd restart costs the pods nothing, upgrades restart nothing ──
+# 2026-11-13 06:17Z (task N9GH): unattended-upgrades installed libc6 and
+# needrestart restarted systemd-networkd. A (re)started — or reloaded —
+# networkd deletes the box's DHCP address and adds it back ~20 ms later
+# (measured with `ip monitor` on the box), and deleting an address makes the
+# kernel's MASQUERADE forget the NAT state of every connection that left
+# through it: flannel masquerades pod traffic, so the hub pods' open
+# connections to RDS went silent (new ones worked) and the hub was down 16
+# minutes. What makes that a no-op:
+#   - pod egress SNAT (fleet-pod-snat.service): an nftables nat chain that
+#     runs before flannel's and SNATs pod traffic leaving the main interface
+#     to the box's private address. SNAT state is not dropped when the address
+#     flaps, so open connections live through any networkd restart; the
+#     address is the same one MASQUERADE picked, so nothing else changes;
 #   - a .network that matches the pod network's links FIRST (05- sorts before
 #     netplan's 10-) and says Unmanaged=yes: networkd never configures them;
 #   - networkd.conf: ManageForeignRoutes / ...RoutingPolicyRules = no — a
@@ -103,6 +112,38 @@ host_file() {
   mkdir -p "$(dirname "$f")"
   printf '%s\n' "$body" > "$f.tmp.$$" && chmod "$mode" "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
   echo "$1"
+}
+
+# pod_snat_script: /usr/local/sbin/fleet-pod-snat.sh — load (or reload) the
+# nftables table fleet_pod_snat: pod traffic (POD_CIDR, k3s' default pod network)
+# leaving the default route's interface for anywhere but the pod and service
+# networks is SNATed to that interface's address, at a priority ahead of
+# flannel's MASQUERADE (srcnat - 10: the first nat chain to decide wins).
+pod_snat_script() {
+  cat <<'SH'
+#!/usr/bin/env bash
+# Written by deploy/aws/k3s-box/bootstrap.sh (task N9GH). Idempotent.
+set -euo pipefail
+POD_CIDR=${POD_CIDR:-10.42.0.0/16}   # oss-ok: k3s default
+SVC_CIDR=${SVC_CIDR:-10.43.0.0/16}   # oss-ok: k3s default
+dev=$(ip -4 route show default | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
+addr=$(ip -4 -o addr show dev "${dev:-none}" scope global 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')
+if [ -z "$dev" ] || [ -z "$addr" ]; then
+  echo "fleet-pod-snat: no default route / address yet" >&2
+  exit 1
+fi
+nft -f - <<NFT
+table ip fleet_pod_snat
+delete table ip fleet_pod_snat
+table ip fleet_pod_snat {
+  chain postrouting {
+    type nat hook postrouting priority srcnat - 10; policy accept;
+    oifname "$dev" ip saddr $POD_CIDR ip daddr != { $POD_CIDR, $SVC_CIDR } snat to $addr fully-random
+  }
+}
+NFT
+echo "fleet-pod-snat: $POD_CIDR via $dev -> $addr"
+SH
 }
 
 harden_host() {
@@ -128,6 +169,25 @@ ManageForeignRoutingPolicyRules=no"
     host_file /etc/apt/apt.conf.d/52fleet-unattended 0644 "// Written by deploy/aws/k3s-box/bootstrap.sh (task N9GH): security updates
 // still install by themselves; the box never reboots by itself.
 Unattended-Upgrade::Automatic-Reboot \"false\";"
+    host_file /usr/local/sbin/fleet-pod-snat.sh 0755 "$(pod_snat_script)"
+    host_file /etc/systemd/system/fleet-pod-snat.service 0644 "# Written by deploy/aws/k3s-box/bootstrap.sh (task N9GH): pod egress SNAT,
+# so a networkd restart (which flaps the DHCP address) does not make
+# MASQUERADE forget the pods' open connections.
+[Unit]
+Description=fleet: SNAT pod egress (survives a networkd restart)
+Wants=network-online.target
+After=network-online.target
+Before=k3s.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/fleet-pod-snat.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target"
   )
   if [ -z "$changed" ]; then
     say "host: networkd and needrestart already hardened"
@@ -135,9 +195,15 @@ Unattended-Upgrade::Automatic-Reboot \"false\";"
   fi
   say "host: wrote $(printf '%s' "$changed" | tr '\n' ' ')"
   [ "$HOST_ROOT" = / ] || return 0
-  # Nothing is reloaded here: networkd reads these at its next start, and
-  # restarting (or reloading) it now is the very thing that broke the hub. The
-  # planned reboot applies them (README «Box maintenance»).
+  # The SNAT goes in now: adding a nat chain touches no connection already
+  # open (they keep the MASQUERADE they started with until they end — a
+  # rolling restart of the hub moves them over, README «Box maintenance»).
+  systemctl daemon-reload
+  systemctl enable --quiet fleet-pod-snat.service
+  systemctl restart fleet-pod-snat.service && say "host: pod egress SNAT on ($(nft list chain ip fleet_pod_snat postrouting 2>/dev/null | grep -o 'snat to [0-9.]*'))"
+  # networkd itself is not reloaded here: it reads its files at its next
+  # start, and reloading it flaps the address — the planned reboot applies
+  # them (README «Box maintenance»).
   if systemctl is-active --quiet systemd-networkd; then
     say "host: the networkd half applies at the next reboot (README «Box maintenance»)"
   fi

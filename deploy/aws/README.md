@@ -386,25 +386,35 @@ resumable session layer in a separate gateway process. Neither is in this change
 ## Box maintenance
 
 **2026-11-13, 06:17–06:33 UTC, the hub was down 16 minutes** (task N9GH).
-unattended-upgrades installed libc6 / linux-image-aws, needrestart restarted
-`systemd-networkd`, and networkd re-took `cni0`, `flannel.1` and every `veth*`.
-The hub pods' open connections to RDS went silent — no error, no reset — while
-new ones worked; with no keepalive and no TCP user timeout every request,
-`/readyz` included, waited out the kernel's ~15.5 minutes (`GET /readyz 503
-15m49s`), both replicas went NotReady and Traefik answered 503.
+unattended-upgrades installed libc6 / linux-image-aws and needrestart restarted
+`systemd-networkd`. A restarted — or reloaded — networkd deletes the box's DHCP
+address and adds it back ~20 ms later (`ip -ts monitor address`), and deleting
+an address makes the kernel's MASQUERADE forget the NAT state of every
+connection that left through it. flannel masquerades pod traffic, so the hub
+pods' open connections to RDS went silent — no error, no reset — while new ones
+worked; with no keepalive and no TCP user timeout every request, `/readyz`
+included, waited out the kernel's ~15.5 minutes (`GET /readyz 503 15m49s`),
+both replicas went NotReady and Traefik answered 503. The same day, with the
+hub's 30 s timeout but no SNAT yet, each networkd restart on the box still cost
+~30 s.
 
 What holds now:
 
 | Layer | What | Where |
 |---|---|---|
+| pod egress | an nftables nat chain ahead of flannel's (`table ip fleet_pod_snat`, priority `srcnat - 10`) SNATs pod traffic leaving the main interface to the box's private address — the address MASQUERADE picked, but SNAT state is not dropped when the address flaps, so open connections live through a networkd restart or reload (drilled on a throwaway box: 35/35 echoes through a restart + reload, against a stall at once without it) | `fleet-pod-snat.service` → `/usr/local/sbin/fleet-pod-snat.sh` |
 | networkd | the pod links (`cni0` `flannel*` `veth*` `kube-*` `cali*` `tunl*` `vxlan*`) match `Unmanaged=yes` first; `ManageForeignRoutes=no` + `ManageForeignRoutingPolicyRules=no` — a (re)started networkd touches neither the links nor flannel's routes | `/etc/systemd/network/05-fleet-cni-unmanaged.network`, `/etc/systemd/networkd.conf.d/50-fleet-foreign-routes.conf` |
 | upgrades | security updates still install by themselves; needrestart only LISTS the services on old libraries (`$nrconf{restart} = 'l'`), never restarts one; no automatic reboot | `/etc/needrestart/conf.d/50-fleet-list-only.conf`, `/etc/apt/apt.conf.d/52fleet-unattended` |
-| hub | every Postgres connection dials with keepalive (10 s idle, 5 s × 4) and `TCP_USER_TIMEOUT` 30 s — a silently dropped one errors in ~30 s and leaves the pool; a statement with no deadline of its own gets 2 min (`CCQUOTA_DB_STATEMENT_TIMEOUT`), a transaction 5×; `/readyz` answers within 2 s on a connection of its own | `tokenledger/hub/pgnet`, `store/dialect.go`, `store/ready.go` |
+| hub | every Postgres connection dials with keepalive (4 s idle, 2 s × 3) and `TCP_USER_TIMEOUT` 10 s — a silently dropped one errors in ~10 s and leaves the pool; a statement with no deadline of its own gets 2 min (`CCQUOTA_DB_STATEMENT_TIMEOUT`), a transaction 5×; `/readyz` answers within 2 s on a connection of its own, and probes that ask at once share one check | `tokenledger/hub/pgnet`, `store/dialect.go`, `store/ready.go` |
 
-`bootstrap.sh` writes the four host files on every run (`bootstrap.sh host`
-writes only them; `restore-user-data.yaml` runs it on a rebuilt box). It
-reloads nothing — restarting networkd is the very thing that broke the hub —
-so on a box that predates them they take effect at the next reboot.
+`bootstrap.sh` writes the host files on every run (`bootstrap.sh host` writes
+only them; `restore-user-data.yaml` runs it on a rebuilt box) and turns the SNAT
+on at once — a new nat chain touches no open connection; those keep the
+MASQUERADE they started with until they end, so after the first `bootstrap.sh
+host` roll the hub (`k3s kubectl -n fleet-hub rollout restart deploy/ccquota-hub`,
+no downtime) to move its connections onto the SNAT. networkd itself is not
+reloaded — that flaps the address — so its two files take effect at the next
+reboot.
 
 **A reboot** (a new kernel, a pending `/var/run/reboot-required`, the first
 `bootstrap.sh host`) is a person's, in a quiet window: one box is the whole
@@ -415,9 +425,11 @@ ssh box
 cat /var/run/reboot-required.pkgs 2>/dev/null; needrestart -b   # what is pending
 sudo git -C /opt/claude-fleet pull --ff-only
 sudo /opt/claude-fleet/deploy/aws/k3s-box/bootstrap.sh host
+sudo k3s kubectl -n fleet-hub rollout restart deploy/ccquota-hub   # open DB connections onto the SNAT
 sudo reboot
 # back up:
 networkctl list | grep -E 'cni0|flannel|veth'     # every one: unmanaged
+sudo nft list table ip fleet_pod_snat              # snat to <private address>
 sudo k3s kubectl -n fleet-hub get pods             # both 1/1 Ready
 sudo /opt/claude-fleet/deploy/aws/k3s-box/db-blackhole-drill.sh networkd    # PASS
 sudo /opt/claude-fleet/deploy/aws/k3s-box/db-blackhole-drill.sh blackhole   # PASS

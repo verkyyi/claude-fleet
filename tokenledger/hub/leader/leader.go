@@ -75,7 +75,7 @@ func New(url, replica string) (*Elector, error) {
 		// pgx's message quotes the connection string, password and all.
 		return nil, errors.New("leader: not a valid postgres:// connection string")
 	}
-	// A lock's connection the network silently dropped must error in ~30 s,
+	// A lock's connection the network silently dropped must error in ~10 s,
 	// not the kernel's ~15 minutes: the lock is released server-side only
 	// when Postgres sees the connection gone, and this replica must notice it
 	// lost the lock just as fast (task N9GH).

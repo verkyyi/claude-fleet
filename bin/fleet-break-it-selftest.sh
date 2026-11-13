@@ -5411,13 +5411,21 @@ drill_box_networkd_cni() {
     || { WHY="needrestart still restarts services after an upgrade (not list-only)"; return 1; }
   grep -q '^Unattended-Upgrade::Automatic-Reboot "false";$' "$sb/etc/apt/apt.conf.d/52fleet-unattended" 2>/dev/null \
     || { WHY="unattended-upgrades may reboot the box by itself"; return 1; }
+  # pod egress SNAT ahead of flannel's MASQUERADE: the fix for the address flap
+  grep -q 'priority srcnat - 10' "$sb/usr/local/sbin/fleet-pod-snat.sh" 2>/dev/null \
+    && grep -q 'snat to \$addr' "$sb/usr/local/sbin/fleet-pod-snat.sh" \
+    && bash -n "$sb/usr/local/sbin/fleet-pod-snat.sh" \
+    || { WHY="no pod egress SNAT: a networkd restart flaps the address and MASQUERADE forgets every open pod connection"; return 1; }
+  grep -q '^ExecStart=/usr/local/sbin/fleet-pod-snat.sh$' "$sb/etc/systemd/system/fleet-pod-snat.service" 2>/dev/null \
+    && grep -q '^Before=k3s.service$' "$sb/etc/systemd/system/fleet-pod-snat.service" \
+    || { WHY="the pod SNAT is not a unit that runs before k3s at boot"; return 1; }
   out=$(HOST_ROOT="$sb" FLEET_CORE_CONF=/nonexistent bash "$f" host 2>&1)
   case $out in *"already hardened"*) ;; *) WHY="a second bootstrap.sh host rewrote files: $out"; return 1 ;; esac
   grep -q 'bootstrap.sh host' "$ROOT/deploy/aws/k3s-box/restore-user-data.yaml" \
     || { WHY="a box rebuilt from a snapshot does not run the host hardening"; return 1; }
   grep -q '^  networkctl reload\|^  systemctl restart systemd-networkd' "$f" \
     && { WHY="bootstrap.sh reloads / restarts networkd itself — the very thing that broke the hub"; return 1; }
-  WHAT='盒子加固：pod 网卡 Unmanaged=yes、不删外来路由、needrestart 只列不重启、不自动重启；二跑不改；恢复盒子也跑（沙箱根）'
+  WHAT='盒子加固：pod 出口 SNAT（地址抖动不丢连接）、pod 网卡 Unmanaged=yes、不删外来路由、needrestart 只列不重启、不自动重启；二跑不改；恢复盒子也跑（沙箱根）'
   SECS=$(since "$t0")
 }
 
