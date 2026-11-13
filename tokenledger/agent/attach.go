@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -69,18 +68,14 @@ func (a *Agent) fetchAttachment(ctx context.Context, at startAttachment) (string
 		return "INVALID_ARGUMENT", "an attachment names an id and one file name"
 	}
 	dir := filepath.Join(a.attachDir, at.ID)
-	dest := filepath.Join(dir, at.Name)
-	if fileSHA256(dest) == at.SHA256 {
-		return "", "" // a retried write: already here
-	}
-	if err := mkdirOwned(dir, 0o700); err != nil {
+	// The directory is the login's: never follow a link it put there.
+	d, err := openHomeDir(dir, true, 0o700)
+	if err != nil {
 		return "UNAVAILABLE", "attachment directory: " + err.Error()
 	}
-	// The directory is the login's: never follow a link it put there.
-	for _, d := range []string{a.attachDir, dir} {
-		if fi, err := os.Lstat(d); err != nil || fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
-			return "UNAVAILABLE", "attachment directory " + d + " is not a plain directory"
-		}
+	defer d.Close()
+	if fileSHA256(d, at.Name) == at.SHA256 {
+		return "", "" // a retried write: already here
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.hub()+"/v1/node/attachment/"+at.ID, nil)
 	if err != nil {
@@ -95,11 +90,11 @@ func (a *Agent) fetchAttachment(ctx context.Context, at startAttachment) (string
 	if resp.StatusCode != http.StatusOK {
 		return "UNAVAILABLE", fmt.Sprintf("download attachment %s: hub answered HTTP %d", at.Name, resp.StatusCode)
 	}
-	tmp, err := os.CreateTemp(dir, ".fetch-*")
+	tmp, tmpName, err := d.createTemp(".fetch-")
 	if err != nil {
 		return "UNAVAILABLE", "attachment directory: " + err.Error()
 	}
-	defer os.Remove(tmp.Name())
+	defer d.remove(tmpName)
 	h := sha256.New()
 	_, err = io.Copy(io.MultiWriter(tmp, h), io.LimitReader(resp.Body, at.Size+1))
 	if cerr := tmp.Close(); err == nil {
@@ -111,21 +106,15 @@ func (a *Agent) fetchAttachment(ctx context.Context, at startAttachment) (string
 	if hex.EncodeToString(h.Sum(nil)) != at.SHA256 {
 		return "UNAVAILABLE", "attachment " + at.Name + " arrived corrupted (sha256 mismatch)"
 	}
-	_ = os.Chmod(tmp.Name(), 0o600)
-	ownPath(tmp.Name())
-	if err := os.Rename(tmp.Name(), dest); err != nil {
+	if err := d.rename(tmpName, d, at.Name); err != nil {
 		return "UNAVAILABLE", "attachment directory: " + err.Error()
 	}
 	return "", ""
 }
 
-// fileSHA256 is a regular file's sha256 in hex, "" when it is not one.
-func fileSHA256(path string) string {
-	fi, err := os.Lstat(path)
-	if err != nil || !fi.Mode().IsRegular() {
-		return ""
-	}
-	f, err := os.Open(path)
+// fileSHA256 is name's sha256 in hex when it is a regular file in d, else "".
+func fileSHA256(d *homeDir, name string) string {
+	f, err := d.openRead(name)
 	if err != nil {
 		return ""
 	}

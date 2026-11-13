@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"time"
 )
@@ -49,12 +47,14 @@ func (a *Agent) fetchMoveBundle(ctx context.Context, envelope json.RawMessage) (
 	if !moveBundleIDRE.MatchString(id) {
 		return "INVALID_ARGUMENT", "move_id must be 32 lowercase hex digits"
 	}
-	dest := filepath.Join(a.moveIn, id+".tar")
-	if _, err := os.Stat(dest); err == nil {
-		return "", "" // a retried write: already here
-	}
-	if err := mkdirOwned(a.moveIn, 0o700); err != nil {
+	dest := id + ".tar"
+	d, err := openHomeDir(a.moveIn, true, 0o700)
+	if err != nil {
 		return "UNAVAILABLE", "move-in directory: " + err.Error()
+	}
+	defer d.Close()
+	if d.exists(dest) {
+		return "", "" // a retried write: already here
 	}
 	fctx, cancel := context.WithTimeout(ctx, moveFetchTimeout)
 	defer cancel()
@@ -71,11 +71,11 @@ func (a *Agent) fetchMoveBundle(ctx context.Context, envelope json.RawMessage) (
 	if resp.StatusCode != http.StatusOK {
 		return "UNAVAILABLE", fmt.Sprintf("download the transcript bundle: hub answered HTTP %d", resp.StatusCode)
 	}
-	tmp, err := os.CreateTemp(a.moveIn, ".fetch-*")
+	tmp, tmpName, err := d.createTemp(".fetch-")
 	if err != nil {
 		return "UNAVAILABLE", "move-in directory: " + err.Error()
 	}
-	defer os.Remove(tmp.Name())
+	defer d.remove(tmpName)
 	h := sha256.New()
 	_, err = io.Copy(io.MultiWriter(tmp, h), resp.Body)
 	if cerr := tmp.Close(); err == nil {
@@ -87,8 +87,7 @@ func (a *Agent) fetchMoveBundle(ctx context.Context, envelope json.RawMessage) (
 	if want := resp.Header.Get("X-Bundle-Sha256"); want != "" && want != hex.EncodeToString(h.Sum(nil)) {
 		return "UNAVAILABLE", "the transcript bundle arrived corrupted (sha256 mismatch)"
 	}
-	ownPath(tmp.Name())
-	if err := os.Rename(tmp.Name(), dest); err != nil {
+	if err := d.rename(tmpName, d, dest); err != nil {
 		return "UNAVAILABLE", "move-in directory: " + err.Error()
 	}
 	return "", ""

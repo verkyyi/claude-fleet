@@ -133,8 +133,10 @@ func TestOwnPathByHome(t *testing.T) {
 	if err != nil || !fi.IsDir() {
 		t.Fatalf("mkdirOwned: %v", err)
 	}
-	ownPath(filepath.Join(home, "a", "b")) // no error path to observe as non-root; must not panic
-	ownPath("/nonexistent/elsewhere")
+	// a directory under no tenant's home is made by plain path rules
+	if err := mkdirOwned(filepath.Join(t.TempDir(), "x", "y"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // The node's twin of the hub's WRONG_LOGIN: a message for a login this

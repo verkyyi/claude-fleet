@@ -206,40 +206,6 @@ func unregisterTenant(ra *RunAs) {
 	}
 }
 
-// ownPath hands a file or directory the agent just wrote under a login's home
-// to that login: root wrote it, and the login's own scripts and CLIs must keep
-// reading and replacing it. Outside every tenant's home (or no tenants — a
-// plain agent): nothing to do.
-func ownPath(path string) {
-	tenantMu.RLock()
-	defer tenantMu.RUnlock()
-	for _, ra := range tenantHomes {
-		if ra.Home != "" && (path == ra.Home || strings.HasPrefix(path, ra.Home+string(os.PathSeparator))) {
-			_ = os.Lchown(path, int(ra.UID), int(ra.GID))
-			return
-		}
-	}
-}
-
-// mkdirOwned is os.MkdirAll that hands every directory it created under a
-// login's home to that login.
-func mkdirOwned(dir string, mode os.FileMode) error {
-	var made []string
-	for d := dir; ; d = filepath.Dir(d) {
-		if _, err := os.Lstat(d); err == nil || d == filepath.Dir(d) {
-			break
-		}
-		made = append(made, d)
-	}
-	if err := os.MkdirAll(dir, mode); err != nil {
-		return err
-	}
-	for _, d := range made {
-		ownPath(d)
-	}
-	return nil
-}
-
 // osLogin is the login this agent's work is for: the tenant's, else the
 // process's own.
 func (a *Agent) osLogin() string {

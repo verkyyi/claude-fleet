@@ -356,34 +356,13 @@ func (a *Agent) handleClusterReading(m control.Message) {
 }
 
 // writeFileAtomic writes path 0644 through a fresh temporary file and one
-// rename; its directory is made 0755 when missing. Never through a link.
+// rename; its directory is made 0755 when missing. Never through a link: under
+// a login's home it goes through homeDir and is the login's.
 func writeFileAtomic(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, ".machine.json.")
+	d, err := openHomeDir(filepath.Dir(path), true, 0o755)
 	if err != nil {
 		return err
 	}
-	tmp := f.Name()
-	if _, err := f.Write(b); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Chmod(0o644); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := f.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	defer d.Close()
+	return d.writeAtomic(filepath.Base(path), b, 0o644)
 }
