@@ -8,6 +8,7 @@ import { chromium } from 'playwright'
 const origin = 'http://127.0.0.1:18961'
 const root = new URL('../web-console/dist/', import.meta.url)
 const worker = '66666666-6666-4666-8666-666666666666/77777777-7777-4777-8777-777777777777'
+const clockStart = Date.parse('2026-01-01T00:00:00Z')
 const browser = await chromium.launch()
 try {
   for (const agent of ['codex', 'claude']) {
@@ -15,9 +16,20 @@ try {
       const context = await browser.newContext()
       try {
         const page = await context.newPage()
-        if (kind === 'delayed' || kind === 'starting') await page.clock.install()
+        if (kind === 'delayed' || kind === 'starting') {
+          // install() alone lets time flow, and the reconnect waits a random
+          // 0-1 s: on real time it could reconnect before capability flips, or
+          // end an offline spell before the test sees it. Stop the clock before
+          // the page loads; only runFor / fastForward move it.
+          await page.clock.install({ time: clockStart })
+          await page.clock.pauseAt(clockStart + 60_000)
+        }
         let capability = kind === 'starting' ? false : kind === 'delayed' ? null : kind === 'old' ? undefined : true
         let identityReads = 0
+        // identity: the retry after the first 503 runs on the page's real timer,
+        // so its answer waits here until the test has seen the checking state.
+        let releaseIdentity = () => {}
+        const identityRetry = new Promise(resolve => { releaseIdentity = resolve })
         const sent = []
         // route.fulfill ends the response immediately. Use a real open stream:
         // a completed SSE response must now disable sending until reconnect.
@@ -47,6 +59,7 @@ try {
           if (path === '/v1/me') {
             identityReads++
             if (kind === 'identity' && identityReads === 1) return route.fulfill({ status: 503, json: { error: 'temporary identity failure' } })
+            if (kind === 'identity') await identityRetry
             return json({ person: 'test-person', name: 'Alice', role: 'user', read_only: kind === 'ticket' })
           }
           if (path === '/v1/fleet/tasks') return json({ tasks: [] })
@@ -69,8 +82,12 @@ try {
         })
         await page.goto(`${origin}/app/s/${encodeURIComponent(worker)}`)
         const input = page.locator('textarea.aui-composer-input')
-        await input.waitFor()
         if (kind === 'delayed' || kind === 'starting') {
+          // the paused page boots on its own timers: move them on in small steps
+          for (let ms = 0; !(await input.isVisible()); ms += 16) {
+            assert(ms < 10_000, 'the composer mounts within 10 s of page time')
+            await page.clock.runFor(16)
+          }
           await input.fill('draft survives discovery')
           assert.match(await input.getAttribute('placeholder'), /Connecting|正在连接/)
           await input.press('Enter')
@@ -104,10 +121,12 @@ try {
           await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.value === '')
           assert.deepEqual(sent, ['draft survives discovery', 'second turn'])
         } else if (kind === 'identity') {
+          await input.waitFor()
           await input.fill('draft survives identity failure')
           assert.equal(await page.locator('[data-testid=session-view]').getAttribute('data-access'), 'checking')
           await input.press('Enter')
           assert.equal(sent.length, 0, 'a writable stream cannot substitute for unknown sign-in permissions')
+          releaseIdentity()
           await page.locator('[data-testid=session-view][data-talk]').waitFor({ timeout: 5000 })
           assert(identityReads >= 2, 'temporary identity failure must be retried')
           assert.equal(await input.inputValue(), 'draft survives identity failure')
@@ -115,6 +134,7 @@ try {
           await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.value === '')
           assert.deepEqual(sent, ['draft survives identity failure'])
         } else {
+          await input.waitFor()
           // The stream's state arrives after the input mounts. Wait for its
           // verdict rather than asserting against the initial checking state.
           await page.waitForFunction(() => document.querySelector('textarea.aui-composer-input')?.disabled === true)
