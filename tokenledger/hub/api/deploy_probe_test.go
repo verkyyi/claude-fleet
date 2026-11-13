@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // /readyz answers 200 on a working store and 503 — saying nothing more — once
@@ -48,4 +49,42 @@ func TestReadyzAndDeployProbe(t *testing.T) {
 	if code, _ := do("GET", "/healthz"); code != 200 {
 		t.Fatalf("/healthz with the database gone = %d, want 200", code)
 	}
+}
+
+// A replica beat stuck on a dead database connection holds drain.mu across its
+// write (beatReplica). /readyz must still answer at once (task N9GH: on the
+// box every /readyz waited behind it — 10 s with TCP_USER_TIMEOUT, ~15 min the
+// day of the outage — while /healthz, which never asked Draining(), stayed
+// fast). Drain still turns /readyz 503.
+func TestReadyzDoesNotWaitBehindAStuckReplicaBeat(t *testing.T) {
+	h := newHarness(t)
+	get := func() (int, time.Duration) {
+		t0 := time.Now()
+		resp, err := h.http.Client().Get(h.http.URL + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode, time.Since(t0)
+	}
+	h.srv.drain.mu.Lock() // a beat's write that does not come back
+	done := make(chan struct{})
+	var code int
+	var took time.Duration
+	go func() { code, took = get(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		h.srv.drain.mu.Unlock()
+		<-done
+		t.Fatalf("/readyz waited behind the replica beat's lock (%v)", took)
+	}
+	if code != 200 {
+		t.Fatalf("/readyz = %d while a beat is stuck, want 200", code)
+	}
+	h.srv.Drain()
+	if c, _ := get(); c != 503 {
+		t.Fatalf("/readyz after Drain = %d, want 503", c)
+	}
+	h.srv.drain.mu.Unlock()
 }

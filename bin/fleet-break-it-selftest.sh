@@ -5444,6 +5444,8 @@ drill_hub_db_blackhole() {
     'Postgres 连接拨号带 TCP 保活 + TCP_USER_TIMEOUT 30s（Linux 读回套接字选项）' ./hub/pgnet || return 1
   _drill_go_tests 'TestBlackholedConnectionsRecover' "$ROOT/tokenledger/hub/store/blackhole_test.go" \
     '已开连接被黑洞：/readyz 2 秒内答、新连接上恢复；无期限的写按默认期限回来；一分钟内整池恢复' ./hub/store || return 1
+  _drill_go_tests 'TestReadyzDoesNotWaitBehindAStuckReplicaBeat' "$ROOT/tokenledger/hub/api/deploy_probe_test.go" \
+    '副本心跳写卡在死连接上时 /readyz 照样立刻答（排空通道不再跟心跳共用一把锁）' ./hub/api || return 1
   [ -n "${CCQUOTA_DB_URL:-}" ] || WHAT='没有测试 Postgres：按名核对黑洞测试在，tokenledger-pg 门执行；pgnet 套接字选项已跑'
   SECS=$(since "$t0")
 }

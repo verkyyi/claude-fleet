@@ -52,8 +52,11 @@ db_ports() {
 readyz() {
   curl -s -o /dev/null -m $((PROBE + 5)) -w '%{http_code} %{time_total}' "http://$1:8787/readyz" || true
 }
+# write_ok <ip>: one real write. The Host is the in-cluster Service name: a hub
+# serving previews answers a bare pod address 421 (only /healthz and /readyz
+# are exempt), as the provisioner's template call says.
 write_ok() {
-  [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST "http://$1:8787/v1/deploy-probe" || true)" = 200 ]
+  [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST -H 'Host: ccquota-hub' "http://$1:8787/v1/deploy-probe" || true)" = 200 ]
 }
 
 mapfile -t PODS < <(pods)
