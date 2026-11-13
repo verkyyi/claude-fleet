@@ -150,8 +150,13 @@ done
 [ "$(awk '!/^[[:space:]]*#/ && $2 == "installer" { print $1 }' "$MANIFEST")" = bin/fleet-install.sh ] \
   && st_ok_all "A the manifest's installer is bin/fleet-install.sh" || bad "A installer line: $(grep installer "$MANIFEST")"
 # served, never installed (issue #4826): what a one-line join / install curls
-for must in bin/fleet-node-join.sh bin/fleet-node-install.sh bin/fleet-release-lib.sh bin/fleet-release-fetch.py bin/fleet-release-verify.py; do
+for must in bin/fleet-node-join.sh bin/fleet-node-install.sh bin/fleet-release-lib.sh; do
   printf '%s\n' "$SERVED" | grep -qxF "$must" && st_ok_all "A $must is served" || bad "A $must is not served"
+done
+# installed: the client's update checks a new version with them before taking it
+for must in bin/fleet-release-fetch.py bin/fleet-release-verify.py; do
+  printf '%s\n' "$FILES" | grep -qxF "$must" && ! printf '%s\n' "$SERVED" | grep -qxF "$must" \
+    && st_ok_all "A $must is installed (the update's signature check)" || bad "A $must is not installed"
 done
 # (the client package carries no fleet-lib.sh, bash-guard.py or agent-bundle.manifest,
 # #4826: conf/gone.list)

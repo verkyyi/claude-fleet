@@ -668,6 +668,26 @@ is a person's. A client that has not taken a stable it saw for 2 hours
 (`FLEET_INSTALL_SYNC_FETCH_ALARM_SECS`) notifies once and turns its doctor's
 `install` row red. BREAK-IT rows `client-verify-no-ccquota`, `client-update-silent-fail`.
 
+**A client's own update takes the same signed release.** `fleet-client-update.sh
+stage` (the installed client's background update, `poll`, and the update before
+opening) with a hub and a pinned `$FLEET_CONF_DIR/release.pub` never runs the
+hub's `/install`: it fetches the release of the commit `/version` names with the
+client's OWN `bin/fleet-release-fetch.py` (installed with the client, no longer
+`served`), and runs the `bin/fleet-install.sh` inside that verified tree with
+`FLEET_INSTALL_SRC=file://<tree>` — every byte installed is one the signed
+manifest names. A release that does not verify, a hub that names no 40-hex
+`client_version`, or one that stops serving releases (404) is refused: nothing
+staged, the version in use stays, one line (`client_update_refused_fmt` /
+`client_update_unreachable_fmt` in `fleet-ui-lang.sh`) and the why in
+`update.state` (the doctor's row; the next start repeats it instead of 「后台取」).
+No key yet: the hub's `/v1/fleet/release/key` is pinned once, as a login install
+pins it (the install line pins it too). Still TLS-only: the first `curl … | sh`,
+a client with no key whose hub keeps no releases (its `/install`, as before), and
+a 不接 client (stable's installer from GitHub's raw host — GitHub carries no
+signed manifest). The install line takes a `client_url` only over https (plain
+http only to 127.0.0.1 / localhost); another is refused, nothing installed.
+`fleet-client-update-selftest.sh` leg L, `fleet-update-selftest.sh` leg D2.
+
 **发布签名：私钥只在发布列车里，离线根钥匙能换能作废** (issue #3559, EPIC #3500
 C17). The signing key's one home is `release-train.yml`'s `release` job — the
 `release-sign` environment's `RELEASE_SIGN_KEY` secret (base64 32-byte seed),

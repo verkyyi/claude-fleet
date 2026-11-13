@@ -4,7 +4,9 @@
 # pieces that read what it writes (bin/fleet, fleet-lib.sh's hub-defaults.conf),
 # against a fake hub reached over
 # file:// — /version, /v1/fleet/client-settings and /install are files — so no
-# port is bound. HOME is a sandbox.
+# port is bound, but in leg L (a signing hub on 127.0.0.1,
+# bin/fleet-release-hub-fixture.py, an alarm(2) deadline, killed by the trap).
+# HOME is a sandbox; tmux only on this run's own -L socket.
 #
 # Legs:
 #   A. degenerate  no .client-version (a checkout, a --no-hub install) → start
@@ -40,11 +42,22 @@
 #                  hold it; same version → 0, nothing staged; behind → staged in
 #                  the foreground, exit 10, the home untouched (start switches);
 #                  FLEET_CLIENT_AUTO_UPDATE=0 → 0, nothing staged
+#   L. signed      with a pinned release key the new version is the hub's signed
+#                  release, checked by the client's own fleet-release-fetch.py,
+#                  installed by the installer inside that verified tree — the
+#                  hub's /install is never fetched (a hostile one there runs
+#                  nothing): valid → staged, .client-version names the release
+#                  and the hub; a file or the installer altered inside the
+#                  tree, a release signed
+#                  by another key, a hub that stops serving releases → refused:
+#                  nothing staged, the home untouched, one line saying why, the
+#                  next start says it again (not 「后台取」), update.state failed
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/fleet-client-update-selftest.XXXXXX") || exit 2
-trap 'tmux -L "fcu$$" kill-server 2>/dev/null; rm -rf "${WORK:?}"' EXIT INT TERM HUP
+RELHUB_PID=''
+trap 'tmux -L "fcu$$" kill-server 2>/dev/null; [ -n "$RELHUB_PID" ] && kill "$RELHUB_PID" 2>/dev/null; rm -rf "${WORK:?}"' EXIT INT TERM HUP
 FAIL=0
 
 export HOME="$WORK/home"
@@ -258,6 +271,101 @@ install_client v1; hub v2 1 1 beef002
 FLEET_CLIENT_AUTO_UPDATE=0 poll; rc=$?
 [ "$rc" = 0 ] && [ ! -e "$ROOT.versions/.next" ] && st_ok_all "K poll, auto update off: 0, nothing staged" \
   || st_miss "K poll off: rc=$rc next=$(cat "$ROOT.versions/.next" 2>&1)"
+
+# --- L. signed: the pinned key decides what is installed ----------------------
+if ! command -v ssh-keygen >/dev/null 2>&1; then
+  st_ok_all "L SKIP: no ssh-keygen (the signing hub signs with it)"
+else
+  RH="$WORK/relhub"; S1=5151515151515151515151515151515151515151
+  mkdir -p "$RH/rel/$S1/bin" "$RH/rel/$S1/tokenledger/hub/api/fleetclient"
+  # the release: a real client package in miniature — the real installer and
+  # updater, a stand-in fleet, the manifest the installer walks
+  cp "$BIN/fleet-install.sh" "$BIN/fleet-client-update.sh" "$BIN/fleet-versions-lib.sh" \
+     "$BIN/fleet-release-fetch.py" "$BIN/fleet-release-verify.py" "$BIN/fleet-ui-lang.sh" "$RH/rel/$S1/bin/"
+  printf '#!/bin/sh\necho SIGNED "$@"\n' > "$RH/rel/$S1/bin/fleet"
+  chmod +x "$RH/rel/$S1/bin/"*
+  printf 'bin/fleet-install.sh  installer\nbin/fleet\nbin/fleet-client-update.sh\nbin/fleet-versions-lib.sh\nbin/fleet-release-fetch.py\nbin/fleet-release-verify.py\nbin/fleet-ui-lang.sh\n' \
+    > "$RH/rel/$S1/tokenledger/hub/api/fleetclient/manifest"
+  mkdir -p "$RH/rel/$S1/.release"
+  printf '{"schema": 1, "sha": "%s", "prev": "", "seq": 7, "artifacts": []}\n' "$S1" > "$RH/rel/$S1/.release/manifest.json"
+  printf '%s\n' "$S1" > "$RH/rel/stable"
+  # a hostile /install: anything that runs it leaves a mark
+  printf '#!/bin/sh\ntouch "%s/hostile-ran"\nexit 1\n' "$WORK" > "$RH/install"
+  python3 "$BIN/fleet-release-hub-fixture.py" "$RH" 2>"$WORK/relhub.err" &
+  RELHUB_PID=$!
+  for _ in $(seq 1 300); do [ -s "$RH/port" ] && break; sleep 0.1; done
+  if [ ! -s "$RH/port" ]; then
+    st_miss "L the signing hub never started: $(tail -2 "$WORK/relhub.err")"
+  else
+    RHUB="http://127.0.0.1:$(cat "$RH/port")"
+    printf '{"commit":"img","client_version":"%s","stable":"%s","client_compat":1,"min_client_compat":0}\n' "$S1" "$S1" > "$RH/version"
+    printf 'FLEET_HUB_URL=%s\n' "$RHUB" > "$CONF/fleet.conf"
+    rm -f "$CONF/release.pub" "$CONF/release.pub.revoked" "$CONF/hub-defaults.conf"
+    sstage() { FLEET_UI_LANG=${LANG_T:-zh} bash "$ROOT/bin/fleet-client-update.sh" stage "$S1" 2>"$WORK/err"; }
+    linstall() {   # a client at v1 that carries the checker, beside its updater
+      install_client v1; cp "$BIN/fleet-release-fetch.py" "$BIN/fleet-release-verify.py" "$BIN/fleet-ui-lang.sh" "$ROOT/bin/"
+      sed -i.bak "s#^hub=.*#hub=$RHUB#" "$ROOT/.client-version"; rm -f "$ROOT/.client-version.bak"
+    }
+    untouched() { grep -q OLD "$ROOT/bin/fleet" && [ ! -e "$ROOT.versions/.next" ] && [ ! -e "$ROOT.versions/$S1" ]; }
+    # a file altered inside tree.tar.gz (its `tree` digest still matches): refused
+    linstall; cp "$RH/key" "$CONF/release.pub"; : > "$RH/tamper"; : > "$RH/hub.log"
+    LANG_T=en sstage; rc=$?
+    if [ "$rc" != 0 ] && untouched && grep -q 'failed the release signature check' "$WORK/err" \
+       && [ "$(grep -c . "$WORK/err")" = 1 ] && grep -q 'digest does not match' "$WORK/err"; then
+      st_ok_all "L a file altered inside the signed tree: refused, nothing staged, one line: $(cat "$WORK/err")"
+    else st_miss "L tampered file: rc=$rc err=$(cat "$WORK/err") vers=$(ls -a "$ROOT.versions" 2>&1)"; fi
+    st=$(cat "$XDG_CACHE_HOME/claude-fleet/shell/update.state" 2>/dev/null)
+    case "$st" in *'"phase": "failed"'*"$S1"*) st_ok_all "L update.state: failed, naming $(printf '%.7s' "$S1")" ;; *) st_miss "L update.state: $st" ;; esac
+    # the next start says why again, not 「后台取」 — and tries again in the
+    # background (refused again: the tree is still altered)
+    rm -f "$STATE/stage.log"; stamp_old; FLEET_UI_LANG=zh start; rc=$?
+    if [ "$rc" = 0 ] && grep -q '没通过发布签名校验' "$WORK/err" && ! grep -q '后台取' "$WORK/err"; then
+      st_ok_all "L the next start: the refusal again, not 「后台取」: $(head -1 "$WORK/err")"
+    else st_miss "L start after refusal: rc=$rc err=$(cat "$WORK/err")"; fi
+    for _ in $(seq 1 100); do grep -q . "$STATE/stage.log" 2>/dev/null && [ ! -d "$ROOT.versions/.lock" ] && break; sleep 0.2; done
+    untouched && st_ok_all "L the background retry refused too, nothing staged" || st_miss "L bg retry: $(cat "$STATE/stage.log" 2>&1)"
+    rm -f "$RH/tamper"
+    # the installer altered inside the signed tree: refused before it runs
+    linstall; cp "$RH/key" "$CONF/release.pub"; printf 'bin/fleet-install.sh\n' > "$RH/tamper"
+    sstage; rc=$?; rm -f "$RH/tamper"
+    [ "$rc" != 0 ] && untouched && grep -q 'bin/fleet-install.sh: digest does not match' "$WORK/err" \
+      && st_ok_all "L the installer altered inside the signed tree: refused, nothing run or staged" \
+      || st_miss "L tampered installer: rc=$rc err=$(cat "$WORK/err")"
+    # a release signed by a key the pinned one does not vouch for (the whole
+    # tree, installer included, replaced): refused
+    linstall; cp "$RH/key" "$CONF/release.pub"; : > "$RH/badsig"
+    sstage; rc=$?; rm -f "$RH/badsig"
+    [ "$rc" != 0 ] && untouched && grep -q '没通过发布签名校验' "$WORK/err" \
+      && st_ok_all "L a release signed by another key: refused, nothing staged" \
+      || st_miss "L badsig: rc=$rc err=$(cat "$WORK/err")"
+    # pinned, and the hub stops serving releases: refused — never its /install
+    linstall; cp "$RH/key" "$CONF/release.pub"; : > "$RH/nostore"
+    sstage; rc=$?; rm -f "$RH/nostore"
+    [ "$rc" != 0 ] && untouched && grep -q '取不到新版' "$WORK/err" && [ ! -e "$WORK/hostile-ran" ] \
+      && st_ok_all "L pinned key, hub with no releases: refused, the hub's /install not run" \
+      || st_miss "L nostore: rc=$rc err=$(cat "$WORK/err") hostile=$([ -e "$WORK/hostile-ran" ] && echo ran)"
+    # valid: staged from the verified tree; the hostile /install never fetched
+    linstall; cp "$RH/key" "$CONF/release.pub"; : > "$RH/hub.log"
+    sstage; rc=$?
+    cv="$ROOT.versions/$S1/.client-version"
+    if [ "$rc" = 0 ] && [ "$(cat "$ROOT.versions/.next" 2>/dev/null)" = "$S1" ] && grep -q SIGNED "$ROOT.versions/$S1/bin/fleet" \
+       && grep -qx "version=$S1" "$cv" && grep -qx "hub=$RHUB" "$cv" && grep -qx 'compat=1' "$cv" && grep -q OLD "$ROOT/bin/fleet"; then
+      st_ok_all "L a valid signed release: staged at versions/$(printf '%.7s' "$S1") (.client-version: the release, compat 1, the hub)"
+    else st_miss "L valid: rc=$rc err=$(cat "$WORK/err") cv=$(cat "$cv" 2>&1) log=$(tail -3 "$STATE/update.log" 2>&1)"; fi
+    ! grep -qx /install "$RH/hub.log" && [ ! -e "$WORK/hostile-ran" ] && grep -q "^/v1/fleet/release/$S1/tree.tar.gz" "$RH/hub.log" \
+      && st_ok_all "L the hub's /install never fetched; the signed tree was" || st_miss "L hub asked: $(tr '\n' ' ' < "$RH/hub.log")"
+    start; rc=$?
+    [ "$rc" = 3 ] && grep -q SIGNED "$ROOT/bin/fleet" && st_ok_all "L the next start switches to it (exit 3)" \
+      || st_miss "L switch: rc=$rc err=$(cat "$WORK/err")"
+    # no key yet, the hub keeps releases: pinned once (as a login install does), then checked
+    linstall; rm -f "$CONF/release.pub"
+    sstage; rc=$?
+    [ "$rc" = 0 ] && cmp -s "$RH/key" "$CONF/release.pub" && grep -q SIGNED "$ROOT.versions/$S1/bin/fleet" \
+      && st_ok_all "L no key yet: the hub's taken once, the release checked against it" \
+      || st_miss "L first pin: rc=$rc err=$(cat "$WORK/err") pub=$(cat "$CONF/release.pub" 2>&1)"
+  fi
+  kill "$RELHUB_PID" 2>/dev/null; RELHUB_PID=''
+fi
 
 if [ "$FAIL" = 0 ]; then echo "PASS fleet-client-update-selftest"; else echo "FAIL fleet-client-update-selftest"; fi
 st_done

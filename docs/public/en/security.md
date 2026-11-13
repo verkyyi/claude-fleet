@@ -49,7 +49,7 @@ A session runs the agent and also third-party code it pulls in (npm packages, MC
 
 **Revocation takes effect at once, even with the hub away.** (live · gate 6) The hub pushes the revocation list to the relay and to every machine's entry port, which keep it locally and check only that local copy on every request; a revoked pass or certificate stops working at once even if it has not expired. If the hub goes down, the relay and the doors keep verifying against the list they hold, and short-lived credentials already issued keep working.
 
-**Automatic updates accept only signatures.** (live) Every machine pulls only `stable` and verifies it with the public key it remembers; the final switch is re-checked by the root core itself — the signature and every file's digest.
+**Automatic updates are signature-checked.** (live) Every machine pulls only `stable` and verifies it with the public key it remembers; the final switch is re-checked by the root core itself — the signature and every file's digest. The client on your own computer, when connected to a hub, checks each update the same way against the key it remembered when it was installed — the signature and every file's digest — and refuses one that does not verify, staying on the version it has. Three cases rely on HTTPS alone rather than a signature: the first install (the `curl … | sh` line), a client set up without a hub (it follows `stable` from GitHub), and a client whose hub publishes no signed releases.
 
 ## If one part is compromised, who is affected
 

@@ -25,6 +25,8 @@ bin/fleet_managed.py	login,view,ls,show,answer,connect,doctor-live
 bin/fleet_redact.py	install:read,doctor:read,doctor-live:read
 bin/fleet-client-lib.sh	static
 bin/fleet-client-update.sh	doctor,view,doctor-live
+bin/fleet-release-fetch.py	static
+bin/fleet-release-verify.py	static
 bin/fleet-versions-lib.sh	install,doctor,host-on,view,ls,show,answer,doctor-live
 bin/fleet-update.sh	update,update-live
 bin/fleet-client-retire.sh	status,doctor,view,doctor-live

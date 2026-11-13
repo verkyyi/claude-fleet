@@ -441,7 +441,7 @@ if full; then
 else
   # which version, and from where (WHICH VERSION above): FROM, the manifest's
   # path under it, and what .client-version says
-  VER='' COMPAT='' COMMIT='' MARK=0 MPATH="$MANIFEST_PATH" STABLE='' CURL='' HCOMMIT=''
+  VER='' COMPAT='' COMMIT='' MARK=0 MPATH="$MANIFEST_PATH" STABLE='' CURL='' CURL_BAD='' HCOMMIT=''
   if [ "$HUB_ANS" = 1 ]; then
     MARK=1
     curl -fsS --max-time 10 "$HUBURL/version" -o "$tmp/version.json" 2>/dev/null || : > "$tmp/version.json"
@@ -455,14 +455,22 @@ def s(k):
     v = d.get(k)
     return "" if v is None else str(v)
 st = s("stable") if re.match(r"^[0-9a-f]{40}$", s("stable")) else ""
-url = s("client_url") if st and re.match(r"^https?://[A-Za-z0-9._~:/@%+-]+$", s("client_url")) else ""
+# where the client files are: https only - plain http just on this computer
+# 127.0.0.1 or localhost, as the selftest hubs are - any other is not used
+cu = s("client_url")
+ok = re.match(r"^https?://[A-Za-z0-9._~:/@%+-]+$", cu) and re.match(
+    r"^https://|^http://127[.]0[.]0[.]1/|^http://127[.]0[.]0[.]1:[0-9]+/|^http://localhost/|^http://localhost:[0-9]+/", cu)
+url = cu if st and ok else ""
+bad = cu if st and cu and not ok else ""
 # one release line - issue 4671: a Mac installs stable too
 ver = s("client_version")
-for k, v in (("VER", ver), ("COMPAT", s("client_compat")), ("HCOMMIT", s("commit")), ("STABLE", st), ("CURL", url)):
+for k, v in (("VER", ver), ("COMPAT", s("client_compat")), ("HCOMMIT", s("commit")), ("STABLE", st), ("CURL", url), ("CURL_BAD", bad)):
     print("%s=%s" % (k, shlex.quote(v)))
 PYV
 )"
-    if [ -n "$CURL" ]; then
+    if [ -n "$CURL_BAD" ]; then
+      say "fleet-install: 入口给的客户端地址不是 https（$(printf '%s' "$CURL_BAD" | cut -c1-80)），不从那里装"; exit 1
+    elif [ -n "$CURL" ]; then
       FROM="${CURL%/}" COMMIT=$(printf '%.7s' "$STABLE")
     else
       FROM="$HUBURL/install" MPATH=manifest COMMIT=$HCOMMIT     # the image's client

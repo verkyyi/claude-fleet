@@ -19,7 +19,8 @@ of a fake ccquota. Test-only; binds 127.0.0.1, dies with its alarm.
 <w>/nostore                 present: every route 404s (a hub with no store)
 <w>/tamper                  present: the tree's first file is altered inside a
                             tree.tar.gz the manifest's `tree` digest does name
-                            (only the per-file check can catch it)
+                            (only the per-file check can catch it); holding a
+                            path, that file instead
 <w>/legacy                  present: a hub from before SSHSIG — no SSHSIG
                             anywhere; the manifest signed with a plain ed25519
                             key (seed sha256("legacy")), in the
@@ -32,6 +33,9 @@ of a fake ccquota. Test-only; binds 127.0.0.1, dies with its alarm.
                             the manifest's `artifacts` (unless its meta lists
                             them) and served at <sha>/artifacts/<n>
 <w>/badart                  present: every artifact is served one byte altered
+<w>/version, <w>/install     present: served at /version and /install as they are
+                            (a client's update asks /version; /install shows
+                            whether anything still takes the hub's installer)
 <w>/hub.log                 every path asked, one per line
 <w>/port                    written once listening
 """
@@ -130,6 +134,8 @@ def build(sha):
     files = []
     buf = io.BytesIO()
     tamper = flag("tamper")
+    if tamper:
+        tamper = open(os.path.join(W, "tamper")).read().strip() or True
     with tarfile.open(fileobj=buf, mode="w") as t:
         for d, dirs, names in os.walk(root):
             dirs[:] = sorted(x for x in dirs if not (d == root and x == ".release"))
@@ -141,7 +147,7 @@ def build(sha):
                 b = open(p, "rb").read()
                 mode = 0o755 if os.access(p, os.X_OK) else 0o644
                 files.append({"path": rel, "sha256": hashlib.sha256(b).hexdigest(), "size": len(b), "mode": mode})
-                if tamper:
+                if tamper is True or tamper == rel:
                     b, tamper = bytes([b[0] ^ 1]) + b[1:] if b else b"x", False
                 ti = tarfile.TarInfo(rel)
                 ti.size, ti.mode = len(b), mode
@@ -175,6 +181,8 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         with open(os.path.join(W, "hub.log"), "a") as f:
             f.write(self.path + "\n")
+        if self.path in ("/version", "/install") and os.path.isfile(os.path.join(W, self.path[1:])):
+            return self.send(200, open(os.path.join(W, self.path[1:]), "rb").read())
         if os.path.exists(os.path.join(W, "nostore")) or not self.path.startswith(P):
             return self.send(404)
         rest = self.path[len(P):]

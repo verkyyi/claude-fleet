@@ -22,7 +22,8 @@
 # A is installed; the hub's stable is B. Each leg runs the REAL script:
 #   install-sync  bin/fleet-install-sync.sh on a login install at A whose origin
 #                 is GitHub (as on every machine today), FLEET_HUB_URL set
-#   client        bin/fleet-client-update.sh stage, a client at A, hub = the fake
+#   client        bin/fleet-client-update.sh stage, a client at A, hub = the fake:
+#                 the hub's signed release of a client, the key pinned once
 #   bootstrap     bin/fleet-login-bootstrap.sh in a fresh HOME on a managed
 #                 machine (FLEET_NODE_ROOT/current = B), no bootstrap cache —
 #                 the starter repo (claude-fleet itself) included (issue #2775)
@@ -115,6 +116,7 @@ exit 0
 EOF
 mark() { printf '%s\n' "$1" > "$SEED/DIST-MARK"; git -C "$SEED" add -A; git -C "$SEED" commit -qm "dist $1"; git -C "$SEED" rev-parse HEAD; }
 A=$(mark A); B=$(mark B)
+CL=c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1   # the client leg's release (not a commit of the seed)
 # the hub's release store: <sha>/ as `ccquota release fetch` leaves it
 for s in "$A" "$B"; do
   mkdir -p "$WORK/rel/$s/.release"
@@ -347,21 +349,34 @@ leg_bad_signature() {
 }
 
 leg_client() {
-  local h="$WORK/cl" root conf v
+  local h="$WORK/cl" root conf v c="$WORK/rel/$CL" f
   blackhole "$h"; conf="$h/.config/claude-fleet"; root="$h/.local/share/claude-fleet"
+  # the client's release: a real client package in miniature (the installer,
+  # the updater and what it checks with, a stand-in fleet, the manifest), signed
+  # by the hub like any release — the client takes it with its own checker
+  # against the key it pins from the hub (no GitHub, no ccquota)
+  mkdir -p "$c/bin" "$c/tokenledger/hub/api/fleetclient" "$c/.release"
+  printf 'bin/fleet-install.sh  installer\nbin/fleet\n' > "$c/tokenledger/hub/api/fleetclient/manifest"
+  for f in fleet-install.sh fleet-client-update.sh fleet-versions-lib.sh fleet-release-fetch.py fleet-release-verify.py fleet-ui-lang.sh; do
+    cp "$BIN/$f" "$c/bin/"; printf 'bin/%s\n' "$f" >> "$c/tokenledger/hub/api/fleetclient/manifest"
+  done
+  printf '#!/bin/sh\necho client %s\n' "$CL" > "$c/bin/fleet"; chmod +x "$c/bin/"*
+  printf '{"schema": 1, "sha": "%s", "prev": "%s", "seq": 3, "artifacts": []}\n' "$CL" "$B" > "$c/.release/manifest.json"
   mkdir -p "$conf" "$root/bin"
-  cp "$BIN/fleet-client-update.sh" "$BIN/fleet-versions-lib.sh" "$root/bin/"
+  cp "$BIN/fleet-client-update.sh" "$BIN/fleet-versions-lib.sh" "$BIN/fleet-release-fetch.py" "$BIN/fleet-release-verify.py" "$root/bin/"
   printf '#!/bin/sh\necho client A\n' > "$root/bin/fleet"; chmod +x "$root/bin/fleet"
   printf 'version=%s\ncompat=1\ncommit=%.7s\nhub=%s\nat=1\n' "$A" "$A" "$HUB" > "$root/.client-version"
   printf 'A\n' > "$root/DIST-MARK"
   OUT=$(HOME="$h" XDG_CONFIG_HOME="$h/.config" XDG_CACHE_HOME="$h/.cache" XDG_DATA_HOME="$h/.local/share" \
     FLEET_CONF_DIR="$conf" TMPDIR="$WORK" FLEET_HUB_URL="$HUB" FLEET_CLIENT_ROOT="$root" \
-    bash "$root/bin/fleet-client-update.sh" stage "$B" 2>&1 | tail -3)
+    bash "$root/bin/fleet-client-update.sh" stage "$CL" 2>&1 | tail -3)
   v=$(cat "$root.versions/.next" 2>/dev/null)
   if [ -z "$v" ] || [ ! -f "$root.versions/$v/bin/fleet" ]; then
     WHY="nothing staged ($(printf '%s' "$OUT" | tail -1))"
-  elif ! grep -q "^version=$B" "$root.versions/$v/.client-version" 2>/dev/null; then
-    WHY="staged $(sed -n 's/^version=//p' "$root.versions/$v/.client-version" 2>/dev/null), not $B"
+  elif ! grep -q "^version=$CL" "$root.versions/$v/.client-version" 2>/dev/null; then
+    WHY="staged $(sed -n 's/^version=//p' "$root.versions/$v/.client-version" 2>/dev/null), not $CL"
+  elif ! cmp -s "$conf/release.pub" "$WORK/relhub/key"; then
+    WHY="the hub's release key was not pinned"
   fi
 }
 

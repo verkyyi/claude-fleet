@@ -72,6 +72,10 @@ bin/fleet-client-lib.sh
 # keeps up with stable by itself (#1722, #1805): newer client + the team's
 # defaults; `fleet update` says where this computer stands
 bin/fleet-client-update.sh
+# what it checks a new version with before installing it: the hub's signed
+# release against the key this computer pinned (python3 + ssh-keygen, no ccquota)
+bin/fleet-release-fetch.py
+bin/fleet-release-verify.py
 # the one whole-version switch (#1894, #1900): the updater's and the install
 # line's — a rerun of the line installs beside the client in use, never over it
 bin/fleet-versions-lib.sh
@@ -143,8 +147,6 @@ bin/fleet-node-install.sh  served
 # run as `curl … | bash`); `fleet host trust-release-key` is fleet-release-key.sh;
 # fleet-release-sign.py is its scan
 bin/fleet-release-lib.sh  served
-bin/fleet-release-fetch.py  served
-bin/fleet-release-verify.py  served
 bin/fleet-release-key.sh  served
 bin/fleet-release-sign.py  served
 # the admin's commands (#1986, #3140): `fleet users`, `fleet hub`, `fleet
