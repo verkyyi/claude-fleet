@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -246,8 +248,14 @@ func TestNodeIdentityMachineIsTheEnrollments(t *testing.T) {
 	impostor.c.CloseNow()
 	impostor.tnode = dialAdminCaps(t, h, impostor.token, false, control.CapMachine)
 	beat(t, impostor.c, control.Proto, control.Heartbeat{Hostname: "mac-a", OSUser: "root"})
-	box := memberDeviceNode(t, h, pBob, "bob-box", "root", false)
-	for name, tok := range map[string]string{"root@mac-a re-reported": impostor.token, "enrolled as root": box.token} {
+	// A member's device as root gets no node at all (task MPCX: a login the
+	// hub cannot record as the person's is no node pass).
+	boxDev := newDevice(t)
+	boxDev.scan(t, h, pBob, "bob-box")
+	if code, out := boxDev.loginNode(t, h, "bob-box", "root"); code != http.StatusConflict {
+		t.Errorf("a member's device as root: %d %v; want 409", code, out)
+	}
+	for name, tok := range map[string]string{"root@mac-a re-reported": impostor.token} {
 		if host, code := machHost(tok); host != "" || code != http.StatusForbidden {
 			t.Errorf("%s: machine host %q HTTP %d; want 403", name, host, code)
 		}
@@ -423,5 +431,328 @@ func TestNodeIdentityReReportIsNotRoutedTo(t *testing.T) {
 	})
 	if id, _, err := h.srv.chatRelayNode("bob-mbp-2", "alice"); err == nil && id == bob.id {
 		t.Errorf("chat for alice@bob-mbp-2 picked bob's device")
+	}
+}
+
+// --- the device road, the registry row, operator, ownerless, trust, leases,
+// usage (task MPCX, second round) ---
+
+// A device road refuses a login it cannot record: none named (or none left
+// once sanitized), on the login road and the scan alike. An endpoint a device
+// road enrolled that never stamped a login — an older hub's — is never a
+// machine's program by its link or its report, and its first report never
+// stamps root on it. A machine's program asks for its own machine's seat only,
+// whatever name it reports.
+func TestNodeIdentityDeviceRoadNeedsALogin(t *testing.T) {
+	h := bobHarness(t)
+	h.srv.FleetAdmins = []string{"_fleetadmin"}
+
+	d := newDevice(t)
+	d.scan(t, h, pBob, "bob-mbp")
+	for _, login := range []string{"", "..."} {
+		if code, out := d.loginNode(t, h, "bob-mbp", login); code != http.StatusConflict || out["code"] != "no_login" {
+			t.Errorf("node pass with login %q: %d %v; want 409 no_login", login, code, out)
+		}
+	}
+	// The scan road: `fleet node join` naming no login gets no node.
+	code, body := postJSON(t, h, "/v1/fleet/login/start", map[string]string{
+		"public_key": newUserKey(t), "device_name": "bob-box", "purpose": "node", "os_user": ""})
+	if code != 200 {
+		t.Fatalf("start: %d %s", code, body)
+	}
+	var st DeviceStart
+	_ = json.Unmarshal(body, &st)
+	personForm(t, h, pBob, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "node_ack": {"1"}})
+	code, body = postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode})
+	var cr CertResponse
+	_ = json.Unmarshal(body, &cr)
+	if code == 200 && cr.Node != nil {
+		t.Errorf("a scan with no login: node %+v; want none", cr.Node)
+	}
+
+	// An older hub's device endpoint that never said a login.
+	mach := enrollAs(t, h, "mac-a-root", "mac-a", "root")
+	legacy := memberDeviceNode(t, h, pBob, "bob-air", "bob", false)
+	legacy.c.CloseNow()
+	waitFor(t, 3*time.Second, "the device's link gone", func() bool { return h.srv.nodes.get(legacy.id) == nil })
+	// The old link's last beat may still be landing: clear until it stays clear.
+	waitFor(t, 5*time.Second, "the login cleared for good", func() bool {
+		for _, q := range []string{`UPDATE endpoints SET enrolled_user = '', os_user = '' WHERE endpoint_id = ?`,
+			`UPDATE nodes SET os_user = '' WHERE endpoint_id = ?`} {
+			if _, err := h.srv.Store.DB().Exec(q, legacy.id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(150 * time.Millisecond)
+		et, err := h.srv.Store.EndpointTrustOf(legacy.id)
+		return err == nil && et.EnrolledUser == ""
+	})
+	legacy.tnode = dialAdminCaps(t, h, legacy.token, false, control.CapMachine, control.CapLoginJoin)
+	beat(t, legacy.c, control.Proto, control.Heartbeat{Hostname: "bob-air"})
+	waitFor(t, 3*time.Second, "the legacy link", func() bool { return h.srv.nodes.get(legacy.id) != nil })
+	waitFor(t, 3*time.Second, "its login-less beat", func() bool {
+		r := h.srv.nodeRow(legacy.id)
+		return r != nil && r.OSUser == ""
+	})
+	if et, err := h.srv.Store.EndpointTrustOf(legacy.id); err != nil || et.EnrolledUser != "" {
+		t.Fatalf("the fixture: enrolled_user %q (%v); want none", et.EnrolledUser, err)
+	}
+	rec := httptest.NewRecorder()
+	if host := h.srv.nodeMachineHost(rec, httptest.NewRequest(http.MethodGet, "/", nil), mustEndpoint(t, h, legacy.id)); host != "" || rec.Code != http.StatusForbidden {
+		t.Errorf("an unstamped device endpoint's machine link: machine host %q HTTP %d; want 403", host, rec.Code)
+	}
+	if st, out, raw := adminTokenCall(t, h, legacy.token, http.MethodPost, map[string]string{"login": "_fleetadmin"}); st != http.StatusForbidden {
+		t.Errorf("an unstamped device endpoint: admin-token %d %+v %s; want 403", st, out, raw)
+	}
+	if c := h.srv.nodes.get(legacy.id); c != nil && c.machineOpener {
+		t.Errorf("an unstamped device endpoint opens logins")
+	}
+	// Its first report of root does not stamp it.
+	beat(t, legacy.c, control.Proto, control.Heartbeat{Hostname: "bob-air", OSUser: "root"})
+	waitFor(t, 3*time.Second, "the root beat", func() bool {
+		r := h.srv.nodeRow(legacy.id)
+		return r != nil && r.OSUser == "root"
+	})
+	if et, err := h.srv.Store.EndpointTrustOf(legacy.id); err != nil || et.EnrolledUser == "root" {
+		t.Errorf("a device endpoint's first report stamped %q (%v); want root never", et.EnrolledUser, err)
+	}
+
+	// A machine's program reporting another machine's name asks for its own seat.
+	mc := dialAdminCaps(t, h, mach, false, control.CapMachine)
+	beat(t, mc.c, control.Proto, control.Heartbeat{Hostname: "mac-b", OSUser: "root"})
+	waitFor(t, 3*time.Second, "mac-a's program reports mac-b", func() bool {
+		r := h.srv.nodeRow("ep_mac-a-root")
+		return r != nil && r.Hostname == "mac-b"
+	})
+	if st, out, raw := adminTokenCall(t, h, mach, http.MethodPost, map[string]string{"login": "_fleetadmin"}); st != 200 || out.Machine != "mac-a" {
+		t.Fatalf("mac-a's program reporting mac-b: admin-token %d machine %q %s; want mac-a's seat", st, out.Machine, raw)
+	}
+	if _, err := h.srv.Store.LiveEndpointOn("mac-b", "_fleetadmin"); err == nil {
+		t.Fatalf("a seat was issued on mac-b")
+	}
+}
+
+// bobHarness is certHarness with Bob holding login bob on mac-e-mac-c — an
+// active login somewhere, so his devices get node passes.
+func bobHarness(t *testing.T) *harness {
+	t.Helper()
+	h, _ := certHarness(t)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pBob, Hostname: "mac-e-mac-c", Login: "bob"}); code != 200 {
+		t.Fatalf("adopt bob: HTTP %d", code)
+	}
+	return h
+}
+
+// fleetBeat has node n beat as login@host with one fleet on machine.
+func fleetBeat(t *testing.T, n *fleetNode, host, login, machine string, f control.Fleet) {
+	t.Helper()
+	beat(t, n.c, control.Proto, control.Heartbeat{Hostname: host, OSUser: login, MachineID: machine,
+		Fleets: []control.Fleet{f}, ObservedAt: time.Now()})
+}
+
+// The registry row names the machine and login the hub holds the node to: a
+// member's device re-reporting another person's machine and login registers
+// its fleet as itself, and that row moves none of their passes, tickets,
+// relays or views. A machine id is the reporter's own word: another node's
+// moves its fleets nowhere — the same login re-enrolled on the same machine
+// takes it over.
+func TestNodeIdentityRegistryRowIsHeld(t *testing.T) {
+	h, _, n := peerHarness(t)
+	bob := memberDeviceNode(t, h, pBob, "bob-mbp", "bob", false)
+
+	fb := fakeFleet(t, machineC, "fleet-bob", "o/r", "/c", 3)
+	fleetBeat(t, bob, "mac-e", "alice", machineC, fb)
+	var row store.FleetRow
+	waitFor(t, 3*time.Second, "bob's fleet registered", func() bool {
+		r, err := h.srv.Store.Fleet(fb.FleetID)
+		row = r
+		return err == nil
+	})
+	if row.Hostname != "bob-mbp" || row.OSUser != "bob" {
+		t.Fatalf("bob's device's fleet row = %s@%s; want bob@bob-mbp", row.OSUser, row.Hostname)
+	}
+	if h.srv.relayOwner(bob.id, row.Hostname, row.OSUser, h.srv.activeAccounts()) == "person:"+pAlice {
+		t.Fatalf("bob's device's fleet relays as alice")
+	}
+
+	// alice5 holds machineA; bob's device then reports it.
+	fa := fakeFleet(t, machineA, "fleet-alice", "o/r", "/a", 1)
+	fleetBeat(t, n["alice5"], "mac-e", "alice", machineA, fa)
+	waitFor(t, 3*time.Second, "alice's fleet registered", func() bool {
+		r, err := h.srv.Store.Fleet(fa.FleetID)
+		return err == nil && r.EndpointID == n["alice5"].id
+	})
+	steal := fakeFleet(t, machineA, "fleet-x", "o/r", "/x", 2)
+	fleetBeat(t, bob, "bob-mbp", "bob", machineA, steal)
+	beat(t, bob.c, control.Proto, control.Heartbeat{Hostname: "bob-mbp", OSUser: "bob"})
+	time.Sleep(300 * time.Millisecond)
+	if r, err := h.srv.Store.Fleet(fa.FleetID); err != nil || r.EndpointID != n["alice5"].id {
+		t.Fatalf("alice's fleet now reports through %s (%v); want alice5", r.EndpointID, err)
+	}
+	if _, err := h.srv.Store.Fleet(steal.FleetID); err == nil {
+		t.Fatalf("bob's device registered a fleet under alice's machine id")
+	}
+
+	// The same login on the same machine, enrolled anew: it takes the id over.
+	again := connectNode(t, h, "alice5b", "mac-e", "alice", false)
+	fleetBeat(t, again, "mac-e", "alice", machineA, fa)
+	waitFor(t, 3*time.Second, "the re-enrolled node takes its machine id", func() bool {
+		r, err := h.srv.Store.Fleet(fa.FleetID)
+		return err == nil && r.EndpointID == again.id
+	})
+}
+
+// "operator" is the endpoint's as well as the login's: a member's device
+// enrolled under an admin login's name — or on a hub that names no admins —
+// is never the operator's; the operator's own node is.
+func TestNodeIdentityDeviceIsNeverOperator(t *testing.T) {
+	h := bobHarness(t)
+	h.srv.FleetAdmins = []string{"frank"}
+	dev := memberDeviceNode(t, h, pBob, "bob-laptop", "frank", false)
+	op := connectNode(t, h, "mac-b-frank", "mac-b", "frank", false)
+	waitFor(t, 3*time.Second, "frank connected", func() bool { return h.srv.nodes.get(op.id) != nil })
+	if got := h.srv.workerRecordOwner(mustEndpoint(t, h, dev.id)); got == "operator" {
+		t.Errorf("a member's device enrolled as frank: owner %q; want not the operator", got)
+	}
+	if got := h.srv.workerRecordOwner(mustEndpoint(t, h, op.id)); got != "operator" {
+		t.Errorf("the operator's frank@mac-b: owner %q; want operator", got)
+	}
+	h.srv.FleetAdmins = nil
+	if got := h.srv.workerRecordOwner(mustEndpoint(t, h, dev.id)); got == "operator" {
+		t.Errorf("no admins named: a member's device's owner %q; want not the operator", got)
+	}
+	if got := h.srv.workerRecordOwner(mustEndpoint(t, h, op.id)); got != "operator" {
+		t.Errorf("no admins named: the operator's node's owner %q; want operator", got)
+	}
+}
+
+// A device's node is its person's or nothing: a login the hub cannot record
+// as theirs (another person's, root) gets no node pass; a device endpoint no
+// person owns (an older hub's) places nothing and holds no client lease as the
+// operator. The operator's own ownerless node still does both.
+func TestNodeIdentityOwnerlessNodeActsForNoOne(t *testing.T) {
+	h := bobHarness(t)
+	memberDeviceNode(t, h, pAlice, "alice-box", "alice", false)
+	d := newDevice(t)
+	d.scan(t, h, pBob, "alice-box")
+	if code, out := d.loginNode(t, h, "alice-box", "alice"); code != http.StatusConflict || out["code"] != "login_not_recorded" {
+		t.Errorf("bob's device as alice@alice-box: %d %v; want 409 login_not_recorded", code, out)
+	}
+	if id, err := h.srv.Store.DeviceNodeEndpoint(d.fp); err == nil {
+		t.Errorf("a refused node pass left endpoint %s behind", id)
+	}
+	r := newDevice(t)
+	r.scan(t, h, pBob, "bob-box")
+	if code, out := r.loginNode(t, h, "bob-box", "root"); code != http.StatusConflict {
+		t.Errorf("bob's device as root: %d %v; want 409", code, out)
+	}
+
+	dev := memberDeviceNode(t, h, pBob, "bob-mbp", "bob", false)
+	if _, err := h.srv.Store.DB().Exec(`DELETE FROM fleet_accounts WHERE endpoint_id = ?`, dev.id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.srv.nodePrincipal(mustEndpoint(t, h, dev.id), store.FleetRow{}); err == nil {
+		t.Errorf("an ownerless device endpoint places as the operator")
+	}
+	if resp, raw := getWithToken(t, h, "/v1/node/client", dev.token); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("an ownerless device endpoint's client lease: %d %s; want 403", resp.StatusCode, raw)
+	}
+	op := connectNode(t, h, "mac-b-frank", "mac-b", "frank", false)
+	if p, err := h.srv.nodePrincipal(mustEndpoint(t, h, op.id), store.FleetRow{}); err != nil || p.Person != "" {
+		t.Errorf("the operator's ownerless node: %+v %v; want its grant", p, err)
+	}
+	if resp, raw := getWithToken(t, h, "/v1/node/client", op.token); resp.StatusCode != 200 {
+		t.Errorf("the operator's ownerless node's client lease: %d %s; want 200", resp.StatusCode, raw)
+	}
+}
+
+// A member's device never takes its machine name's trust — not when the
+// operator trusts that name after the device enrolled under it. An endpoint
+// the operator's code enrolled as that machine does.
+func TestNodeIdentityDeviceTakesNoMachineTrust(t *testing.T) {
+	h := bobHarness(t)
+	dev := memberDeviceNode(t, h, pBob, "bob-box", "bob", false)
+	enrollAs(t, h, "bob-box-carol", "bob-box", "carol")
+	settings, err := h.srv.trustSettings(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr, _ := h.srv.endpointTrust(dev.id, "bob-box", settings); tr != TrustUntrusted {
+		t.Fatalf("before any trust word: %s", tr)
+	}
+	if err := h.srv.Store.SetFleetSetting(trustKey("bob-box"), TrustTrusted, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ = h.srv.trustSettings(time.Now())
+	if tr, src := h.srv.endpointTrust(dev.id, "bob-box", settings); tr != TrustUntrusted || src != TrustSourceDevice {
+		t.Errorf("a member's device after its name was trusted: %s (%s); want untrusted (device)", tr, src)
+	}
+	if tr, _ := h.srv.endpointTrust("ep_bob-box-carol", "bob-box", settings); tr != TrustTrusted {
+		t.Errorf("the operator-enrolled endpoint on bob-box: %s; want trusted", tr)
+	}
+}
+
+// --force takes back only a lease of the same person (or the same node, or
+// the operator's own node's); a conflict over another person's lease says it
+// is held and until when — not whose session, machine or login.
+func TestNodeLeaseForceStaysInTheFamily(t *testing.T) {
+	h, macD, _ := newLeasePair(t)
+	enablePeople(t, h, pAlice, pBob)
+	h.srv.FleetAdmins = []string{"frank"}
+	macB := newLeaseNode(t, h, "mac-b", machineC)
+	// Bob's node: login bobl on mac-x.
+	const machineX = "44444444-4444-4444-8444-444444444444"
+	fx := connectFakeNode(t, h, "mac-x", true)
+	f := fakeFleet(t, machineX, "fleet-mac-x", leaseRepo, "/Users/x/mac-x")
+	fx.beat("mac-x", "bobl", machineX, f)
+	waitFor(t, 3*time.Second, "mac-x fleet registered", func() bool {
+		_, err := h.srv.Store.Fleet(f.FleetID)
+		return err == nil
+	})
+	macX := &leaseNode{fakeNode: fx, host: "mac-x", machine: machineX, token: h.tokens["mac-x"], fleet: f.FleetID}
+	for _, a := range [][3]string{{"mac-d", "ivan", pAlice}, {"mac-b", "ivan", pAlice}, {"mac-x", "bobl", pBob}} {
+		if err := h.srv.changeAccount(FleetAccountRequest{Action: "adopt", PrincipalID: a[2], Hostname: a[0], Login: a[1]}, "test"); err != nil {
+			t.Fatalf("adopt %s on %s: %v", a[1], a[0], err)
+		}
+	}
+	if st, out := macD.acquire(t, h, 5, false); st != 200 {
+		t.Fatalf("alice on mac-d: %d %v", st, out)
+	}
+	macD.show(t, 5)
+	for _, force := range []bool{false, true} {
+		st, out := macX.acquire(t, h, 5, force)
+		if st != http.StatusConflict {
+			t.Fatalf("bob (force=%v): %d %v; want 409", force, st, out)
+		}
+		hv, _ := out["holder"].(map[string]any)
+		if hv["node"] != "-" || hv["worker_id"] != "-" || hv["hostname"] != "" || hv["os_user"] != "" {
+			t.Errorf("bob (force=%v) is told %v about alice's lease; want only that it is held", force, hv)
+		}
+	}
+	if st, out := macB.acquire(t, h, 5, true); st != 200 || out["displaced"] == nil {
+		t.Fatalf("alice's own mac-b with --force: %d %v; want her lease back", st, out)
+	}
+	if st, out := macD.acquire(t, h, 5, false); st != http.StatusConflict || holderNode(out) != "mac-b" {
+		t.Fatalf("alice's mac-d: %d %v; want held by her mac-b, named", st, out)
+	}
+}
+
+// Usage is put under the login the node enrolled as, whatever login its push
+// names.
+func TestNodeIdentityUsageUnderTheEnrolledLogin(t *testing.T) {
+	h := bobHarness(t)
+	dev := memberDeviceNode(t, h, pBob, "bob-mbp", "bob", false)
+	batch := &model.Batch{AgentVersion: "test", AccountOrigin: model.OriginLogin,
+		Identity: model.Identity{AccountUUID: "acct-bob-usage", Hostname: "mac-e", OSUser: "alice", Source: model.SourceClaude},
+		Events:   []model.UsageEvent{{MessageUUID: "m-usage-1", TS: time.Now().UTC(), Model: "x", OutputTokens: 1}}}
+	if _, err := h.srv.ingest(mustEndpoint(t, h, dev.id), batch); err != nil {
+		t.Fatal(err)
+	}
+	var login string
+	if err := h.srv.Store.DB().QueryRow(`SELECT os_user FROM usage_events WHERE message_uuid = 'm-usage-1'`).Scan(&login); err != nil {
+		t.Fatal(err)
+	}
+	if login != "bob" {
+		t.Fatalf("usage recorded under %q; want bob", login)
 	}
 }

@@ -162,6 +162,12 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 	if user == "" {
 		user = ep.OSUser
 	}
+	// The registry row names the machine and login the hub holds this node
+	// to (task MPCX) — what its links are routed to by — never a report
+	// that differs from its enrollment: every reader of the row (who sees a
+	// fleet, whose relay, pass or ticket it is, where a start may go) reads
+	// the hub's word.
+	host, user = s.routeSelf(&ep, s.nodeSelfFrom(&ep, host, user))
 	reports := make([]store.FleetReport, 0, len(hb.Fleets))
 	underived := map[string]bool{}
 	for _, f := range hb.Fleets {
@@ -189,6 +195,10 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 		s.settleUnderived(ep, underived, reconnect, at)
 	}
 	rejected, err := s.Store.RecordFleetSnapshot(ep.ID, host, user, hb.MachineID, reports, at)
+	if errors.Is(err, store.ErrMachineHeld) {
+		s.fleetMachineHeld(ep, hb.MachineID, at)
+		return
+	}
 	if err != nil {
 		log.Printf("node %s: record fleets: %v", ep.ID, err)
 		return
@@ -202,6 +212,17 @@ func (s *Server) recordFleets(ep store.Endpoint, hb control.Heartbeat, verify, r
 	// Issue leases ride the same beat (claude-fleet#1422): a session it
 	// shows renews its lease, a session it no longer shows releases it.
 	s.renewLeases(ep, host, user, reports, rejected, reconnect, s.leaseClock())
+}
+
+// fleetMachineHeld logs, once a window per endpoint, a heartbeat whose
+// machine id another live node holds (store.ErrMachineHeld, task MPCX).
+func (s *Server) fleetMachineHeld(ep store.Endpoint, machineID string, at time.Time) {
+	if ok, _ := s.logQuiet.allow("machine-held/"+ep.ID, at); !ok {
+		return
+	}
+	log.Printf("node %s: heartbeat machine_id %s is registered to another node; fleets not registered", ep.ID, machineID)
+	s.leaseAudit("node:"+ep.ID, "node_identity", "endpoint:"+ep.ID,
+		"MACHINE ID HELD — "+machineID+" is registered to another node: its fleets were not registered", at)
 }
 
 // maxFleetRepos bounds the repo list one fleet may report.

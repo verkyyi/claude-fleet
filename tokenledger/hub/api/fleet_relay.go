@@ -76,9 +76,11 @@ var relaySuffixRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 // relayOwner is who a login belongs to, for "only between your own":
 // "operator" for the hub's admin logins (and for every login when the hub
 // names no admins — a one-operator hub), a person for a login assigned to
-// them, else the endpoint alone.
+// them, else the endpoint alone. The operator's answer is the endpoint's as
+// well as the login's (operatorEndpoint, task MPCX): a member's device is
+// never the operator, whatever login it enrolled under.
 func (s *Server) relayOwner(endpointID, hostname, osUser string, accounts []store.FleetAccount) string {
-	if len(s.FleetAdmins) == 0 || s.isFleetAdmin(osUser) {
+	if (len(s.FleetAdmins) == 0 || s.isFleetAdmin(osUser)) && s.operatorEndpoint(endpointID) {
 		return "operator"
 	}
 	for _, a := range accounts {

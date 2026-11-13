@@ -1345,7 +1345,7 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		if !known {
 			et, _ = s.Store.EndpointTrustOf(n.EndpointID)
 		}
-		v.Trust, v.TrustSource = nodeTrust(n.Hostname, et, settings)
+		v.Trust, v.TrustSource = s.deviceTrust(n.EndpointID, n.Hostname, et, settings)
 		v.Role = et.Role
 		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
 			v.Maintenance = &m

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -155,6 +156,68 @@ func (s *Store) DeviceEnrollers(endpointID string) (principals []string, byDevic
 		principals = append(principals, p)
 	}
 	return principals, byDevice, rows.Err()
+}
+
+// PodEnrolled: endpointID enrolled through a code the hub minted for one
+// user pod (api startClusterPod: label pod-<machine>, the machine pinned,
+// managed) — the pod's own node program, whose token its person's login can
+// read (task MPCX).
+func (s *Store) PodEnrolled(endpointID string) (bool, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_join_codes
+		WHERE endpoint_id = ? AND used_at IS NOT NULL AND role = ? AND machine <> '' AND label = 'pod-' || machine`,
+		endpointID, NodeRoleManaged).Scan(&n)
+	return n > 0, err
+}
+
+// MachineEnrolledByOthers: a live endpoint other than endpointID, enrolled by
+// any road but a device's, enrolled as machine (first label, any case)
+// — the name is a machine's, not only a device's (task MPCX). A LIKE wildcard
+// in the name can only over-match, which reads as "another holds it".
+func (s *Store) MachineEnrolledByOthers(endpointID, machine string) (bool, error) {
+	if i := strings.IndexByte(machine, '.'); i > 0 {
+		machine = machine[:i]
+	}
+	machine = strings.ToLower(machine)
+	if machine == "" {
+		return false, nil
+	}
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints e
+		WHERE e.retired_at IS NULL AND e.endpoint_id <> ?
+		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
+		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
+		      AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL)`,
+		endpointID, machine, machine+".%", NodeRoleClient).Scan(&n)
+	return n > 0, err
+}
+
+// deviceHeldLogins are the logins a device road's endpoint never takes as its
+// enrollment from a report (task MPCX): a machine's own program enrolls as
+// root, and the admin role account comes only from its machine's install.
+var deviceHeldLogins = map[string]bool{"root": true, "_fleetadmin": true, "fleetadmin": true}
+
+// deviceStampHeld: endpointID has no enrolled login yet, a device road
+// enrolled it, and the login a first report would stamp — report, or the
+// os_user an earlier report left — is one of deviceHeldLogins. An unreadable
+// answer (a ledger without the fleet tables) is no.
+func (s *Store) deviceStampHeld(endpointID, report string) bool {
+	var unstamped int
+	var prev string
+	err := s.read.QueryRow(`SELECT CASE WHEN enrolled_user = '' THEN 1 ELSE 0 END, os_user FROM endpoints WHERE endpoint_id = ?`,
+		endpointID).Scan(&unstamped, &prev)
+	if err != nil || unstamped == 0 {
+		return false
+	}
+	cand := prev
+	if cand == "" {
+		cand = report
+	}
+	if !deviceHeldLogins[cand] {
+		return false
+	}
+	_, byDevice, err := s.DeviceEnrollers(endpointID)
+	return err == nil && byDevice
 }
 
 // SetEndpointTrust writes an endpoint's own trust ("" clears it, so the

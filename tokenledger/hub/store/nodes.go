@@ -303,7 +303,9 @@ func (s *Store) NodeHeartbeat(endpointID, hostname, osUser, machineID string, pr
 	}
 	// Its login likewise (task MPCX): the login its join recorded when there
 	// was one (a row an older replica enrolled), else the first it reports.
-	if osUser != "" {
+	// A device road's endpoint never takes root or the admin role account
+	// this way (deviceStampHeld): it stays unstamped.
+	if osUser != "" && !s.deviceStampHeld(endpointID, osUser) {
 		if _, err := s.write.Exec(`UPDATE endpoints SET enrolled_user = CASE WHEN os_user <> '' THEN os_user ELSE ? END
 			WHERE endpoint_id = ? AND enrolled_user = ''`, osUser, endpointID); err != nil {
 			return fmt.Errorf("stamp enrolled user: %w", err)

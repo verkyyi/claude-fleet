@@ -803,16 +803,22 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 		}
 	}
 
+	// A device road's endpoint never takes root or the admin role account
+	// as its enrollment by report (task MPCX): it stays unstamped.
+	hold := 0
+	if s.deviceStampHeld(endpointID, id.OSUser) {
+		hold = 1
+	}
 	if login || prevAccount == "" {
 		_, err = s.write.Exec(`
 			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
 			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END,
-			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN os_user <> '' THEN os_user ELSE ? END
+			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN ? = 1 THEN '' WHEN os_user <> '' THEN os_user ELSE ? END
 			WHERE endpoint_id = ?`,
 			id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, id.OSUser, endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, hold, id.OSUser, endpointID)
 	} else {
 		// Everything except the account: the machine is still reporting, and
 		// its hardware facts are just as true on a secondary batch.
@@ -821,10 +827,10 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
 			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END,
-			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN os_user <> '' THEN os_user ELSE ? END
+			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN ? = 1 THEN '' WHEN os_user <> '' THEN os_user ELSE ? END
 			WHERE endpoint_id = ?`,
 			id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, id.OSUser, endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, hold, id.OSUser, endpointID)
 	}
 	if err != nil {
 		return "", false, fmt.Errorf("touch endpoint: %w", err)

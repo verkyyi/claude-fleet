@@ -49,13 +49,20 @@ type nodeIdent struct {
 	// `ccquota enroll` before its first report — every join stamps one). Its
 	// first report will be its enrollment; until then the old rules hold.
 	Unstamped bool
+	// ByDevice: a device road enrolled it (`fleet login`'s node pass, a
+	// `fleet node join` scan, a node linked to a device) — whoever's device.
+	// Member: ByDevice, and none of those devices is a hub admin's
+	// (memberDevice).
+	ByDevice, Member bool
 }
 
 // machineByLegacy is the rule before task MPCX, for an endpoint that has not
 // said who it is yet (Unstamped): a root report or a link that says machine.
-// No member's device reaches it — every device road stamps its login.
+// It holds only for an endpoint no device road enrolled — an operator's
+// `ccquota enroll` before its first report; a device's endpoint is never a
+// machine's program by what it says.
 func (id nodeIdent) machineByLegacy(machineLink bool) bool {
-	return id.Unstamped && (id.ReportedUser == "root" || machineLink)
+	return id.Unstamped && !id.ByDevice && (id.ReportedUser == "root" || machineLink)
 }
 
 // drift says the report moved nothing only because the enrollment decided.
@@ -100,12 +107,14 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 	}
 	id.EnrolledHost, id.EnrolledUser = enrolledMachine(et), et.EnrolledUser
 	id.Unstamped = et.EnrolledUser == ""
-	id.Machine = et.EnrolledUser == "root" && !s.memberDevice(ep.ID)
+	principals, byDevice := s.deviceEnrolled(ep.ID)
+	id.ByDevice, id.Member = byDevice, s.membersOnly(principals, byDevice)
+	id.Machine = et.EnrolledUser == "root" && !id.Member
 	if id.EnrolledHost != "" && !sameEnrolledName(id.EnrolledHost, host) {
 		switch {
 		case host == "":
 			id.Host = id.EnrolledHost // it never said: the enrollment's, as before
-		case !id.Machine && (s.memberDevice(ep.ID) || s.nameBorrowed(host, et)):
+		case !id.Machine && (id.Member || s.nameBorrowed(host, et)):
 			id.Host, id.HostDrift = id.EnrolledHost, true
 		}
 	}
@@ -151,7 +160,12 @@ func (s *Server) deviceEnrolled(endpointID string) (principals []string, byDevic
 // Such an endpoint is a person's own terminal: whatever login it enrolled
 // under, it is never an admin node and never a machine's program.
 func (s *Server) memberDevice(endpointID string) bool {
-	principals, byDevice := s.deviceEnrolled(endpointID)
+	return s.membersOnly(s.deviceEnrolled(endpointID))
+}
+
+// membersOnly: a device road enrolled it, and none of those devices' people is
+// one of the hub's admins.
+func (s *Server) membersOnly(principals []string, byDevice bool) bool {
 	if !byDevice {
 		return false
 	}
@@ -161,6 +175,30 @@ func (s *Server) memberDevice(endpointID string) bool {
 		}
 	}
 	return true
+}
+
+// podEndpoint: endpointID is a person's pod's own node program (task MPCX) —
+// enrolled by the code the hub minted for that pod, or enrolled as a user
+// pod's name. Its token is readable by the pod's person, so whatever a
+// machine's program may do, this one does only for its own pod. An
+// unreadable record reads as a pod.
+func (s *Server) podEndpoint(endpointID string) bool {
+	pod, err := s.Store.PodEnrolled(endpointID)
+	if err != nil {
+		log.Printf("node %s: read how it enrolled: %v", endpointID, err)
+		return true
+	}
+	if pod {
+		return true
+	}
+	et, err := s.Store.EndpointTrustOf(endpointID)
+	if errors.Is(err, store.ErrNoSuchEndpoint) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	return isUserPodName(enrolledMachine(et))
 }
 
 // isOperator: pid is one of the hub's admins right now (personRole).
@@ -188,6 +226,36 @@ func (s *Server) nodeAdminOK(ep *store.Endpoint) bool {
 	}
 	return s.isFleetAdmin(login) && !s.memberDevice(ep.ID)
 }
+
+// operatorEndpoint is the endpoint's half of "this node is the operator's"
+// (task MPCX), beside a login on the admin list (or a hub that names no
+// admins): no member's device road enrolled it, and it is no person's pod —
+// a pod's node runs as its person, whatever login it says. A login's own
+// name never makes an endpoint the operator's.
+func (s *Server) operatorEndpoint(endpointID string) bool {
+	if endpointID == "" {
+		return false
+	}
+	return !s.memberDevice(endpointID) && !s.podEndpoint(endpointID)
+}
+
+// ownerlessOperator: an endpoint whose login no person owns may act as the
+// operator's (task MPCX) — the operator's own agent, enrolled by an
+// operator's code or `ccquota enroll`. Never one a device road enrolled (a
+// device is a person's or nothing) and never a person's pod.
+func (s *Server) ownerlessOperator(endpointID string) bool {
+	if endpointID == "" {
+		return false
+	}
+	if _, byDevice := s.deviceEnrolled(endpointID); byDevice {
+		return false
+	}
+	return !s.podEndpoint(endpointID)
+}
+
+// errOwnerless is the refusal of a person's road to a node no person owns
+// that is not the operator's own (ownerlessOperator).
+var errOwnerless = errors.New("no person owns this node's login, and it is not one of the operator's own nodes")
 
 // nodeLoginPrincipal is the person whose account login is on host, for endpoint
 // endpointID (task MPCX): a 登录即认人 row counts only for the endpoint it is

@@ -59,7 +59,6 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 	// operator's or the hub's code (nodeSelf, task MPCX); its machine is the
 	// one it speaks for, never a report or a hello's capability.
 	self := s.nodeSelf(ep)
-	host := self.Host
 	link := false
 	if c := s.nodes.get(ep.ID); c != nil && c.machineLink {
 		link = true
@@ -68,9 +67,13 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusForbidden, "only the machine's own node token asks for its admin role account's token")
 		return
 	}
-	if host == "" {
-		host = s.endpointHost(*ep)
+	if s.podEndpoint(ep.ID) {
+		httpError(w, http.StatusForbidden, "a person's pod has no admin role account")
+		return
 	}
+	// The seat is the machine's the endpoint ENROLLED as (task MPCX) — never
+	// a name its report gives: a machine's program asks for its own seat only.
+	host := self.EnrolledHost
 	if host == "" {
 		httpError(w, http.StatusConflict, "this machine has not said its name yet — wait for its first heartbeat")
 		return

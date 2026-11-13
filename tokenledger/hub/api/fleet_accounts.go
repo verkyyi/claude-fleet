@@ -617,6 +617,26 @@ func (s *Server) adoptMappedLogins(now time.Time) {
 		log.Printf("fleet: adopt mapped logins: principals: %v", err)
 		return
 	}
+	// Each node as the hub holds it (task MPCX): the machine and login it is
+	// routed to by, and — for a device road's endpoint — whose device it is.
+	// A report naming another machine or login adopts nothing there, and a
+	// device adopts a login only for its own person.
+	type heldNode struct {
+		host, user   string
+		devicePeople []string
+		byDevice     bool
+	}
+	held := make([]heldNode, 0, len(nodes))
+	for _, n := range nodes {
+		ep, err := s.Store.EndpointByID(n.EndpointID)
+		if err != nil || ep.RetiredAt != nil {
+			continue
+		}
+		h := heldNode{}
+		h.host, h.user = s.routeSelf(ep, s.nodeSelfFrom(ep, n.Hostname, n.OSUser))
+		h.devicePeople, h.byDevice = s.deviceEnrolled(ep.ID)
+		held = append(held, h)
+	}
 	for i := range people {
 		p := &people[i]
 		login, ok := s.mappedLoginFor(p.ID)
@@ -624,16 +644,19 @@ func (s *Server) adoptMappedLogins(now time.Time) {
 			continue // not mapped, or a pre-map row; sign-in already logged it
 		}
 		seen := map[string]bool{}
-		for _, n := range nodes {
-			if n.OSUser != login || seen[n.Hostname] {
+		for _, n := range held {
+			if n.user != login || n.host == "" || seen[n.host] {
 				continue
 			}
-			seen[n.Hostname] = true
-			adopted, err := s.Store.AdoptAccountIfOpen(p, n.Hostname, now)
+			if n.byDevice && !hasFold(n.devicePeople, p.ID) {
+				continue
+			}
+			seen[n.host] = true
+			adopted, err := s.Store.AdoptAccountIfOpen(p, n.host, now)
 			if err != nil {
-				log.Printf("fleet: adopt %s on %s for %s: %v", login, n.Hostname, p.ID, err)
+				log.Printf("fleet: adopt %s on %s for %s: %v", login, n.host, p.ID, err)
 			} else if adopted {
-				log.Printf("fleet: adopted login %s on %s for %s (agent runs as it)", login, n.Hostname, p.ID)
+				log.Printf("fleet: adopted login %s on %s for %s (agent runs as it)", login, n.host, p.ID)
 			}
 		}
 	}

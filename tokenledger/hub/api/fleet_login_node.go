@@ -109,6 +109,7 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	var tn *trustedNameErr
 	var mm *machineManagedErr
 	var rl *reservedLoginErr
+	var la *loginAccountErr
 	switch {
 	case errors.As(err, &tn):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
@@ -117,6 +118,10 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &rl):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
 		refuseJSON(w, http.StatusConflict, "reserved_login", err.Error())
+		return
+	case errors.As(err, &la):
+		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
+		refuseJSON(w, http.StatusConflict, la.code, err.Error())
 		return
 	case errors.As(err, &mm):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
@@ -127,7 +132,6 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out.AccountRefused = s.recordLoginAccount(pid, fp, out, req.OSUser, now)
 	s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("%s %s (%s) · untrusted · 随登录登记", what, out.Label, out.EndpointID), now)
 	log.Printf("fleet: device %s of %s %s node %s (%s) at login", fp, pid, what, out.Label, out.EndpointID)
 	w.Header().Set("Cache-Control", "no-store")
@@ -150,6 +154,14 @@ type reservedLoginErr struct{ login string }
 func (e *reservedLoginErr) Error() string {
 	return fmt.Sprintf("%s is the machine's admin role account; its node token comes only from that machine's own install (fleet node install), never from a login", e.login)
 }
+
+// loginAccountErr: a device road's login could not be recorded as the
+// person's own (task MPCX) — no login named, one the hub does not record, or
+// a login on that machine that is somebody else's. A device's node is that
+// person's terminal or it is nothing: no node token is handed out for it.
+type loginAccountErr struct{ code, why string }
+
+func (e *loginAccountErr) Error() string { return e.why }
 
 // ReissueTokenGrace is how long a reissued node token's predecessor still
 // resolves (claude-fleet#2501): a second holder of the endpoint — the
@@ -200,6 +212,9 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 		// its node turned off (claude-fleet#3710).
 		if ep, _ := s.nodeAuthOpt(r); ep != nil &&
 			(ep.OSUser == "" || ep.OSUser == sanitizeJoinField(osUser)) {
+			if err := s.deviceLoginAccount(pid, fp, ep.ID, osUser, now); err != nil {
+				return nil, "", err
+			}
 			if id, err := s.Store.DeviceNodeEndpoint(fp); err != nil || id != ep.ID {
 				code, err := MintJoinCode()
 				if err != nil {
@@ -220,6 +235,9 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 			// The login runs on its machine's node program, which holds
 			// the token this would replace (claude-fleet#2501).
 			return nil, "", &machineManagedErr{osUser: sanitizeJoinField(osUser), host: mach}
+		}
+		if err := s.deviceLoginAccount(pid, fp, id, osUser, now); err != nil {
+			return nil, "", err
 		}
 		tok, err := MintToken()
 		if err != nil {
@@ -268,6 +286,12 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 // an admin node or a machine's program, and the audit says so.
 func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser string) (*NodeJoinResponse, error) {
 	login := sanitizeJoinField(osUser)
+	if login == "" {
+		// No login, or none left once sanitized: the endpoint would enroll
+		// as nobody, and a login-less endpoint is read by the rules for an
+		// operator's `ccquota enroll` (task MPCX).
+		return nil, &loginAccountErr{"no_login", "this computer named no system login the hub can record — run fleet login as your own login"}
+	}
 	if !s.isOperator(pid) {
 		if adminRoleLogins[login] {
 			return nil, &reservedLoginErr{login}
@@ -287,11 +311,38 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 		return nil, err
 	}
 	out, err := s.redeemJoin(r, code, hostname, osUser)
-	if err == nil && (login == "root" || s.isFleetAdmin(login)) && !s.isOperator(pid) {
-		_ = s.Store.FleetAudit("device:"+fp, "node_identity", "endpoint:"+out.EndpointID,
-			"ENROLLED AS AN ORDINARY NODE — "+login+" by a member's device: never an admin node or a machine's program", "", time.Now())
+	if err != nil {
+		return nil, err
 	}
-	return out, err
+	// The login must be the person's own (登录即认人) or there is no node: a
+	// node nobody owns would act for no one in particular (task MPCX).
+	now := time.Now()
+	if err := s.deviceLoginAccount(pid, fp, out.EndpointID, osUser, now); err != nil {
+		if _, rerr := s.Store.RetireEndpointAs(out.EndpointID, "device:"+fp, err.Error(), now); rerr != nil {
+			log.Printf("device %s: retire %s after its login was refused: %v", fp, out.EndpointID, rerr)
+		}
+		return nil, err
+	}
+	if s.isFleetAdmin(login) && !s.isOperator(pid) {
+		_ = s.Store.FleetAudit("device:"+fp, "node_identity", "endpoint:"+out.EndpointID,
+			"ENROLLED AS AN ORDINARY NODE — "+login+" by a member's device: never an admin node", "", now)
+	}
+	return out, nil
+}
+
+// deviceLoginAccount records osUser on endpointID's machine as pid's
+// (recordLoginAccount) and answers a loginAccountErr when it is not theirs
+// afterwards.
+func (s *Server) deviceLoginAccount(pid, fp, endpointID, osUser string, now time.Time) error {
+	why := s.recordLoginAccount(pid, fp, endpointID, osUser, now)
+	if why == "" {
+		return nil
+	}
+	code := "login_not_recorded"
+	if l := sanitizeJoinField(osUser); l == "" {
+		code = "no_login"
+	}
+	return &loginAccountErr{code, why + " — no node pass is issued for it"}
 }
 
 // principalOnNode is the person behind login on a node: the machine's
@@ -395,12 +446,12 @@ func (s *Server) leaseInFlight(endpointID, host, login string, now time.Time) (s
 // left alone and audited; it never fails the node pass. It answers why the
 // login is NOT the person's afterwards — read back the way every reader reads
 // it (principalOnNode) — empty when it is (claude-fleet#2249).
-func (s *Server) recordLoginAccount(pid, fp string, out *NodeJoinResponse, osUser string, now time.Time) string {
+func (s *Server) recordLoginAccount(pid, fp, endpointID, osUser string, now time.Time) string {
 	osUser = sanitizeJoinField(osUser)
 	if osUser == "" || !control.ValidExistingLogin(osUser) {
 		return fmt.Sprintf("system login %s is not one the hub records", osUser)
 	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(out.Token))
+	ep, err := s.Store.EndpointByID(endpointID)
 	if err != nil || ep.Hostname == "" {
 		return "this node has no machine name on the hub"
 	}

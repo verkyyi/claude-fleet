@@ -92,6 +92,10 @@
 #                                                   memberDevice) + hub/store enrolled_user (go test, when a toolchain is here)
 #   hub-forwarded-untrusted-peer                    tokenledger/hub/api edge.go (forwardedTrust, proxyPeer,
 #                                                   CCQUOTA_TRUSTED_PROXIES; go test, when a toolchain is here)
+#   node-identity-device-road                       tokenledger/hub/api fleet_login_node.go (enrollDeviceNode),
+#                                                   node_identity.go (operatorEndpoint, ownerlessOperator),
+#                                                   fleet.go (recordFleets) + hub/store fleet.go (machineHolderOK)
+#                                                   (go test, when a toolchain is here)
 #   machine-agent-wrong-login                       tokenledger/hub/api node_machine.go (loginEndpoint, serveMachine)
 #                                                   + tokenledger/agent node_machine.go / runas.go (go test, when a toolchain is here)
 #   usage-unattributed                              tokenledger/agent (the claude:local pool) + hub/api
@@ -1186,6 +1190,30 @@ drill_hub_forwarded_untrusted_peer() {
     1) return 1 ;;
     2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；两条测试按名核对在' ;;
     3) WHAT='没有 go：两条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+  esac
+  SECS=$(since "$t0")
+}
+
+# ---- node-identity-device-road (task MPCX): a device road's node is its
+# person's login or no node; the registry row, "operator", an ownerless node,
+# a machine name's trust, a forced lease and usage all read the identity the
+# hub holds a node to, never its report.
+drill_node_identity_device_road() {
+  CAP=120; local t0 out tests
+  tests='TestNodeIdentityDeviceRoadNeedsALogin TestNodeIdentityRegistryRowIsHeld TestNodeIdentityDeviceIsNeverOperator TestNodeIdentityOwnerlessNodeActsForNoOne TestNodeIdentityDeviceTakesNoMachineTrust TestNodeLeaseForceStaysInTheFamily TestNodeIdentityUsageUnderTheEnrolledLogin TestLoginNodeCannotSelfTrust TestRelayOwnerBoundary'
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+  done
+  grep -q 'host, user = s.routeSelf(&ep, s.nodeSelfFrom(&ep, host, user))' "$ROOT/tokenledger/hub/api/fleet.go" \
+    || { WHY="the registry row no longer names the identity the hub holds the node to"; return 1; }
+  grep -q 'machineHolderOK(tx, machineID, endpointID)' "$ROOT/tokenledger/hub/store/fleet.go" \
+    || { WHY="a snapshot's machine id is no longer bound to the node that holds it"; return 1; }
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
+    0) WHAT='设备路没有登录、登录记不成这个人的不发节点令牌；老的未记登录的设备端点不当机器程序、首报不记成 root；座位只发给入册那台；登记行按入册身份写、machine_id 不被别的节点改指；设备不是运营者；没人认的设备节点不按运营者放置 / 租客户端；名字另有端点入册时设备不继承信任；--force 只收自家租约、别人的冲突不报持有者；用量记在入册登录下；运营者在 /nodes 信任登录登记的设备照旧（go test 九条）' ;;
+    1) return 1 ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；九条测试按名核对在' ;;
+    3) WHAT='没有 go：九条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }

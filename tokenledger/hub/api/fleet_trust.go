@@ -186,6 +186,10 @@ const (
 	// TrustSourceNameBorrowed: the reported name is trusted, but this
 	// endpoint enrolled as another machine — it inherits nothing.
 	TrustSourceNameBorrowed = "name_borrowed"
+	// TrustSourceDevice: a member's device road enrolled this endpoint under
+	// the name of a machine something else enrolled as (task MPCX) — it takes
+	// none of that machine's trust.
+	TrustSourceDevice = "device"
 	// NodeTrustMachinesMigratedKey stamps trustMigrateMachines.
 	NodeTrustMachinesMigratedKey = "fleet.node_trust_machines_migrated"
 )
@@ -241,7 +245,25 @@ func (s *Server) endpointTrust(endpointID, host string, settings map[string]stri
 	if err != nil {
 		return TrustUntrusted, ""
 	}
-	return nodeTrust(host, et, settings)
+	return s.deviceTrust(endpointID, host, et, settings)
+}
+
+// deviceTrust is nodeTrust, except that a member's device (memberDevice) takes
+// its machine name's trust only while the name is its own (task MPCX): no
+// endpoint but a member's device enrolled as that machine. The operator
+// trusting a login-registered node on /nodes still trusts it; a device that
+// enrolled under the name of a machine an operator's or the hub's code also
+// enrolled — before or after — inherits nothing of that machine's. An
+// unreadable answer is untrusted.
+func (s *Server) deviceTrust(endpointID, host string, et store.EndpointTrust, settings map[string]string) (trust, source string) {
+	trust, source = nodeTrust(host, et, settings)
+	if trust != TrustTrusted || !s.memberDevice(endpointID) {
+		return trust, source
+	}
+	if other, err := s.Store.MachineEnrolledByOthers(endpointID, enrolledMachine(et)); err != nil || other {
+		return TrustUntrusted, TrustSourceDevice
+	}
+	return trust, source
 }
 
 // machineTrusted is "is the machine called this trusted" — for the checks

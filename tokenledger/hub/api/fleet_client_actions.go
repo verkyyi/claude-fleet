@@ -409,6 +409,11 @@ func (s *Server) handleNodeClientActions(w http.ResponseWriter, r *http.Request)
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if owner == "" && !s.ownerlessOperator(ep.ID) {
+		// The operator's client only from the operator's own node (task MPCX).
+		httpError(w, http.StatusForbidden, errOwnerless.Error())
+		return
+	}
 	key := clientLeaseKey(sshRelayIdentity{Operator: owner == "", Principal: owner})
 	now := time.Now()
 	w.Header().Set("Cache-Control", "no-store")

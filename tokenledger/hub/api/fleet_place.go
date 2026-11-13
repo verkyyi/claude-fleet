@@ -888,6 +888,11 @@ func (s *Server) nodePrincipal(ep *store.Endpoint, fl store.FleetRow) (fleetPrin
 	case err != nil && !errors.Is(err, store.ErrNoPrincipal):
 		return fleetPrincipal{}, err
 	}
+	// Nobody's login acts with the operator's grant only from the operator's
+	// own node (task MPCX).
+	if !s.ownerlessOperator(ep.ID) {
+		return fleetPrincipal{}, fault("FORBIDDEN", errOwnerless.Error())
+	}
 	return fleetPrincipal{Actor: actor, scope: func(_, u string) bool { return u == user }, From: host}, nil
 }
 

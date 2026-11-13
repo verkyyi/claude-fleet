@@ -176,6 +176,9 @@ func (s *Store) RecordFleetSnapshot(endpointID, hostname, osUser, machineID stri
 	if retired.Valid {
 		return nil, fmt.Errorf("fleet snapshot: endpoint is retired")
 	}
+	if err := machineHolderOK(tx, machineID, endpointID); err != nil {
+		return nil, err
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO fleet_machines (machine_id, endpoint_id, hostname, os_user, first_seen, last_seen)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -220,6 +223,70 @@ func (s *Store) RecordFleetSnapshot(endpointID, hostname, osUser, machineID stri
 		}
 	}
 	return rejected, tx.Commit()
+}
+
+// ErrMachineHeld: a snapshot names a machine_id another live endpoint holds,
+// and the reporter did not enroll as the same machine and login (task MPCX).
+var ErrMachineHeld = errors.New("this machine id is registered to another node")
+
+// machineHolderOK says endpointID may report machineID: nobody holds it yet,
+// it holds it, its holder is retired or gone, or both enrolled as the same
+// machine and login — the same computer re-enrolled (a lost token, a fresh
+// join). Anything else is ErrMachineHeld: a machine id is the reporter's own
+// word, and it never moves another node's fleets onto this one.
+func machineHolderOK(tx *sql.Tx, machineID, endpointID string) error {
+	var holder string
+	switch err := tx.QueryRow(`SELECT endpoint_id FROM fleet_machines WHERE machine_id = ?`, machineID).Scan(&holder); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return err
+	}
+	if holder == endpointID || holder == "" {
+		return nil
+	}
+	type enr struct {
+		host, user string
+		retired    bool
+	}
+	read := func(id string) (enr, bool, error) {
+		var e enr
+		var ret sql.NullString
+		err := tx.QueryRow(`SELECT enrolled_host, enrolled_user, retired_at FROM endpoints WHERE endpoint_id = ?`, id).
+			Scan(&e.host, &e.user, &ret)
+		if errors.Is(err, sql.ErrNoRows) {
+			return e, false, nil
+		}
+		e.retired = ret.Valid
+		return e, true, err
+	}
+	old, ok, err := read(holder)
+	if err != nil {
+		return err
+	}
+	if !ok || old.retired {
+		return nil
+	}
+	cur, _, err := read(endpointID)
+	if err != nil {
+		return err
+	}
+	if cur.user != "" && cur.user == old.user && sameEnrolledHost(cur.host, old.host) {
+		return nil
+	}
+	return ErrMachineHeld
+}
+
+// sameEnrolledHost: two enrolled names are one machine — first labels, any
+// case; a join that named none ("?") is never the same as anything.
+func sameEnrolledHost(a, b string) bool {
+	first := func(h string) string {
+		if i := strings.IndexByte(h, '.'); i > 0 {
+			h = h[:i]
+		}
+		return strings.ToLower(h)
+	}
+	return a != "" && a != "?" && b != "" && b != "?" && first(a) == first(b)
 }
 
 // UpdateFleetWorkers stores a fresher window list for one fleet (a live
