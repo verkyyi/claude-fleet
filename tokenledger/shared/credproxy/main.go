@@ -37,6 +37,8 @@ import (
 //	--bedrock    CCQUOTA_CREDPROXY_BEDROCK_URL the Bedrock fallback's endpoint (default: the key's
 //	             region, bedrock-runtime.<region>.amazonaws.com; whether it is used is the hub's
 //	             fleet.fallback.bedrock, off by default — task PNWW)
+//	--anthropic-allow CCQUOTA_CREDPROXY_ANTHROPIC_ALLOW enforce: refuse a request off
+//	             AnthropicAllowSpec; anything else (default): let it through, logged
 func Main(version string, args []string) error {
 	fs := flag.NewFlagSet("credproxy", flag.ExitOnError)
 	env := func(k, d string) string {
@@ -64,6 +66,7 @@ func Main(version string, args []string) error {
 	stale := fs.Duration("stale", envDur("CCQUOTA_CREDPROXY_STALE", 15*time.Minute), "how long an answer outlives --cache while the hub cannot answer")
 	spub := fs.String("session-pub", env("CCQUOTA_CREDPROXY_SESSION_PUB", ""), "the key fcp-h2 passes are verified with (base64; default: learned from the hub)")
 	bedrock := fs.String("bedrock", env("CCQUOTA_CREDPROXY_BEDROCK_URL", ""), "the Bedrock fallback's endpoint (default: by the key's region)")
+	anthAllow := fs.String("anthropic-allow", env("CCQUOTA_CREDPROXY_ANTHROPIC_ALLOW", ""), "enforce: refuse Anthropic requests off the allow-list (default: log only)")
 	_ = fs.Parse(args)
 	pub, err := ParseSessionPub(*spub)
 	if err != nil {
@@ -92,6 +95,8 @@ func Main(version string, args []string) error {
 		Audit:        func(l string) { fmt.Fprintln(os.Stdout, l) },
 		SessionPub:   pub,
 		BedrockURL:   *bedrock,
+		// log only unless enforce: a request off the list is marked would_refuse
+		AnthropicAllow: *anthAllow,
 	})
 	if err != nil {
 		return err
@@ -100,7 +105,11 @@ func Main(version string, args []string) error {
 	if *direct {
 		road = "DIRECT (no relay)"
 	}
-	srv := &http.Server{Addr: *listen, Handler: p.Handler(), ReadHeaderTimeout: 30 * time.Second}
+	// No ReadTimeout / WriteTimeout: a stream lasts as long as it lasts, and
+	// net/http cancels a request when the read deadline passes (serve bounds
+	// each body read itself, bodyReadTimeout).
+	srv := &http.Server{Addr: *listen, Handler: p.Handler(), ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 256 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	errc := make(chan error, 1)

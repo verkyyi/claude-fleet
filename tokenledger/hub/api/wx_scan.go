@@ -70,7 +70,14 @@ var (
 	wxSceneTTL = 10 * time.Minute
 	// wxScenesPerMinute bounds the codes asked of WeChat hub-wide.
 	wxScenesPerMinute = 120
+	// wxScenesPerSource bounds the new codes one source asks for a minute,
+	// in front of the hub-wide bound (per replica, clientBudget).
+	wxScenesPerSource = 20
 )
+
+func newWxSceneBudget() *clientBudget {
+	return &clientBudget{burst: float64(wxScenesPerSource), perSec: float64(wxScenesPerSource) / 60, max: 4096}
+}
 
 // errWxBusy: the hub-wide bound on new codes is reached.
 var errWxBusy = errors.New("too many codes asked for this minute")
@@ -120,6 +127,9 @@ func (s *Server) wxScene(ctx context.Context, w http.ResponseWriter, r *http.Req
 	bh := s.wxBrowserHash(w, r)
 	if c, err := s.Store.LiveWxSceneFor(bh, purpose, owner, now.Add(time.Minute)); err != nil || c != nil {
 		return c, err
+	}
+	if !s.budget("wx-scene", newWxSceneBudget).allow(r, now) {
+		return nil, errWxBusy
 	}
 	if n, err := s.Store.WxScenesSince(now.Add(-time.Minute)); err != nil {
 		return nil, err

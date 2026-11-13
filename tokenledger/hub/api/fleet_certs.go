@@ -625,6 +625,10 @@ const (
 	loginCookieTTL = 10 * time.Minute
 )
 
+// deviceMaxPerSource is how many of deviceMax one source (clientSource) may
+// hold, so one source cannot fill the table for everyone.
+const deviceMaxPerSource = 16
+
 type deviceState int
 
 const (
@@ -642,6 +646,7 @@ type deviceLogin struct {
 	purpose    string // "" fleet login · "node" fleet node join: the scan also adds a node (#1627)
 	osUser     string // the login the node's agent runs as (purpose=node)
 	invite     string // the invite the newcomer's install carried (claude-fleet#2261)
+	source     string // where start came from (clientSource): deviceMaxPerSource
 	expires    time.Time
 	state      deviceState
 	issued     *CertResponse
@@ -678,6 +683,15 @@ func (d *deviceLogins) add(l *deviceLogin, now time.Time) error {
 	d.gc(now)
 	if len(d.byCode) >= deviceMax {
 		return errors.New("too many logins in progress; try again in a few minutes")
+	}
+	same := 0
+	for _, p := range d.byCode {
+		if p.source == l.source {
+			same++
+		}
+	}
+	if same >= deviceMaxPerSource {
+		return errors.New("too many logins in progress from this address; try again in a few minutes")
 	}
 	if _, dup := d.byUser[l.userCode]; dup {
 		return errors.New("code collision; try again")
@@ -816,6 +830,7 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		name:    cleanDeviceName(req.DeviceName),
 		purpose: req.Purpose,
 		osUser:  sanitizeJoinField(req.OSUser),
+		source:  clientSource(r).String(),
 		expires: now.Add(deviceTTL),
 	}
 	if inv := strings.TrimSpace(req.Invite); validInviteCode(inv) {

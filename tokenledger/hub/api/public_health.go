@@ -17,14 +17,27 @@ const publicHealthTTL = 30 * time.Second
 // No identity keys, unbounded maps, or auth lookups on this public road.
 // One snapshot per replica per 30 seconds, including failed reads; the mutex
 // coalesces cold requests. Query strings and caller cookies cannot vary it.
+// Each source has a budget of its own (bySource, a bounded table) in front of
+// the replica-wide bucket, so one source cannot spend everyone's.
 type publicHealthCache struct {
-	mu     sync.Mutex
-	until  time.Time
-	code   int
-	body   [2][]byte // edition only: Chinese, English
-	rateMu sync.Mutex
-	last   time.Time
-	tokens float64
+	mu       sync.Mutex
+	until    time.Time
+	code     int
+	body     [2][]byte // edition only: Chinese, English
+	rateMu   sync.Mutex
+	last     time.Time
+	tokens   float64
+	bySource clientBudget
+}
+
+// allowRequest is r's source's budget, then the replica-wide bucket.
+func (c *publicHealthCache) allowRequest(r *http.Request, now time.Time) bool {
+	c.rateMu.Lock()
+	if c.bySource.max == 0 {
+		c.bySource.burst, c.bySource.perSec, c.bySource.max = 30, 2, 4096
+	}
+	c.rateMu.Unlock()
+	return c.bySource.allow(r, now) && c.allow(now)
 }
 
 func (c *publicHealthCache) allow(now time.Time) bool {
@@ -57,7 +70,7 @@ func (s *Server) publicHealthRoutes(next http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		if !s.publicHealth.allow(time.Now()) {
+		if !s.publicHealth.allowRequest(r, time.Now()) {
 			w.Header().Set("Retry-After", "2")
 			httpError(w, 429, "Please retry shortly")
 			return

@@ -348,6 +348,7 @@ func TestWxSceneCross(t *testing.T) {
 		b := newBrowser(t, "")
 		req, _ := http.NewRequest(http.MethodPost, h.http.URL+wxQRPath, strings.NewReader("purpose=login"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-For", "198.51.100."+strconv.Itoa(i)) // many sources: none spends its own budget
 		r, err := b.c.Do(req)
 		if err != nil || r.StatusCode != 200 {
 			t.Fatalf("draw %d = %v %v", i, r.StatusCode, err)
