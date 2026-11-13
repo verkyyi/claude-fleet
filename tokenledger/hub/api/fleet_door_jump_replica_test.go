@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/control"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 func TestDoorJumpReadinessAcrossReplicas(t *testing.T) {
@@ -51,6 +52,16 @@ func TestEntryMachineAuthorizationAcrossReplicas(t *testing.T) {
 			want = http.StatusOK
 		}
 		token := first.enroll(t, label)
+		if machine {
+			// A pod's machine program joins as root (fleet-node-install.sh,
+			// task MPCX) and then runs as the pod's login.
+			if err := first.srv.Store.UpsertAccount(model.Identity{AccountUUID: "acct-" + label}, "max", ""); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := first.srv.Store.TouchEndpoint("ep_"+label, model.Identity{AccountUUID: "acct-" + label, Hostname: "u-alice1", OSUser: "root"}, "test", false, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
 		connection := teamNode(t, first, token, caps...)
 		beat(t, connection, control.Proto, control.Heartbeat{Hostname: "u-alice1", OSUser: "alice"})
 		waitFor(t, 3*time.Second, "pod identity recorded", func() bool {

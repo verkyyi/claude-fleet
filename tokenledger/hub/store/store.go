@@ -271,6 +271,12 @@ func migrate(db *sql.DB) error {
 		// so a later report that borrows a trusted machine's name inherits
 		// nothing. '' = never named yet.
 		{"endpoints", "enrolled_host", "TEXT NOT NULL DEFAULT ''"},
+		// The OS login an endpoint ENROLLED as (task MPCX), the login twin of
+		// enrolled_host: the join's os_user (a code minted for an opened login
+		// pins it), else the first one it ever reported. Written once; the
+		// hub's authorization reads it, never the login a later report names.
+		// '' = never said yet.
+		{"endpoints", "enrolled_user", "TEXT NOT NULL DEFAULT ''"},
 		// A reissued token's predecessor (claude-fleet#2501): it keeps
 		// resolving until prev_token_until, so a second holder of the same
 		// endpoint (a machine's node program) is not cut off the instant a
@@ -303,6 +309,9 @@ func migrate(db *sql.DB) error {
 	if _, err := db.Exec(`UPDATE endpoints SET enrolled_host = hostname WHERE enrolled_host = '' AND hostname <> ''`); err != nil {
 		return fmt.Errorf("backfill endpoints.enrolled_host: %w", err)
 	}
+	if err := backfillEnrolledUser(db); err != nil {
+		return err
+	}
 	if err := migrateSources(db); err != nil {
 		return err
 	}
@@ -310,6 +319,28 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	return migrateDetails(db)
+}
+
+// backfillEnrolledUser stamps enrolled_user on every endpoint enrolled before
+// it existed (task MPCX): the login its join reported — the value at
+// enrollment, which no later report moved — else the login it reports now.
+// Idempotent like enrolled_host's: a stamped row is left alone, and a row
+// that said no login anywhere stays empty until its first report stamps it.
+func backfillEnrolledUser(db *sql.DB) error {
+	if has, err := hasColumn(db, "fleet_join_codes", "joined_user"); err != nil {
+		return err
+	} else if has {
+		if _, err := db.Exec(`UPDATE endpoints SET enrolled_user = (SELECT c.joined_user FROM fleet_join_codes c
+			  WHERE c.endpoint_id = endpoints.endpoint_id AND c.joined_user <> '' ORDER BY c.used_at LIMIT 1)
+			WHERE enrolled_user = '' AND EXISTS (SELECT 1 FROM fleet_join_codes c
+			  WHERE c.endpoint_id = endpoints.endpoint_id AND c.joined_user <> '')`); err != nil {
+			return fmt.Errorf("backfill endpoints.enrolled_user from its join: %w", err)
+		}
+	}
+	if _, err := db.Exec(`UPDATE endpoints SET enrolled_user = os_user WHERE enrolled_user = '' AND os_user <> ''`); err != nil {
+		return fmt.Errorf("backfill endpoints.enrolled_user: %w", err)
+	}
+	return nil
 }
 
 func hasColumn(db *sql.DB, table, column string) (bool, error) {
@@ -777,10 +808,11 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
-			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END
+			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END,
+			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN os_user <> '' THEN os_user ELSE ? END
 			WHERE endpoint_id = ?`,
 			id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, id.OSUser, endpointID)
 	} else {
 		// Everything except the account: the machine is still reporting, and
 		// its hardware facts are just as true on a secondary batch.
@@ -788,10 +820,11 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 			UPDATE endpoints SET hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
-			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END
+			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END,
+			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN os_user <> '' THEN os_user ELSE ? END
 			WHERE endpoint_id = ?`,
 			id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, id.OSUser, endpointID)
 	}
 	if err != nil {
 		return "", false, fmt.Errorf("touch endpoint: %w", err)

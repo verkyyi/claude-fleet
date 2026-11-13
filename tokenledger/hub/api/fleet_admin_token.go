@@ -39,8 +39,8 @@ type AdminTokenResponse struct {
 
 // handleNodeAdminToken serves AdminTokenNodePath. Three rules, each its own
 // refusal (BREAK-IT fleetadmin-token-misissued): only the machine's own node
-// program asks (root's endpoint, or one whose link says CapMachine) — a
-// login's token is refused; only for the admin role account's name, and only
+// program asks (the endpoint that enrolled as root by an operator's or the
+// hub's code — nodeSelf, task MPCX) — a login's token is refused; only for the admin role account's name, and only
 // one the hub already counts as an admin (CCQUOTA_FLEET_ADMIN_USERS); and
 // only for THIS machine — the endpoint is enrolled as the asker's host,
 // never one named in the body. Every issue is one fleet_audit line.
@@ -55,12 +55,16 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	host, user := s.peerSelf(ep)
-	machine := user == "root"
+	// The machine's program is the endpoint that ENROLLED as root by an
+	// operator's or the hub's code (nodeSelf, task MPCX); its machine is the
+	// one it speaks for, never a report or a hello's capability.
+	self := s.nodeSelf(ep)
+	host := self.Host
+	link := false
 	if c := s.nodes.get(ep.ID); c != nil && c.machineLink {
-		machine = true
+		link = true
 	}
-	if !machine {
+	if !self.Machine && !self.machineByLegacy(link) {
 		httpError(w, http.StatusForbidden, "only the machine's own node token asks for its admin role account's token")
 		return
 	}

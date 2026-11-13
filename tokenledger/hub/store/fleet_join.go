@@ -53,6 +53,11 @@ type JoinCode struct {
 // for all three on purpose: the joining side cannot learn which.
 var ErrJoinCode = errors.New("join code is unknown, used or expired")
 
+// ErrJoinLogin is a code minted for one opened login (`<machine>-<login>`,
+// loginJoinCode) redeemed as another OS login (task MPCX): the code names
+// the login it enrolls, like it names the machine. Nothing is spent.
+var ErrJoinLogin = errors.New("this join code is for another login")
+
 func (s *Store) ensureFleetJoin() error {
 	if _, err := s.write.Exec(s.d.ddl(fleetJoinSchema)); err != nil {
 		return fmt.Errorf("create fleet_join_codes table: %w", err)
@@ -122,6 +127,9 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 	if err != nil {
 		return err
 	}
+	if want, ok := openedLoginOf(codeLabel, machine, trust, role); ok && osUser != want {
+		return ErrJoinLogin
+	}
 	if codeLabel != "" {
 		label = codeLabel
 	}
@@ -161,13 +169,26 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 	if enrolled == "" {
 		enrolled = "?"
 	}
+	// enrolled_user is the login it joined as (task MPCX), written once
+	// here: the hub's authorization reads it, never a later report.
 	if _, err := tx.Exec(`INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at, kind, hostname, os_user, node_kind,
-		  enrolled_host, trust, trust_source, role)
-		VALUES (?, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`, endpointID, label, tokenHash, fmtTime(now), host, osUser, kind,
-		enrolled, trust, source, role); err != nil {
+		  enrolled_host, enrolled_user, trust, trust_source, role)
+		VALUES (?, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`, endpointID, label, tokenHash, fmtTime(now), host, osUser, kind,
+		enrolled, osUser, trust, source, role); err != nil {
 		return fmt.Errorf("enroll endpoint: %w", err)
 	}
 	return tx.Commit()
+}
+
+// openedLoginOf is the login a code minted for one opened login names
+// (api loginJoinCode: label `<machine>-<login>`, the machine pinned, managed,
+// no trust of its own); ok=false for every other code.
+func openedLoginOf(label, machine, trust, role string) (string, bool) {
+	if machine == "" || trust != "" || role != NodeRoleManaged || len(label) <= len(machine)+1 ||
+		label[:len(machine)+1] != machine+"-" {
+		return "", false
+	}
+	return label[len(machine)+1:], true
 }
 
 // JoinCodes lists codes, newest first.
@@ -224,15 +245,17 @@ func (s *Store) DeviceNodeEndpoint(deviceFP string) (string, error) {
 	return id, err
 }
 
-// LiveEndpointOn is the newest live endpoint of OS user osUser on machine host
-// (the name it enrolled as, else the one it reports); ErrNoSuchEndpoint when
+// LiveEndpointOn is the newest live endpoint that ENROLLED as OS user osUser
+// on machine host (the login and the name it enrolled as — task MPCX — else,
+// for a row that never said them, the ones it reports); ErrNoSuchEndpoint when
 // none. The admin seat's token is reissued on it rather than a second node
 // minted (claude-fleet#3724).
 func (s *Store) LiveEndpointOn(host, osUser string) (string, error) {
 	var id string
 	err := s.read.QueryRow(`SELECT endpoint_id FROM endpoints
-		WHERE os_user = ? AND retired_at IS NULL AND (enrolled_host = ? OR (enrolled_host = '' AND hostname = ?))
-		ORDER BY enrolled_at DESC LIMIT 1`, osUser, host, host).Scan(&id)
+		WHERE (enrolled_user = ? OR (enrolled_user = '' AND os_user = ?)) AND retired_at IS NULL
+		  AND (enrolled_host = ? OR (enrolled_host = '' AND hostname = ?))
+		ORDER BY enrolled_at DESC LIMIT 1`, osUser, osUser, host, host).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "") {
 		return "", ErrNoSuchEndpoint
 	}

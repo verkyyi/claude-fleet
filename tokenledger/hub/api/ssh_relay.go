@@ -256,11 +256,13 @@ func (s *Server) nodeLoginIdentity(r *http.Request) (sshRelayIdentity, bool) {
 	if ep == nil || ep.Hostname == "" || ep.OSUser == "" {
 		return sshRelayIdentity{}, false
 	}
-	p, err := s.Store.PrincipalForLogin(ep.Hostname, ep.OSUser)
+	// Its enrollment, not its report (task MPCX).
+	self := s.nodeSelfFrom(ep, ep.Hostname, ep.OSUser)
+	p, err := s.nodeLoginPrincipal(ep.ID, self.Host, self.User)
 	if err != nil || p == "" {
 		return sshRelayIdentity{}, false
 	}
-	return sshRelayIdentity{Principal: p, Actor: "node:" + ep.Hostname + "/" + ep.OSUser}, true
+	return sshRelayIdentity{Principal: p, Actor: "node:" + self.Host + "/" + self.User}, true
 }
 
 // sshRelayError is a refusal sent to the client before the stream starts.

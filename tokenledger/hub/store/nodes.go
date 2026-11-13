@@ -301,6 +301,14 @@ func (s *Store) NodeHeartbeat(endpointID, hostname, osUser, machineID string, pr
 			return fmt.Errorf("stamp enrolled host: %w", err)
 		}
 	}
+	// Its login likewise (task MPCX): the login its join recorded when there
+	// was one (a row an older replica enrolled), else the first it reports.
+	if osUser != "" {
+		if _, err := s.write.Exec(`UPDATE endpoints SET enrolled_user = CASE WHEN os_user <> '' THEN os_user ELSE ? END
+			WHERE endpoint_id = ? AND enrolled_user = ''`, osUser, endpointID); err != nil {
+			return fmt.Errorf("stamp enrolled user: %w", err)
+		}
+	}
 	return nil
 }
 

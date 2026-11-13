@@ -874,17 +874,20 @@ func (s *Server) entryMachineOf(w http.ResponseWriter, r *http.Request) string {
 
 // nodeMachineHost is the machine a machine's node program (ccquota agent
 // --machine, or the node's root) speaks for; "" with the answer written when
-// the caller is a login's own agent or the machine has no name yet.
+// the caller is a login's own agent or the machine has no name yet. A machine's
+// program is the endpoint that ENROLLED as root by an operator's or the hub's
+// code (nodeSelf, task MPCX) — never a login, a hello's capability or a report
+// that says root.
 func (s *Server) nodeMachineHost(w http.ResponseWriter, r *http.Request, ep *store.Endpoint) string {
-	host, user := s.peerSelf(ep)
-	machine := user == "root"
+	self := s.nodeSelf(ep)
+	host := self.Host
+	link := false
 	if c := s.nodes.get(ep.ID); c != nil && c.machineLink {
-		machine = true
+		link = true
+	} else if peer, ok := s.peerOf(r.Context(), ep.ID); ok && peer.HasCap(control.CapMachine) {
+		link = true
 	}
-	if peer, ok := s.peerOf(r.Context(), ep.ID); ok && peer.HasCap(control.CapMachine) {
-		machine = true
-	}
-	if !machine {
+	if !self.Machine && !self.machineByLegacy(link) {
 		httpError(w, http.StatusForbidden, "only the machine's node program (ccquota agent --machine) reads the door's list")
 		return ""
 	}

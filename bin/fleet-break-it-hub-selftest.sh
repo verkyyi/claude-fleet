@@ -88,6 +88,8 @@
 #                                                   (go test, when a toolchain is here)
 #   release-tampered                                tokenledger/hub/api fleet_release.go (ReleaseStore) +
 #                                                   shared/release (Build, Fetch, Unpack; go test, when a toolchain is here)
+#   node-identity-report-differs                    tokenledger/hub/api node_identity.go (nodeSelf, nodeAdminOK,
+#                                                   memberDevice) + hub/store enrolled_user (go test, when a toolchain is here)
 #   machine-agent-wrong-login                       tokenledger/hub/api node_machine.go (loginEndpoint, serveMachine)
 #                                                   + tokenledger/agent node_machine.go / runas.go (go test, when a toolchain is here)
 #   usage-unattributed                              tokenledger/agent (the claude:local pool) + hub/api
@@ -1134,6 +1136,31 @@ drill_release_tampered() {
     1) return 1 ;;
     2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；五条测试按名核对在' ;;
     3) WHAT='没有 go：五条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+  esac
+  SECS=$(since "$t0")
+}
+
+# ---- node-identity-report-differs (task MPCX): a node's hostname / os_user are
+# its own word; whose login it is, whether it is an admin and which machine it
+# speaks for are read from the identity it enrolled with (enrolled_host +
+# enrolled_user), and a member's device road never enrolls an admin node or a
+# machine's program.
+drill_node_identity_report_differs() {
+  CAP=120; local t0 out tests f
+  tests='TestNodeIdentityReReportGetsNoPeerCert TestNodeIdentityAdminIsTheEnrollments TestNodeIdentityMachineIsTheEnrollments TestNodeIdentityLoginCodeNamesItsLogin TestPeerCertOwnerOnlyShortAndAudited TestPeerCertLoginBoundOnBothEnds TestNodeAdminToken'
+  t0=$(now)
+  for out in $tests; do
+    grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
+  done
+  grep -q 'admin: hp.Admin && s.nodeAdminOK(ep)' "$ROOT/tokenledger/hub/api/nodes.go" \
+    || { WHY="a node's admin role no longer reads the login it enrolled as"; return 1; }
+  grep -q '"endpoints", "enrolled_user"' "$ROOT/tokenledger/hub/store/store.go" \
+    || { WHY="endpoints.enrolled_user is gone"; return 1; }
+  go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
+    0) WHAT='成员设备改报别人的登录 / 机器（用量上报或心跳）领不到对等证书与中继；报管理员登录名不是管理员节点、不当刷新中继、不收开号；报 root 与别的机器名不替那台机器写入口、不领管理员座位令牌；开号加入码只认它的登录；真机器、真座位、本人两个登录照旧（go test 七条）' ;;
+    1) return 1 ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；七条测试按名核对在' ;;
+    3) WHAT='没有 go：七条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }

@@ -1032,7 +1032,7 @@ func (s *Server) approveDeviceLogin(r *http.Request, pid, code string, now time.
 		if k, kerr := sshca.ParseUserKey(keyLine); kerr == nil {
 			fp = ssh.FingerprintSHA256(k)
 		}
-		if node, err = s.enrollDeviceNode(r, fp, devName, osUser); err == nil {
+		if node, err = s.enrollDeviceNode(r, pid, fp, devName, osUser); err == nil {
 			resp.Node = node
 			// 登录即认人 (claude-fleet#2212): the scanned computer's login is theirs
 			s.recordLoginAccount(pid, fp, node, osUser, now)

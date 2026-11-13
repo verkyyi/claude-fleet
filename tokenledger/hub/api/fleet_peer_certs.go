@@ -130,19 +130,12 @@ func (s *Server) handleNodePeerCert(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// peerSelf is who a node is: its roster row's host and login, else the
-// enrollment's.
+// peerSelf is who a node is: its roster row's host and login held to the
+// identity it enrolled with (nodeSelf, task MPCX) — a report that disagrees
+// with its enrollment moves nothing.
 func (s *Server) peerSelf(ep *store.Endpoint) (host, user string) {
-	host, user = ep.Hostname, ep.OSUser
-	if n := s.nodeRow(ep.ID); n != nil {
-		if n.Hostname != "" {
-			host = n.Hostname
-		}
-		if n.OSUser != "" {
-			user = n.OSUser
-		}
-	}
-	return host, user
+	id := s.nodeSelf(ep)
+	return id.Host, id.User
 }
 
 // peerTargetHosts resolves a machine name — the roster's hostname, its first
@@ -166,7 +159,24 @@ func (s *Server) peerTargetHosts(name string, rows []store.Node) map[string]bool
 
 // peerTarget resolves an active login through the peer certificate ownership gate.
 func (s *Server) peerTarget(ep *store.Endpoint, target string) (*store.Node, error) {
-	srcHost, srcUser := s.peerSelf(ep)
+	src := s.nodeSelf(ep)
+	srcHost, srcUser := src.Host, src.User
+	// A source whose report is not its enrollment is refused outright
+	// (task MPCX): another login's name, or a trusted machine's name it did
+	// not join as. A machine merely renamed since it joined still asks — as
+	// the machine it joined as.
+	if src.UserDrift {
+		return nil, &errPeer{http.StatusForbidden, errNodeDrift.Error()}
+	}
+	if src.HostDrift && !src.Machine {
+		if set, err := s.Store.FleetSettings(); err == nil {
+			if et, err := s.Store.EndpointTrustOf(ep.ID); err == nil {
+				if _, why := nodeTrust(src.ReportedHost, et, set); why == TrustSourceNameBorrowed {
+					return nil, &errPeer{http.StatusForbidden, untrustedWhy(src.ReportedHost, why)}
+				}
+			}
+		}
+	}
 	// Both ends read "whose login" the one way session-cred does
 	// (principalOnNode, claude-fleet#2249): the machine's account, else the
 	// 登录即认人 row bound to that very node — its name may not be the one
@@ -174,6 +184,12 @@ func (s *Server) peerTarget(ep *store.Endpoint, target string) (*store.Node, err
 	owner, err := s.principalOnNode(ep.ID, srcHost, srcUser)
 	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
 		return nil, err
+	}
+	// The unowned rule (a login no person owns reaches the same name) is
+	// the operator's hand-opened logins' — never a member's device (task
+	// MPCX), whose login name is whatever its computer says.
+	if owner == "" && s.memberDevice(ep.ID) {
+		return nil, &errPeer{http.StatusForbidden, fmt.Sprintf("%s@%s is no person's login on this hub", srcUser, firstLabel(srcHost))}
 	}
 	rows, err := s.Store.Nodes()
 	if err != nil {
@@ -261,6 +277,18 @@ func (s *Server) issuePeerCert(ep *store.Endpoint, target, purpose string, key s
 // owner's login (owner != ""), or, for a login no person owns, an unowned login
 // of the same name. The one rule /v1/node/peer-cert and /v1/node/peers share.
 func (s *Server) peerSameOwner(owner, srcUser string, n *store.Node) (bool, error) {
+	// The target row is the target node's own word too (task MPCX): it is
+	// that login on that machine only when that is what it enrolled as.
+	tep, err := s.Store.EndpointByID(n.EndpointID)
+	if errors.Is(err, store.ErrNoSuchEndpoint) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if t := s.nodeSelfFrom(tep, n.Hostname, n.OSUser); t.Host != n.Hostname || t.User != n.OSUser {
+		return false, nil
+	}
 	who, err := s.principalOnNode(n.EndpointID, n.Hostname, n.OSUser)
 	if err != nil && !errors.Is(err, store.ErrNoPrincipal) {
 		return false, err

@@ -61,6 +61,9 @@ type EndpointTrust struct {
 	Source       string
 	Role         string
 	EnrolledHost string
+	// EnrolledUser is the OS login it enrolled as (task MPCX): written once,
+	// never moved by a report. '' = it never said one.
+	EnrolledUser string
 }
 
 // ErrDesiredVersion is a desired-state write that names a version other than
@@ -100,8 +103,8 @@ func (s *Store) CreateJoinCodeFor(codeHash, label, kind, trust, role, machine st
 // EndpointKind: it gates credentials, so a caller asks for it by name.
 func (s *Store) EndpointTrustOf(endpointID string) (EndpointTrust, error) {
 	var t EndpointTrust
-	err := s.read.QueryRow(`SELECT trust, trust_source, role, enrolled_host FROM endpoints WHERE endpoint_id = ?`,
-		endpointID).Scan(&t.Trust, &t.Source, &t.Role, &t.EnrolledHost)
+	err := s.read.QueryRow(`SELECT trust, trust_source, role, enrolled_host, enrolled_user FROM endpoints WHERE endpoint_id = ?`,
+		endpointID).Scan(&t.Trust, &t.Source, &t.Role, &t.EnrolledHost, &t.EnrolledUser)
 	if errors.Is(err, sql.ErrNoRows) {
 		return EndpointTrust{}, ErrNoSuchEndpoint
 	}
@@ -111,7 +114,7 @@ func (s *Store) EndpointTrustOf(endpointID string) (EndpointTrust, error) {
 // EndpointTrusts is every live endpoint's trust record with its current
 // hostname, by endpoint id — the roster's and the machine check's one read.
 func (s *Store) EndpointTrusts() (map[string]EndpointTrust, map[string]string, error) {
-	rows, err := s.read.Query(`SELECT endpoint_id, hostname, trust, trust_source, role, enrolled_host
+	rows, err := s.read.Query(`SELECT endpoint_id, hostname, trust, trust_source, role, enrolled_host, enrolled_user
 		FROM endpoints WHERE retired_at IS NULL`)
 	if err != nil {
 		return nil, nil, err
@@ -121,12 +124,37 @@ func (s *Store) EndpointTrusts() (map[string]EndpointTrust, map[string]string, e
 	for rows.Next() {
 		var id, host string
 		var t EndpointTrust
-		if err := rows.Scan(&id, &host, &t.Trust, &t.Source, &t.Role, &t.EnrolledHost); err != nil {
+		if err := rows.Scan(&id, &host, &t.Trust, &t.Source, &t.Role, &t.EnrolledHost, &t.EnrolledUser); err != nil {
 			return nil, nil, err
 		}
 		out[id], hosts[id] = t, host
 	}
 	return out, hosts, rows.Err()
+}
+
+// DeviceEnrollers is who enrolled endpointID through a device's own road
+// (task MPCX): a `fleet login` node pass or a `fleet node join` scan — the
+// codes the hub mints tagged with the device (CreateJoinCodeForDevice, role
+// client). byDevice is false for an endpoint enrolled any other way (an
+// operator's code, a login the hub opened, `ccquota enroll`); principals are
+// the devices' people, "" for a device the hub no longer knows.
+func (s *Store) DeviceEnrollers(endpointID string) (principals []string, byDevice bool, err error) {
+	rows, err := s.read.Query(`SELECT COALESCE(d.principal_id, '') FROM fleet_join_codes c
+		LEFT JOIN fleet_devices d ON d.fingerprint = c.device_fp
+		WHERE c.endpoint_id = ? AND c.device_fp <> '' AND c.role = ? AND c.used_at IS NOT NULL`, endpointID, NodeRoleClient)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, false, err
+		}
+		byDevice = true
+		principals = append(principals, p)
+	}
+	return principals, byDevice, rows.Err()
 }
 
 // SetEndpointTrust writes an endpoint's own trust ("" clears it, so the

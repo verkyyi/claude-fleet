@@ -261,6 +261,10 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusUnauthorized, err.Error())
 			return
 		}
+		if errors.Is(err, store.ErrJoinLogin) {
+			httpError(w, http.StatusForbidden, err.Error())
+			return
+		}
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -318,7 +322,9 @@ func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*No
 func (s *Server) joinResponse(r *http.Request, id, label, tok, osUser string) *NodeJoinResponse {
 	out := &NodeJoinResponse{
 		EndpointID: id, Label: label, Token: tok, Hub: s.nodeHubURL(r),
-		Admin: s.isFleetAdmin(osUser), Dist: s.distNames(), Kind: store.NodeKindFixed,
+		// The hub's word on admin, as the hello will read it (nodeAdminOK):
+		// a member's device never is one (task MPCX).
+		Admin: s.isFleetAdmin(osUser) && !s.memberDevice(id), Dist: s.distNames(), Kind: store.NodeKindFixed,
 	}
 	if s.SSHCA != nil {
 		out.SSHCA = s.SSHCA.PublicKey()
