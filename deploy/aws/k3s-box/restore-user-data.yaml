@@ -4,9 +4,14 @@
 # and every person's home disk (local-path) is pinned to that node: a new
 # instance gets a new private IP, so cloud-init would name it differently and
 # every home pod would stay Pending. Pin the old name — read it from the
-# snapshot's `k3s-node` tag — before k3s starts. Nothing else runs: the
-# volume already holds k3s, the Secrets and the checkout.
+# snapshot's `k3s-node` tag — before k3s starts. The volume already holds
+# k3s, the Secrets and the checkout; the only other step is the host hardening
+# (task N9GH: networkd keeps off the pod network, upgrades restart nothing), in
+# case the snapshot predates it — it changes nothing on one that has it, and
+# takes effect at networkd's next start.
 hostname: __K3S_NODE__
 fqdn: __K3S_NODE__.us-west-2.compute.internal
 preserve_hostname: false
 manage_etc_hosts: true
+runcmd:
+  - [bash, -c, 'if [ -x /opt/claude-fleet/deploy/aws/k3s-box/bootstrap.sh ]; then /opt/claude-fleet/deploy/aws/k3s-box/bootstrap.sh host 2>&1 | tee -a /var/log/fleet-core-bootstrap.log; fi']

@@ -7,6 +7,7 @@
 #
 #   bootstrap.sh            everything
 #   bootstrap.sh apply      the overlay + template only (k3s and cert-manager already up)
+#   bootstrap.sh host       the host hardening only (networkd · needrestart — task N9GH)
 #   bootstrap.sh render     print the render it would apply, change nothing
 #
 # Settings come from the environment, else $FLEET_CORE_CONF
@@ -78,6 +79,72 @@ need_settings() {
 }
 
 ecr_registry() { printf '%s' "${HUB_IMAGE%%/*}"; }
+
+# ── 0. the host: networkd keeps off the pod network, upgrades restart nothing ──
+# 2026-11-13 06:17Z (task N9GH): unattended-upgrades installed libc6, needrestart
+# restarted systemd-networkd, and networkd re-took cni0 / flannel.1 / every
+# veth — dropping routes it had not made. The hub pods' open connections to RDS
+# went silent and the hub was down 16 minutes. Three files make that a no-op:
+#   - a .network that matches the pod network's links FIRST (05- sorts before
+#     netplan's 10-) and says Unmanaged=yes: networkd never configures them;
+#   - networkd.conf: ManageForeignRoutes / ...RoutingPolicyRules = no — a
+#     (re)started networkd no longer deletes the routes flannel / k3s made;
+#   - needrestart in list-only mode: an upgrade lists the services on old
+#     libraries in the log, restarts none of them; the box is restarted by a
+#     person, in a window (deploy/aws/README.md «Box maintenance»).
+# HOST_ROOT (default /) writes the same files under another root — the drill
+# (BREAK-IT box-networkd-cni) — and then reloads nothing.
+HOST_ROOT=${HOST_ROOT:-/}
+
+# host_file <path> <mode> <content>: write when different; prints the path when it changed
+host_file() {
+  local f=${HOST_ROOT%/}$1 mode=$2 body=$3
+  if [ -f "$f" ] && [ "$(cat "$f")" = "$body" ]; then return 0; fi
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$body" > "$f.tmp.$$" && chmod "$mode" "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"
+  echo "$1"
+}
+
+harden_host() {
+  local changed
+  changed=$(
+    host_file /etc/systemd/network/05-fleet-cni-unmanaged.network 0644 "# Written by deploy/aws/k3s-box/bootstrap.sh (task N9GH): the pod network is
+# k3s' and flannel's. networkd must never configure, re-address or flush it.
+[Match]
+Name=cni0 flannel* veth* kube-* cali* tunl* vxlan*
+
+[Link]
+Unmanaged=yes"
+    host_file /etc/systemd/networkd.conf.d/50-fleet-foreign-routes.conf 0644 "# Written by deploy/aws/k3s-box/bootstrap.sh (task N9GH): a (re)started
+# networkd leaves the routes and rules it did not make (flannel's, k3s') alone.
+[Network]
+ManageForeignRoutes=no
+ManageForeignRoutingPolicyRules=no"
+    host_file /etc/needrestart/conf.d/50-fleet-list-only.conf 0644 "# Written by deploy/aws/k3s-box/bootstrap.sh (task N9GH): an upgrade lists the
+# services still on old libraries; it restarts none. A person restarts the box in
+# a maintenance window (deploy/aws/README.md «Box maintenance»).
+\$nrconf{restart} = 'l';
+\$nrconf{kernelhints} = -1;"
+    host_file /etc/apt/apt.conf.d/52fleet-unattended 0644 "// Written by deploy/aws/k3s-box/bootstrap.sh (task N9GH): security updates
+// still install by themselves; the box never reboots by itself.
+Unattended-Upgrade::Automatic-Reboot \"false\";"
+  )
+  if [ -z "$changed" ]; then
+    say "host: networkd and needrestart already hardened"
+    return 0
+  fi
+  say "host: wrote $(printf '%s' "$changed" | tr '\n' ' ')"
+  [ "$HOST_ROOT" = / ] || return 0
+  # Nothing is reloaded here: networkd reads these at its next start, and
+  # restarting (or reloading) it now is the very thing that broke the hub. The
+  # planned reboot applies them (README «Box maintenance»).
+  if systemctl is-active --quiet systemd-networkd; then
+    say "host: the networkd half applies at the next reboot (README «Box maintenance»)"
+  fi
+  if [ -f /var/run/reboot-required ]; then
+    say "host: a reboot is pending ($(tr '\n' ' ' < /var/run/reboot-required.pkgs 2>/dev/null)) — do it in a window: README «Box maintenance»"
+  fi
+}
 
 # ── 1. k3s ──────────────────────────────────────────────────────────────────
 install_k3s() {
@@ -411,8 +478,10 @@ main() {
   case ${1:-all} in
     render) need_settings; render ;;
     apply) need_settings; ensure_secrets; apply_overlay; apply_template ;;
+    host) harden_host ;;
     all)
       need_settings
+      harden_host
       install_k3s
       install_awscli
       install_ecr_refresh
@@ -422,7 +491,7 @@ main() {
       apply_template
       say "done: https://$HUB_HOST (the certificate may take a minute: k -n fleet-hub get certificate)"
       ;;
-    *) die "usage: bootstrap.sh [all|apply|render]" ;;
+    *) die "usage: bootstrap.sh [all|apply|host|render]" ;;
   esac
 }
 main "$@"

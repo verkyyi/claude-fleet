@@ -5388,6 +5388,58 @@ drill_db_move_policy_seed() {
   SECS=$(since "$t0")
 }
 
+# ---- box-networkd-cni (task N9GH): needrestart restarted systemd-networkd on
+# the k3s box after a libc upgrade, networkd re-took the pod network and the
+# hub's open RDS connections went silent for 16 minutes. bootstrap.sh's host
+# step writes the four files that make a networkd restart a no-op and stop
+# upgrades restarting services; written under a sandbox root (HOST_ROOT), it
+# must say exactly that, and a second run must change nothing.
+drill_box_networkd_cni() {
+  CAP=30; local t0 sb f out
+  t0=$(now)
+  f="$ROOT/deploy/aws/k3s-box/bootstrap.sh"
+  sb="$WORK/n9gh-host"; mkdir -p "$sb"
+  out=$(HOST_ROOT="$sb" FLEET_CORE_CONF=/nonexistent bash "$f" host 2>&1) \
+    || { WHY="bootstrap.sh host failed: $out"; return 1; }
+  grep -q '^Name=.*cni0.*flannel\*.*veth\*.*kube-\*' "$sb/etc/systemd/network/05-fleet-cni-unmanaged.network" 2>/dev/null \
+    && grep -q '^Unmanaged=yes$' "$sb/etc/systemd/network/05-fleet-cni-unmanaged.network" \
+    || { WHY="no .network marking cni0 / flannel* / veth* / kube-* Unmanaged=yes ahead of netplan"; return 1; }
+  grep -q '^ManageForeignRoutes=no$' "$sb/etc/systemd/networkd.conf.d/50-fleet-foreign-routes.conf" 2>/dev/null \
+    && grep -q '^ManageForeignRoutingPolicyRules=no$' "$sb/etc/systemd/networkd.conf.d/50-fleet-foreign-routes.conf" \
+    || { WHY="a restarted networkd would still delete flannel's routes (ManageForeignRoutes)"; return 1; }
+  grep -q "^\\\$nrconf{restart} = 'l';\$" "$sb/etc/needrestart/conf.d/50-fleet-list-only.conf" 2>/dev/null \
+    || { WHY="needrestart still restarts services after an upgrade (not list-only)"; return 1; }
+  grep -q '^Unattended-Upgrade::Automatic-Reboot "false";$' "$sb/etc/apt/apt.conf.d/52fleet-unattended" 2>/dev/null \
+    || { WHY="unattended-upgrades may reboot the box by itself"; return 1; }
+  out=$(HOST_ROOT="$sb" FLEET_CORE_CONF=/nonexistent bash "$f" host 2>&1)
+  case $out in *"already hardened"*) ;; *) WHY="a second bootstrap.sh host rewrote files: $out"; return 1 ;; esac
+  grep -q 'bootstrap.sh host' "$ROOT/deploy/aws/k3s-box/restore-user-data.yaml" \
+    || { WHY="a box rebuilt from a snapshot does not run the host hardening"; return 1; }
+  grep -q '^  networkctl reload\|^  systemctl restart systemd-networkd' "$f" \
+    && { WHY="bootstrap.sh reloads / restarts networkd itself — the very thing that broke the hub"; return 1; }
+  WHAT='盒子加固：pod 网卡 Unmanaged=yes、不删外来路由、needrestart 只列不重启、不自动重启；二跑不改；恢复盒子也跑（沙箱根）'
+  SECS=$(since "$t0")
+}
+
+# ---- hub-db-blackhole (task N9GH): the hub's open Postgres connections went
+# silent; with no keepalive / TCP_USER_TIMEOUT and database/sql's pre-statement
+# ping on the caller's context.Background(), every request and /readyz waited
+# out the kernel's 15 minutes. The store test blackholes the open connections
+# through a proxy (Postgres leg): /readyz answers inside 2 s and is ready again
+# on a fresh connection, a no-deadline write comes back, the pools serve again
+# well inside a minute; pgnet's test reads TCP_USER_TIMEOUT + SO_KEEPALIVE back
+# off a dialled socket (Linux).
+drill_hub_db_blackhole() {
+  CAP=180; local t0
+  t0=$(now)
+  _drill_go_tests 'TestApplyDialsWithUserTimeout TestUserTimeoutEnv' "$ROOT/tokenledger/hub/pgnet/pgnet_test.go" \
+    'Postgres 连接拨号带 TCP 保活 + TCP_USER_TIMEOUT 30s（Linux 读回套接字选项）' ./hub/pgnet || return 1
+  _drill_go_tests 'TestBlackholedConnectionsRecover' "$ROOT/tokenledger/hub/store/blackhole_test.go" \
+    '已开连接被黑洞：/readyz 2 秒内答、新连接上恢复；无期限的写按默认期限回来；一分钟内整池恢复' ./hub/store || return 1
+  [ -n "${CCQUOTA_DB_URL:-}" ] || WHAT='没有测试 Postgres：按名核对黑洞测试在，tokenledger-pg 门执行；pgnet 套接字选项已跑'
+  SECS=$(since "$t0")
+}
+
 # Nothing starts a session by itself (issue #3120, EPIC #3111 C9): the red-master
 # macOS watcher once spawned a fixer for the breakage it filed (④). The autofill
 # dispatcher (③) left with its template and shell (#3576) — nothing of it is left

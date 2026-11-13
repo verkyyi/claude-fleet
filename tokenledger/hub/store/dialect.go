@@ -33,10 +33,14 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/verkyyi/claude-fleet/tokenledger/hub/pgnet"
 )
 
 // dialect is which database a Store speaks to.
@@ -467,23 +471,60 @@ func openPostgres(url string, readOnly bool) (*sql.DB, error) {
 	if readOnly {
 		cfg.RuntimeParams["default_transaction_read_only"] = "on"
 	}
-	return sql.OpenDB(pgConnector{stdlib.GetConnector(*cfg)}), nil
+	// Keepalive + TCP_USER_TIMEOUT: a connection the network silently dropped
+	// errors in ~30 s instead of the kernel's ~15 minutes (task N9GH).
+	pgnet.Apply(&cfg.Config)
+	return sql.OpenDB(&pgConnector{base: stdlib.GetConnector(*cfg)}), nil
 }
 
-type pgConnector struct{ base driver.Connector }
+// envStatementTimeout overrides defaultStatementTimeout (a Go duration; "0"
+// turns the default deadline off).
+const envStatementTimeout = "CCQUOTA_DB_STATEMENT_TIMEOUT"
 
-func (c pgConnector) Connect(ctx context.Context) (driver.Conn, error) {
+// defaultStatementTimeout is the deadline a statement gets when its caller
+// gave it none (task N9GH): most of the store still calls Exec / Query with
+// context.Background(), and on 2026-11-13 such a call held the one writer
+// connection for 15 minutes. A statement whose context already has a deadline
+// keeps its own. Long enough for the daily prune and the rollup backfill;
+// the schema pass at open runs before it is armed.
+const defaultStatementTimeout = 2 * time.Minute
+
+func statementTimeout() time.Duration {
+	if v := os.Getenv(envStatementTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			return d
+		}
+	}
+	return defaultStatementTimeout
+}
+
+type pgConnector struct {
+	base driver.Connector
+	// deadline is the default statement deadline in nanoseconds, 0 = none;
+	// armed (armStatementDeadline) once the store's schema pass is done.
+	deadline atomic.Int64
+}
+
+func (c *pgConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	cn, err := c.base.Connect(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &pgConn{cn}, nil
+	return &pgConn{Conn: cn, pc: c}, nil
 }
 
-func (c pgConnector) Driver() driver.Driver { return pgDriver{} }
+func (c *pgConnector) Driver() driver.Driver { return pgDriver{c: c} }
 
 // pgDriver exists so a *sql.DB can say which dialect it is (dialectOf).
-type pgDriver struct{}
+type pgDriver struct{ c *pgConnector }
+
+// armStatementDeadline gives every statement on db with no deadline of its
+// own statementTimeout(). A SQLite pool is left alone.
+func armStatementDeadline(db *sql.DB) {
+	if d, ok := db.Driver().(pgDriver); ok && d.c != nil {
+		d.c.deadline.Store(int64(statementTimeout()))
+	}
+}
 
 func (pgDriver) Open(string) (driver.Conn, error) {
 	return nil, errors.New("store: the postgres driver opens through its connector")
@@ -498,7 +539,39 @@ func dialectOf(db *sql.DB) dialect {
 }
 
 // pgConn is pgx's connection, with each statement rebound first.
-type pgConn struct{ driver.Conn }
+type pgConn struct {
+	driver.Conn
+	pc *pgConnector
+}
+
+// withDeadline is ctx with the pool's default statement deadline when ctx has
+// none; cancel is a no-op otherwise.
+func (c *pgConn) withDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if c.pc == nil {
+		return ctx, func() {}
+	}
+	d := time.Duration(c.pc.deadline.Load())
+	if d <= 0 {
+		return ctx, func() {}
+	}
+	if _, has := ctx.Deadline(); has {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
+}
+
+// pgRows is pgx's rows with the statement deadline released on Close: a
+// query's rows are read after QueryContext returns, under the same context.
+type pgRows struct {
+	*stdlib.Rows
+	cancel context.CancelFunc
+}
+
+func (r *pgRows) Close() error {
+	err := r.Rows.Close()
+	r.cancel()
+	return err
+}
 
 func (c *pgConn) Prepare(query string) (driver.Stmt, error) {
 	return c.PrepareContext(context.Background(), query)
@@ -516,6 +589,8 @@ func (c *pgConn) ExecContext(ctx context.Context, query string, args []driver.Na
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := c.withDeadline(ctx)
+	defer cancel()
 	return c.Conn.(driver.ExecerContext).ExecContext(ctx, rebind(query), args)
 }
 
@@ -524,15 +599,67 @@ func (c *pgConn) QueryContext(ctx context.Context, query string, args []driver.N
 	if err != nil {
 		return nil, err
 	}
-	return c.Conn.(driver.QueryerContext).QueryContext(ctx, rebind(query), args)
+	ctx, cancel := c.withDeadline(ctx)
+	rows, err := c.Conn.(driver.QueryerContext).QueryContext(ctx, rebind(query), args)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if sr, ok := rows.(*stdlib.Rows); ok {
+		return &pgRows{Rows: sr, cancel: cancel}, nil
+	}
+	// Not pgx's own rows: the deadline stays until its timer, which is the
+	// point of a deadline anyway.
+	return rows, nil
 }
 
+// txDeadlineFactor: a transaction with no deadline of its own gets this many
+// statement timeouts, begin to commit — pgx runs Commit / Rollback under the
+// context BeginTx was given, so the deadline has to cover the whole of it.
+const txDeadlineFactor = 5
+
+// pgTx releases the transaction's deadline once it ends.
+type pgTx struct {
+	driver.Tx
+	cancel context.CancelFunc
+}
+
+func (t *pgTx) Commit() error {
+	defer t.cancel()
+	return t.Tx.Commit()
+}
+
+func (t *pgTx) Rollback() error {
+	defer t.cancel()
+	return t.Tx.Rollback()
+}
+
+// BeginTx, Ping and ResetSession get the default deadline too: database/sql
+// calls ResetSession — which pings a connection idle over a second — with
+// the CALLER's context before every statement, so with context.Background()
+// that ping waited on a blackholed connection for the kernel's 15 minutes
+// before any statement deadline applied (task N9GH, TestBlackholedConnectionsRecover).
 func (c *pgConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	return c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	cancel := context.CancelFunc(func() {})
+	if c.pc != nil {
+		if d := time.Duration(c.pc.deadline.Load()); d > 0 {
+			if _, has := ctx.Deadline(); !has {
+				ctx, cancel = context.WithTimeout(ctx, txDeadlineFactor*d)
+			}
+		}
+	}
+	tx, err := c.Conn.(driver.ConnBeginTx).BeginTx(ctx, opts)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &pgTx{Tx: tx, cancel: cancel}, nil
 }
 
 func (c *pgConn) Ping(ctx context.Context) error {
 	if p, ok := c.Conn.(driver.Pinger); ok {
+		ctx, cancel := c.withDeadline(ctx)
+		defer cancel()
 		return p.Ping(ctx)
 	}
 	return nil
@@ -540,6 +667,8 @@ func (c *pgConn) Ping(ctx context.Context) error {
 
 func (c *pgConn) ResetSession(ctx context.Context) error {
 	if r, ok := c.Conn.(driver.SessionResetter); ok {
+		ctx, cancel := c.withDeadline(ctx)
+		defer cancel()
 		return r.ResetSession(ctx)
 	}
 	return nil

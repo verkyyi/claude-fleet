@@ -383,6 +383,54 @@ new link and wait for its welcome before letting the old one go — the hub
 already lets a newer link of the same endpoint supersede the old one) or a
 resumable session layer in a separate gateway process. Neither is in this change.
 
+## Box maintenance
+
+**2026-11-13, 06:17–06:33 UTC, the hub was down 16 minutes** (task N9GH).
+unattended-upgrades installed libc6 / linux-image-aws, needrestart restarted
+`systemd-networkd`, and networkd re-took `cni0`, `flannel.1` and every `veth*`.
+The hub pods' open connections to RDS went silent — no error, no reset — while
+new ones worked; with no keepalive and no TCP user timeout every request,
+`/readyz` included, waited out the kernel's ~15.5 minutes (`GET /readyz 503
+15m49s`), both replicas went NotReady and Traefik answered 503.
+
+What holds now:
+
+| Layer | What | Where |
+|---|---|---|
+| networkd | the pod links (`cni0` `flannel*` `veth*` `kube-*` `cali*` `tunl*` `vxlan*`) match `Unmanaged=yes` first; `ManageForeignRoutes=no` + `ManageForeignRoutingPolicyRules=no` — a (re)started networkd touches neither the links nor flannel's routes | `/etc/systemd/network/05-fleet-cni-unmanaged.network`, `/etc/systemd/networkd.conf.d/50-fleet-foreign-routes.conf` |
+| upgrades | security updates still install by themselves; needrestart only LISTS the services on old libraries (`$nrconf{restart} = 'l'`), never restarts one; no automatic reboot | `/etc/needrestart/conf.d/50-fleet-list-only.conf`, `/etc/apt/apt.conf.d/52fleet-unattended` |
+| hub | every Postgres connection dials with keepalive (10 s idle, 5 s × 4) and `TCP_USER_TIMEOUT` 30 s — a silently dropped one errors in ~30 s and leaves the pool; a statement with no deadline of its own gets 2 min (`CCQUOTA_DB_STATEMENT_TIMEOUT`), a transaction 5×; `/readyz` answers within 2 s on a connection of its own | `tokenledger/hub/pgnet`, `store/dialect.go`, `store/ready.go` |
+
+`bootstrap.sh` writes the four host files on every run (`bootstrap.sh host`
+writes only them; `restore-user-data.yaml` runs it on a rebuilt box). It
+reloads nothing — restarting networkd is the very thing that broke the hub —
+so on a box that predates them they take effect at the next reboot.
+
+**A reboot** (a new kernel, a pending `/var/run/reboot-required`, the first
+`bootstrap.sh host`) is a person's, in a quiet window: one box is the whole
+hub, so it is ~1–2 minutes down.
+
+```sh
+ssh box
+cat /var/run/reboot-required.pkgs 2>/dev/null; needrestart -b   # what is pending
+sudo git -C /opt/claude-fleet pull --ff-only
+sudo /opt/claude-fleet/deploy/aws/k3s-box/bootstrap.sh host
+sudo reboot
+# back up:
+networkctl list | grep -E 'cni0|flannel|veth'     # every one: unmanaged
+sudo k3s kubectl -n fleet-hub get pods             # both 1/1 Ready
+sudo /opt/claude-fleet/deploy/aws/k3s-box/db-blackhole-drill.sh networkd    # PASS
+sudo /opt/claude-fleet/deploy/aws/k3s-box/db-blackhole-drill.sh blackhole   # PASS
+```
+
+`db-blackhole-drill.sh networkd` restarts networkd as needrestart did and
+passes when every pod keeps its DB connections and `/readyz` stays 200;
+`blackhole` drops exactly the pods' open 5432 sockets (iptables in each pod's
+namespace, new connections pass — the day's shape) and passes when no
+`/readyz` took over 3 s and every pod serves `/readyz` + a write again within
+60 s, with no restart. Its rules are gone at the end, or after 5 minutes by a
+systemd timer if the script is killed.
+
 ## Roll back
 
 - **The hub image**: put the previous tag back in `HUB_IMAGE` and run
