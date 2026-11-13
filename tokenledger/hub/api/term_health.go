@@ -30,8 +30,17 @@ import (
 const TermHealthPath = "/v1/fleet/term/health"
 
 // drainState is closed once, when the hub starts going away.
+//
+// chMu guards only ch; mu orders the replica row's beat against its removal
+// (beatReplica / finishDrain) and is held across a database write. They were
+// one lock until task N9GH: a beat stuck on a dead database connection then
+// held every drainCh() caller — /readyz's Draining() among them — for as long
+// as the connection took to die (10 s on 2026-11-13 with TCP_USER_TIMEOUT,
+// ~15 minutes the day of the outage), so a replica could not even say it was
+// not ready.
 type drainState struct {
 	once    sync.Once
+	chMu    sync.Mutex
 	ch      chan struct{}
 	mu      sync.Mutex
 	retired bool
@@ -40,8 +49,8 @@ type drainState struct {
 func (s *Server) drainCh() <-chan struct{} { return s.drainChan() }
 
 func (s *Server) drainChan() chan struct{} {
-	s.drain.mu.Lock()
-	defer s.drain.mu.Unlock()
+	s.drain.chMu.Lock()
+	defer s.drain.chMu.Unlock()
 	if s.drain.ch == nil {
 		s.drain.ch = make(chan struct{})
 	}
