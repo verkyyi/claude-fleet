@@ -138,6 +138,13 @@ func TestFleetLoginDeviceFlow(t *testing.T) {
 		!strings.Contains(page, st.KeyFingerprint) || !strings.Contains(page, ">Confirm</button>") {
 		t.Fatalf("confirm page %d:\n%s", pc, page)
 	}
+	// It also says where the request came from, when, and what confirming
+	// does — and a plain login carries no node warning or tick.
+	if !strings.Contains(page, "Requested from") || !strings.Contains(page, "127.0.0.1") ||
+		!strings.Contains(page, "less than a minute ago") || !strings.Contains(page, pageT(i18n.EN, "login.purpose.login")) ||
+		strings.Contains(page, "node_ack") || strings.Contains(page, pageT(i18n.EN, "login.node.warn")) {
+		t.Fatalf("confirm page lacks the request's origin:\n%s", page)
+	}
 
 	pc, done := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
 	if pc != 200 || !strings.Contains(done, "valid until") || !strings.Contains(done, "you can go back to the terminal") {
@@ -517,7 +524,21 @@ func TestFleetNodeJoinByScan(t *testing.T) {
 		!strings.Contains(page, st.UserCode) || !strings.Contains(page, ">Confirm</button>") {
 		t.Fatalf("node confirm page %d:\n%s", pc, page)
 	}
-	pc, done := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	// A node scan says so prominently and asks for an extra tick.
+	if !strings.Contains(page, pageT(i18n.EN, "login.node.warn")) || !strings.Contains(page, `name="node_ack" value="1" required`) ||
+		!strings.Contains(page, pageT(i18n.EN, "login.purpose.node")) {
+		t.Fatalf("node confirm page has no warning / tick:\n%s", page)
+	}
+	// Without the tick the server issues nothing: the same page again, still pending.
+	pc, again := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	again = html.UnescapeString(again)
+	if pc != 200 || !strings.Contains(again, pageT(i18n.EN, "login.node.ack.missing")) || !strings.Contains(again, ">Confirm</button>") {
+		t.Fatalf("approve without the tick %d:\n%s", pc, again)
+	}
+	if code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code != http.StatusAccepted {
+		t.Fatalf("poll after an unticked approve: %d %s, want 202", code, body)
+	}
+	pc, done := personForm(t, h, pAlice, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "node_ack": {"1"}})
 	if pc != 200 || !strings.Contains(html.UnescapeString(done), "Added <b>newbox</b> as a node") {
 		t.Fatalf("approve %d:\n%s", pc, done)
 	}
@@ -553,7 +574,7 @@ func TestFleetNodeJoinNeedsAnActiveLogin(t *testing.T) {
 	}
 	var st DeviceStart
 	json.Unmarshal(body, &st)
-	personForm(t, h, pCarol, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}})
+	personForm(t, h, pCarol, h.http.URL, url.Values{"code": {st.UserCode}, "action": {"approve"}, "node_ack": {"1"}})
 	if code, body := postJSON(t, h, "/v1/fleet/login/poll", map[string]string{"device_code": st.DeviceCode}); code == 200 {
 		t.Fatalf("a person with no login added a node: %s", body)
 	}
@@ -587,5 +608,39 @@ func TestCertResponseNamesGitHubLogin(t *testing.T) {
 	b, _ := json.Marshal(cr)
 	if !bytes.Contains(b, []byte(`"name":"alice-gh"`)) {
 		t.Fatalf("wire form: %s", b)
+	}
+}
+
+// The confirmation page names where the request came from: the address the
+// hub reads (chatClientIP), its place from the offline city database, how
+// long ago, and the requesting computer's own name labelled as such.
+func TestFleetLoginPageShowsOrigin(t *testing.T) {
+	h, _ := certHarness(t)
+	h.srv.ChatGeoDB = writeTestXDB(t, testGeoSegs())
+	b, _ := json.Marshal(map[string]string{"public_key": newUserKey(t), "device_name": "laptop-7"})
+	r, _ := http.NewRequest(http.MethodPost, h.http.URL+"/v1/fleet/login/start", bytes.NewReader(b))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Forwarded-For", "203.0.113.9")
+	resp, err := http.DefaultClient.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var st DeviceStart
+	if resp.StatusCode != 200 || json.Unmarshal(body, &st) != nil {
+		t.Fatalf("start: %d %s", resp.StatusCode, body)
+	}
+	// started a while ago
+	h.srv.devices.withUser(st.UserCode, time.Now(), func(l *deviceLogin) { l.started = l.started.Add(-3 * time.Minute) })
+	pc, raw := asPerson(t, h, http.MethodGet, "/fleet/login?code="+st.UserCode, pAlice, nil)
+	page := html.UnescapeString(string(raw))
+	for _, want := range []string{"203.0.113.9", "中国 广东省 深圳市", "3 min ago", "Name given by the requesting computer", "laptop-7"} {
+		if pc != 200 || !strings.Contains(page, want) {
+			t.Fatalf("confirm page %d lacks %q:\n%s", pc, want, page)
+		}
+	}
+	if got := agoText(i18n.ZhCN, 4*time.Minute+10*time.Second); got != "4 分钟前" {
+		t.Fatalf("agoText zh = %q", got)
 	}
 }

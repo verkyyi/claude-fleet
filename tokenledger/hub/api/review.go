@@ -180,7 +180,11 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if scoped {
 		account = store.AllAccounts
 	}
-	head, err := s.Store.Session(account, id, source)
+	// The head and the turns are both cut to the caller's own rows: another
+	// person's rows under the same session id are never part of the answer.
+	f := store.Filter{Account: account, Session: id, Source: source}
+	who.Apply(&f)
+	head, err := s.Store.SessionIn(f)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -193,7 +197,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	if scoped {
 		head.AccountUUID = ""
 	}
-	turns, err := s.Store.SessionTurns(account, id, source)
+	turns, err := s.Store.SessionTurnsIn(f)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return

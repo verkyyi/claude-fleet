@@ -517,3 +517,82 @@ func TestOAuthPrivateKeyJWT(t *testing.T) {
 		t.Fatalf("/mcp: HTTP %d %v", code, who)
 	}
 }
+
+// A registered (DCR) client names itself, so the consent request marks it
+// unverified, its connection lives at most 30 days whatever is picked, it is
+// never labelled by its name, and only the permissions the person ticked are
+// granted — not the ones it asked for.
+func TestOAuthDCRClientLimits(t *testing.T) {
+	h := newAgentHarness(t)
+	reg, _ := json.Marshal(map[string]any{"client_name": "Claude Code", "redirect_uris": []string{"http://localhost:4000/callback"}})
+	resp, err := http.Post(h.http.URL+OAuthRegisterPath, "application/json", bytes.NewReader(reg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cl map[string]any
+	json.NewDecoder(resp.Body).Decode(&cl)
+	resp.Body.Close()
+	clientID, _ := cl["client_id"].(string)
+	if resp.StatusCode != 201 || clientID == "" {
+		t.Fatalf("register: HTTP %d %v", resp.StatusCode, cl)
+	}
+	verifier := strings.Repeat("v", 50)
+	q := url.Values{"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {"http://localhost:4123/callback"},
+		"code_challenge": {pkceS256(verifier)}, "code_challenge_method": {"S256"}, "scope": {"read talk start stop"}}
+	code, req := jsonAsPerson(t, h, http.MethodGet, MeOAuthRequestPath+"?"+q.Encode(), pAlice, nil)
+	if code != 200 || req["verified"] != false || req["max_days"] != float64(30) || req["days"] != float64(30) {
+		t.Fatalf("consent request: HTTP %d %v", code, req)
+	}
+	if c := req["client"].(map[string]any); c["kind"] != "dcr" || c["host"] != "localhost:4000" {
+		t.Fatalf("client: %v", c)
+	}
+	code, ans := jsonAsPerson(t, h, http.MethodPost, MeOAuthApprovePath, pAlice,
+		map[string]any{"query": q.Encode(), "permissions": []string{"read"}, "days": 365, "approve": true})
+	red, _ := url.Parse(fmt.Sprint(ans["redirect"]))
+	if code != 200 || red.Query().Get("code") == "" {
+		t.Fatalf("approve: HTTP %d %v", code, ans)
+	}
+	now := time.Now()
+	code, tok := agentPostForm(t, h.http.URL+OAuthTokenPath, url.Values{"grant_type": {"authorization_code"},
+		"code": {red.Query().Get("code")}, "client_id": {clientID}, "code_verifier": {verifier}})
+	if code != 200 || tok["scope"] != "fleet:read" {
+		t.Fatalf("token: HTTP %d %v — only what was ticked", code, tok)
+	}
+	gs, _ := h.srv.Store.AgentGrants(pAlice, true)
+	var g *store.AgentGrant
+	for i := range gs {
+		if gs[i].ClientID == clientID {
+			g = &gs[i]
+		}
+	}
+	if g == nil {
+		t.Fatalf("no grant for %s: %+v", clientID, gs)
+	}
+	if g.ExpiresAt.After(now.Add(dcrGrantMaxTTL + time.Minute)) {
+		t.Fatalf("a registered client's connection lives until %v — past 30 days", g.ExpiresAt)
+	}
+	if g.Client != "other" {
+		t.Fatalf("a self-named client was labelled %q", g.Client)
+	}
+}
+
+func TestOAuthClientKindByHost(t *testing.T) {
+	for _, c := range []struct {
+		cl   store.OAuthClient
+		want string
+	}{
+		{store.OAuthClient{Kind: "dcr", Name: "Claude Code", RedirectURIs: []string{"http://127.0.0.1:4000/cb"}}, "other"},
+		{store.OAuthClient{Kind: "dcr", Name: "claude.ai", RedirectURIs: []string{"https://evil.example/cb"}}, "other"},
+		{store.OAuthClient{Kind: "dcr", Name: "x", RedirectURIs: []string{"https://claude.ai/api/mcp/auth_callback"}}, "claude-ai"},
+		{store.OAuthClient{Kind: "cimd", ClientID: "https://claude.ai/oauth/meta", Name: "Claude"}, "claude-ai"},
+		{store.OAuthClient{Kind: "cimd", ClientID: "https://notclaude.ai/meta", Name: "Claude"}, "other"},
+		{store.OAuthClient{Kind: "cimd", ClientID: "https://claude.ai.evil.example/meta", Name: "Claude"}, "other"},
+	} {
+		if got := clientKind(c.cl); got != c.want {
+			t.Errorf("clientKind(%+v) = %q, want %q", c.cl, got, c.want)
+		}
+	}
+	if clientGrantMaxTTL(store.OAuthClient{Kind: "cimd"}) != agentGrantMaxTTL || clientGrantMaxTTL(store.OAuthClient{Kind: "dcr"}) != dcrGrantMaxTTL {
+		t.Fatal("grant caps")
+	}
+}

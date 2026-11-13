@@ -115,6 +115,31 @@ var pageText = map[string]i18n.Text{
 		i18n.EN:   "Once confirmed, {node} becomes a node: the hub can place sessions on it.",
 		i18n.ZhCN: "确认后 {node} 成为节点：入口可以把会话派到它上面。",
 	},
+	"login.purpose":       {i18n.EN: "What confirming does", i18n.ZhCN: "确认后会怎样"},
+	"login.purpose.login": {i18n.EN: "The requesting computer gets a certificate that signs in to your machines as you.", i18n.ZhCN: "发起请求的那台电脑会拿到一张证书，可以用你的身份登录你的机器。"},
+	"login.purpose.node":  {i18n.EN: "The requesting computer gets a certificate that signs in to your machines as you, and is added as a node under your name.", i18n.ZhCN: "发起请求的那台电脑会拿到一张证书，可以用你的身份登录你的机器，并以你的名义加为节点。"},
+	"login.from":          {i18n.EN: "Requested from", i18n.ZhCN: "请求来自"},
+	"login.from.unknown":  {i18n.EN: "unknown address", i18n.ZhCN: "地址未知"},
+	"login.started":       {i18n.EN: "Started", i18n.ZhCN: "发起时间"},
+	"login.ago.now":       {i18n.EN: "less than a minute ago", i18n.ZhCN: "不到一分钟前"},
+	"login.ago.min":       {i18n.EN: "{n} min ago", i18n.ZhCN: "{n} 分钟前"},
+	"login.device":        {i18n.EN: "Name given by the requesting computer", i18n.ZhCN: "发起请求的电脑自报的名字"},
+	"login.from.check": {
+		i18n.EN:   "If you did not just run this command yourself, or the address or place doesn't look like yours, choose Not me.",
+		i18n.ZhCN: "如果这不是你刚刚亲手运行的命令，或者地址、地点不像你自己的，请点「不是我」。",
+	},
+	"login.node.warn": {
+		i18n.EN:   "Confirming adds the requesting computer as a node under your name: the hub can place your sessions on it. Only confirm if you just ran fleet node join on that computer yourself.",
+		i18n.ZhCN: "确认后，发起请求的那台电脑会以你的名义成为节点：入口可以把你的会话派到它上面。只有你刚刚亲手在那台电脑上运行了 fleet node join，才确认。",
+	},
+	"login.node.ack": {
+		i18n.EN:   "I just ran fleet node join on this computer myself",
+		i18n.ZhCN: "这台电脑上的 fleet node join 是我刚刚亲手运行的",
+	},
+	"login.node.ack.missing": {
+		i18n.EN:   "Tick the box below to add this computer as a node.",
+		i18n.ZhCN: "要把这台电脑加为节点，请先勾选下面的确认框。",
+	},
 	"login.btn.deny":    {i18n.EN: "Not me", i18n.ZhCN: "不是我"},
 	"login.btn.approve": {i18n.EN: "Confirm", i18n.ZhCN: "确认签发"},
 	"login.err.gone": {

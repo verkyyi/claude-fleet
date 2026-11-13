@@ -503,16 +503,29 @@ func (s *Store) labelSessionEndpoints(rows []SessionRow) {
 
 // Session returns one session's header row, or nil when unknown.
 func (s *Store) Session(account, id string, sources ...string) (*SessionRow, error) {
-	f := Filter{Account: account, Session: id,
-		Start: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)}
+	f := Filter{Account: account, Session: id}
 	if len(sources) > 0 {
 		f.Source = sources[0]
 	}
+	return s.SessionIn(f)
+}
+
+// SessionIn is the header of the session f names (f.Session), cut as f is —
+// a person's Owner or login — over all time. nil when f leaves nothing.
+func (s *Store) SessionIn(f Filter) (*SessionRow, error) {
+	if f.Session == "" {
+		return nil, fmt.Errorf("session id is required")
+	}
+	f.Start, f.End = sessionAllTime()
 	rows, err := s.Sessions(f, "tokens", 1, 0)
 	if err != nil || len(rows) == 0 {
 		return nil, err
 	}
 	return &rows[0], nil
+}
+
+func sessionAllTime() (time.Time, time.Time) {
+	return time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
 }
 
 // Turn is one API call inside a session, from the raw events.
@@ -535,16 +548,24 @@ type Turn struct {
 // SessionTurns lists a session's turns oldest first. Empty when the raw events
 // were pruned; the caller reports that rather than showing an empty chart.
 func (s *Store) SessionTurns(account, id string, sources ...string) ([]Turn, error) {
-	if account == "" {
-		return nil, fmt.Errorf("account is required")
+	f := Filter{Account: account, Session: id}
+	if len(sources) > 0 {
+		f.Source = sources[0]
 	}
-	where, args := "WHERE session_id = ?", []any{id}
-	if account != AllAccounts {
-		where, args = "WHERE account_uuid = ? AND session_id = ?", []any{account, id}
+	return s.SessionTurnsIn(f)
+}
+
+// SessionTurnsIn is SessionTurns cut as f is: only the turns of the session
+// f names that f's Owner (or login) reported — never another person's rows
+// that happen to share the session id.
+func (s *Store) SessionTurnsIn(f Filter) ([]Turn, error) {
+	if f.Session == "" {
+		return nil, fmt.Errorf("session id is required")
 	}
-	if len(sources) > 0 && sources[0] != "" {
-		where += ` AND source=?`
-		args = append(args, sources[0])
+	f.Start, f.End = sessionAllTime()
+	where, args, err := f.where("ts")
+	if err != nil {
+		return nil, err
 	}
 	rows, err := s.read.Query(`SELECT ts, model, effort, input_tokens, output_tokens, cache_read_tokens,
 		cache_create_5m_tokens + cache_create_1h_tokens, thinking_tokens, cost_usd, is_sidechain,request_id,source,details_json

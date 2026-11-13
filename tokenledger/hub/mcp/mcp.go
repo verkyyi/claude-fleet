@@ -918,14 +918,17 @@ func (s *mcpServer) runAs(who *api.UserLogins, name string, args map[string]any)
 		if id == "" {
 			return nil, fmt.Errorf("session_id is required")
 		}
-		head, err := s.api.Store.Session(account, id, str(args, "source"))
+		// cut to who's own rows, the head and the turns alike
+		f := store.Filter{Account: account, Session: id, Source: str(args, "source")}
+		who.Apply(&f)
+		head, err := s.api.Store.SessionIn(f)
 		if err != nil {
 			return nil, err
 		}
 		if head == nil {
 			return nil, fmt.Errorf("unknown session %q", id)
 		}
-		turns, err := s.api.Store.SessionTurns(account, id, str(args, "source"))
+		turns, err := s.api.Store.SessionTurnsIn(f)
 		if err != nil {
 			return nil, err
 		}

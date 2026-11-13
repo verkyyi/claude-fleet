@@ -12,7 +12,9 @@ import { cn } from "@/lib/utils";
 import { tr } from "@/shared/i18n";
 import { LOCKED, PERMS, RISKY, dayChoices, daysLabel, permLabel, riskyWarning, togglePerm } from "./agents";
 
-export const PermBoxes: FC<{ all?: readonly string[]; value: string[]; onChange: (v: string[]) => void; disabled?: boolean }> = ({ all = PERMS, value, onChange, disabled }) => {
+// asked: the words the requesting agent asked for, each marked beside its box
+// (the consent page of an unverified agent, whose boxes start unticked).
+export const PermBoxes: FC<{ all?: readonly string[]; value: string[]; onChange: (v: string[]) => void; disabled?: boolean; asked?: readonly string[] }> = ({ all = PERMS, value, onChange, disabled, asked }) => {
   const id = useId();
   return (
     <fieldset className="grid gap-2" disabled={disabled}>
@@ -26,7 +28,8 @@ export const PermBoxes: FC<{ all?: readonly string[]; value: string[]; onChange:
               <Checkbox id={`${id}-${p}`} checked={on} disabled={disabled || p === LOCKED}
                 onCheckedChange={(c) => onChange(togglePerm(value, p, c === true, all))} />
               <span className="text-[14px]">{permLabel(p)}</span>
-              {p === LOCKED ? <span className="text-muted-foreground ms-auto text-xs">{tr("总是", "always")}</span> : null}
+              {p === LOCKED ? <span className="text-muted-foreground ms-auto text-xs">{tr("总是", "always")}</span>
+                : asked?.includes(p) ? <span className="text-muted-foreground ms-auto text-xs">{tr("它请求了", "requested")}</span> : null}
             </Label>
             {p === RISKY && on ? (
               <p role="alert" className="border-warn/50 bg-warn/10 flex items-start gap-2 rounded-lg border px-3 py-2 text-[12.5px] leading-relaxed">
@@ -40,14 +43,14 @@ export const PermBoxes: FC<{ all?: readonly string[]; value: string[]; onChange:
   );
 };
 
-export const ExpirySelect: FC<{ value: number; onChange: (d: number) => void; disabled?: boolean }> = ({ value, onChange, disabled }) => {
+export const ExpirySelect: FC<{ value: number; onChange: (d: number) => void; disabled?: boolean; max?: number }> = ({ value, onChange, disabled, max }) => {
   const id = useId();
   return (
     <div className="flex items-center justify-between gap-3">
       <Label htmlFor={id}>{tr("有效期", "Expires after")}</Label>
       <Select disabled={disabled} value={String(value)} onValueChange={(v) => onChange(Number(v))}>
         <SelectTrigger id={id} className="w-32"><SelectValue /></SelectTrigger>
-        <SelectContent>{dayChoices(value).map((d) => <SelectItem key={d} value={String(d)}>{daysLabel(d)}</SelectItem>)}</SelectContent>
+        <SelectContent>{dayChoices(value, max).map((d) => <SelectItem key={d} value={String(d)}>{daysLabel(d)}</SelectItem>)}</SelectContent>
       </Select>
     </div>
   );

@@ -65,3 +65,55 @@ func TestRunUser_ScopedToLogin(t *testing.T) {
 		t.Errorf("usage_summary as alice = %+v; want her 1 event", m["summary"])
 	}
 }
+
+// get_session answers only from the caller's own rows: another person's rows
+// that share the session id are in neither the header nor the turns.
+func TestRunUser_GetSessionCutsTurns(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s := &mcpServer{api: &api.Server{Store: st, Pricing: pricing.Default()}}
+	for i, who := range []struct {
+		acct, ep, login string
+		out             int64
+	}{{"acct-a", "mini", "frank", 9000}, {"acct-b", "box", "alice", 1000}} {
+		id := model.Identity{AccountUUID: who.acct, Email: who.acct + "@example.com", Hostname: who.ep}
+		if err := st.UpsertAccount(id, "max", "default_claude_max_20x"); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.Enroll(who.ep, who.ep, "hash-"+who.ep); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := st.InsertEvents([]model.UsageEvent{{AccountUUID: who.acct, EndpointID: who.ep,
+			MessageUUID: who.ep + "-1", RequestID: "req-" + who.login, SessionID: "s-shared",
+			TS:    time.Now().UTC().Add(-time.Duration(i+1) * time.Minute),
+			Model: "claude-sonnet-5", OutputTokens: who.out, OSUser: who.login}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, who := range []*api.UserLogins{
+		{Login: "alice"},
+		{Login: "alice", Owner: &store.Owner{Logins: []store.EndpointLogin{{EndpointID: "box", OSUser: "alice"}}}},
+	} {
+		out, err := s.runUser(who, "get_session", map[string]any{"session_id": "s-shared"})
+		if err != nil {
+			t.Fatalf("get_session of her own (owner %v): %v", who.Owner != nil, err)
+		}
+		m := out.(map[string]any)
+		head := m["session"].(*store.SessionRow)
+		turns := m["turns"].([]store.Turn)
+		if head.OSUser != "alice" || len(turns) != 1 || turns[0].RequestID != "req-alice" {
+			t.Fatalf("get_session (owner %v) = head %+v turns %+v; want alice's alone", who.Owner != nil, head, turns)
+		}
+	}
+	// the operator (no cut) still sees both
+	out, err := s.run("get_session", map[string]any{"session_id": "s-shared", "account": "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turns := out.(map[string]any)["turns"].([]store.Turn); len(turns) != 2 {
+		t.Fatalf("unscoped get_session turns = %d, want 2", len(turns))
+	}
+}

@@ -410,20 +410,35 @@ func clientHost(c store.OAuthClient) string {
 	return ""
 }
 
-// clientKind guesses the console's agent label from a client's name and host.
+// clientKind is the console's agent label for a client, read from its host
+// alone — a client's name is whatever it says about itself, so it never earns
+// a known label. A metadata-document client's host is where its document
+// lives; a registered client's is its redirect's (where its codes go). A
+// loopback redirect (a CLI on the person's computer) says nothing: "other".
 func clientKind(c store.OAuthClient) string {
-	n := strings.ToLower(c.Name + " " + clientHost(c))
-	switch {
-	case strings.Contains(n, "claude.ai") || strings.Contains(n, "claude.com"):
-		return "claude-ai"
-	case strings.Contains(n, "claude"):
-		return "claude-code"
-	case strings.Contains(n, "codex"):
-		return "codex"
-	case strings.Contains(n, "gemini"):
-		return "gemini"
+	h := strings.ToLower(clientHost(c))
+	if hn, _, err := net.SplitHostPort(h); err == nil {
+		h = hn
+	}
+	for _, d := range []string{"claude.ai", "claude.com"} {
+		if h == d || strings.HasSuffix(h, "."+d) {
+			return "claude-ai"
+		}
 	}
 	return "other"
+}
+
+// dcrGrantMaxTTL caps a registered (DCR) client's connection: anyone can
+// register one and name it anything, so it lives at most this long whatever
+// the person picks; a metadata-document client keeps agentGrantMaxTTL.
+const dcrGrantMaxTTL = 30 * 24 * time.Hour
+
+// clientGrantMaxTTL is the longest connection c may be given.
+func clientGrantMaxTTL(c store.OAuthClient) time.Duration {
+	if c.Kind == "dcr" {
+		return dcrGrantMaxTTL
+	}
+	return agentGrantMaxTTL
 }
 
 // --- authorize -----------------------------------------------------------------
@@ -557,12 +572,20 @@ func (s *Server) handleMeOAuthRequest(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = clientHost(a.client)
 	}
+	days, maxDays := int(agentGrantDefaultTTL/(24*time.Hour)), int(clientGrantMaxTTL(a.client)/(24*time.Hour))
+	if days > maxDays {
+		days = maxDays
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"client":          map[string]string{"id": a.client.ClientID, "name": name, "kind": a.client.Kind, "host": clientHost(a.client)},
 		"redirect_uri":    a.redirectURI,
 		"permissions":     a.permissions,
 		"all_permissions": agentPermissionOrder,
-		"days":            int(agentGrantDefaultTTL / (24 * time.Hour)),
+		"days":            days,
+		"max_days":        maxDays,
+		// a registered client's name is self-reported: the page says so and
+		// leads with where it sends the person back to
+		"verified": a.client.Kind != "dcr",
 	})
 }
 
@@ -616,6 +639,9 @@ func (s *Server) handleMeOAuthApprove(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if max := clientGrantMaxTTL(a.client); ttl > max {
+		ttl = max
 	}
 	codeTok, err := randomToken(32)
 	if err != nil {
@@ -794,6 +820,9 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		ttl := time.Duration(c.TTLHours) * time.Hour
 		if ttl <= 0 || ttl > agentGrantMaxTTL {
 			ttl = agentGrantDefaultTTL
+		}
+		if max := clientGrantMaxTTL(cl); ttl > max {
+			ttl = max
 		}
 		g := store.AgentGrant{ID: agentID(), Person: c.Person, Name: name, Client: clientKind(cl),
 			Kind: store.AgentGrantOAuth, ClientID: c.ClientID, Scopes: c.Scopes, CreatedAt: now, ExpiresAt: now.Add(ttl)}
