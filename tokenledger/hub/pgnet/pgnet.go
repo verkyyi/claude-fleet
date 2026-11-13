@@ -1,15 +1,16 @@
 // Package pgnet is how every hub connection to Postgres is dialled (task N9GH).
 //
 // On 2026-11-13 a libc upgrade on the k3s box restarted systemd-networkd,
-// which reconfigured cni0 / flannel.1 / every veth. The hub pods' OPEN
-// connections to RDS stopped getting replies, with no error at all; new ones
-// worked. The connections had no keepalive and no TCP_USER_TIMEOUT, so every
+// which deleted and re-added the box's DHCP address; the kernel's MASQUERADE
+// forgot the NAT state of every connection leaving through it, so the hub
+// pods' OPEN connections to RDS stopped getting replies, with no error at
+// all; new ones worked. The connections had no keepalive and no TCP_USER_TIMEOUT, so every
 // request — /readyz included — blocked until the kernel gave up retransmitting
 // (tcp_retries2=15: ~15.5 minutes) and the hub was down for 16.
 //
 // Apply bounds a dead connection to about UserTimeout instead:
 //
-//   - TCP keepalive (Idle 10 s, Interval 5 s, Count 4): an idle connection —
+//   - TCP keepalive (Idle 4 s, Interval 2 s, Count 3): an idle connection —
 //     including one blocked reading a reply that will never come, with nothing
 //     unacknowledged in flight — is probed and declared dead;
 //   - TCP_USER_TIMEOUT (UserTimeout, Linux): data sent and not acknowledged for
@@ -34,11 +35,17 @@ import (
 // data (or unanswered keepalive probes) before the kernel errors it.
 // CCQUOTA_DB_TCP_USER_TIMEOUT (a Go duration) overrides it; "0" turns the
 // option off.
-var UserTimeout = 30 * time.Second
+//
+// 10 s (30 s before): the database is in the hub's own region, a reply takes
+// milliseconds, and a stream that has acknowledged nothing for 10 s is gone —
+// on the box a networkd restart dropped the NAT state of every open
+// connection, and each such stall cost the whole hub this long (task N9GH,
+// measured on 2026-11-13: 4 stalls of ~30 s each).
+var UserTimeout = 10 * time.Second
 
 // Keepalive is the probe schedule: first probe after Idle with nothing on the
-// wire, then every Interval, dead after Count unanswered — 10 + 4×5 = 30 s.
-var Keepalive = net.KeepAliveConfig{Enable: true, Idle: 10 * time.Second, Interval: 5 * time.Second, Count: 4}
+// wire, then every Interval, dead after Count unanswered — 4 + 3×2 = 10 s.
+var Keepalive = net.KeepAliveConfig{Enable: true, Idle: 4 * time.Second, Interval: 2 * time.Second, Count: 3}
 
 // ConnectTimeout bounds a new connection's dial when the URL sets no
 // connect_timeout.

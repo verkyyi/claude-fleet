@@ -127,6 +127,8 @@ blackhole)
   say "PASS: every pod serving again within ${BACK}s, no restart"
   ;;
 networkd)
+  nft list table ip fleet_pod_snat >/dev/null 2>&1 \
+    || die "no pod egress SNAT (fleet-pod-snat.service): a networkd restart would drop every open pod connection — run bootstrap.sh host first"
   declare -A before=()
   for p in "${PODS[@]}"; do
     read -r name _ cid _ <<<"$p"

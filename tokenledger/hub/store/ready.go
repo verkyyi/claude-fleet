@@ -21,10 +21,17 @@ const readyBudget = 2 * time.Second
 // readyGate is Ready's own state: one check in flight at a time, and on
 // Postgres a connection of its own.
 type readyGate struct {
-	mu      sync.Mutex
-	running bool    // a check has not come back yet
-	closed  bool    // the store was closed
-	probe   *sql.DB // Postgres: the readiness pool, one connection, nobody else's
+	mu       sync.Mutex
+	inflight *readyRun // the check out now, nil when none
+	closed   bool      // the store was closed
+	probe    *sql.DB   // Postgres: the readiness pool, one connection, nobody else's
+}
+
+// readyRun is one readiness check; every Ready that arrives while it is out
+// waits for its answer.
+type readyRun struct {
+	done chan struct{}
+	err  error // set before done is closed
 }
 
 // deployProbeKey is the rollup_meta row the deploy probe overwrites: one row,
@@ -54,51 +61,47 @@ func LatestMigration() int {
 // dropped TCP stream and /readyz answered after 15m49s, so neither replica
 // could even be marked NotReady and recover. So the check runs off the
 // request — Ready returns at its deadline even if a driver call ignores it —
-// at most one at a time (a check still out answers not ready at once rather
-// than piling up), and on Postgres it uses a pool of its own, one connection
+// at most one at a time (a Ready arriving while one is out waits for that
+// one's answer), and on Postgres it uses a pool of its own, one connection
 // no request can be holding: it never waits behind a stuck connection of the
 // writer or the readers. A probe connection that times out is thrown away
 // with its pool, so the next check dials fresh.
 func (s *Store) Ready(ctx context.Context) error {
 	s.rg.mu.Lock()
-	switch {
-	case s.rg.closed:
+	if s.rg.closed {
 		s.rg.mu.Unlock()
 		return errors.New("database: closed")
-	case s.rg.running:
-		s.rg.mu.Unlock()
-		return errors.New("database: the last readiness check has not come back")
 	}
-	s.rg.running = true
+	run := s.rg.inflight
+	if run == nil {
+		// Start one. Its budget is its own: a probe that arrives later shares
+		// its answer — kubelet, the deploy probe and the hub's own health
+		// prober ask at once, and each used to get a 503 for the other's
+		// check (task N9GH, seen on the box).
+		run = &readyRun{done: make(chan struct{})}
+		s.rg.inflight = run
+		go func() {
+			cctx, cancel := context.WithTimeout(context.Background(), readyBudget)
+			defer cancel()
+			run.err = s.readyCheck(cctx)
+			s.rg.mu.Lock()
+			s.rg.inflight = nil
+			s.rg.mu.Unlock()
+			close(run.done)
+		}()
+	}
 	s.rg.mu.Unlock()
 
-	budget := readyBudget
-	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < budget {
-		budget = time.Until(dl)
-	}
-	cctx, cancel := context.WithTimeout(context.Background(), budget)
-	done := make(chan error, 1)
-	go func() {
-		defer cancel()
-		err := s.readyCheck(cctx)
-		s.rg.mu.Lock()
-		s.rg.running = false
-		s.rg.mu.Unlock()
-		done <- err
-	}()
+	t := time.NewTimer(readyBudget)
+	defer t.Stop()
 	select {
-	case err := <-done:
-		return err
+	case <-run.done:
+		return run.err
 	case <-ctx.Done():
 		return fmt.Errorf("database: %w", ctx.Err())
-	case <-cctx.Done():
-		select {
-		case err := <-done: // it came back right at the deadline
-			return err
-		default:
-		}
-		// the check's own budget ran out and the driver has not returned
-		return fmt.Errorf("database: %w", cctx.Err())
+	case <-t.C:
+		// the check's driver call has outlived its own deadline
+		return errors.New("database: the readiness check has not come back")
 	}
 }
 
@@ -131,13 +134,15 @@ func (s *Store) readyCheck(ctx context.Context) error {
 // connection, kept idle between checks.
 func (s *Store) readyProbe() (*sql.DB, error) {
 	s.rg.mu.Lock()
-	defer s.rg.mu.Unlock()
-	if s.rg.closed {
+	closed, p := s.rg.closed, s.rg.probe
+	s.rg.mu.Unlock()
+	if closed {
 		return nil, errors.New("closed")
 	}
-	if s.rg.probe != nil {
-		return s.rg.probe, nil
+	if p != nil {
+		return p, nil
 	}
+	// opened outside the lock: nothing a Ready waits on runs under it
 	p, err := openPool(s.d, s.src, true)
 	if err != nil {
 		return nil, err
@@ -145,7 +150,19 @@ func (s *Store) readyProbe() (*sql.DB, error) {
 	p.SetMaxOpenConns(1)
 	p.SetMaxIdleConns(1)
 	p.SetConnMaxLifetime(10 * time.Minute)
+	s.rg.mu.Lock()
+	if s.rg.closed || s.rg.probe != nil {
+		// closed meanwhile, or (only one check runs at a time) never
+		other := s.rg.probe
+		s.rg.mu.Unlock()
+		p.Close()
+		if other == nil {
+			return nil, errors.New("closed")
+		}
+		return other, nil
+	}
 	s.rg.probe = p
+	s.rg.mu.Unlock()
 	return p, nil
 }
 
