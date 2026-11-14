@@ -239,6 +239,22 @@ func fleetEnabled() bool {
 	return os.Getenv("CCQUOTA_FLEET") == "1"
 }
 
+// scheduleLimitsFromEnv reads CCQUOTA_FLEET_SCHEDULE_LIMITS (task PVG9):
+// {"<principal>":{"tasks":N,"daily_slots":N,"daily_starts":N}}. Unset is no
+// overrides. A value that does not parse, or names a number out of range, is
+// logged and dropped as a whole — the hub still starts, on the defaults.
+func scheduleLimitsFromEnv(getenv func(string) string) store.ScheduleOverrides {
+	o, err := store.ParseScheduleOverrides(getenv("CCQUOTA_FLEET_SCHEDULE_LIMITS"))
+	if err != nil {
+		log.Printf("CCQUOTA_FLEET_SCHEDULE_LIMITS ignored, every owner keeps the default schedule limits: %v", err)
+		return nil
+	}
+	if len(o) > 0 {
+		log.Printf("schedule limits: %d owner override(s) from CCQUOTA_FLEET_SCHEDULE_LIMITS", len(o))
+	}
+	return o
+}
+
 // loadFleetCerts wires the SSH certificate authority (claude-fleet#1412).
 // CCQUOTA_FLEET_SSH_CA_KEY names the CA private key file — mounted from its
 // own k8s Secret, never stored in the database. Unset: no certificates. Set
@@ -972,6 +988,9 @@ func runHub(args []string) error {
 		// The relay a managed machine's sessions go out through
 		// (claude-fleet#4010): handed down in /v1/node/desired, unset = none.
 		srv.CredRelayURL = strings.TrimRight(strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_CRED_RELAY_URL")), "/")
+		// Named owners' schedule limits (task PVG9); a bad value is logged
+		// and ignored — everyone keeps the defaults.
+		srv.ScheduleLimits = scheduleLimitsFromEnv(os.Getenv)
 		if err := loadSessionCreds(srv); err != nil {
 			return err
 		}
