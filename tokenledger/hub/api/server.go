@@ -224,6 +224,10 @@ type Server struct {
 	// (CCQUOTA_FLEET_PERSON_CONFIG_KEYS), with config:write in their scopes.
 	// Empty by default: a fleet's caps are the operator's.
 	FleetPersonConfigKeys []string
+	// ScheduleLimits raises (or lowers) named owners' schedule limits
+	// (CCQUOTA_FLEET_SCHEDULE_LIMITS, task PVG9); everyone else gets
+	// store.DefaultScheduleLimits. scheduleLimitsFor is the one reader.
+	ScheduleLimits store.ScheduleOverrides
 
 	// CredRelayURL is the credential relay a managed machine's sessions use
 	// (CCQUOTA_FLEET_CRED_RELAY_URL, claude-fleet#4010): GET /v1/node/desired

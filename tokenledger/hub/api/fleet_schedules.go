@@ -168,13 +168,29 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 			return
 		}
 		out := []any{}
+		// others: the same owner's schedules on their other logins, read
+		// only — they count toward the same limits (task PVG9).
+		others := []scheduleOther{}
+		used := map[string]int{"tasks": 0, "daily_slots": 0}
 		for _, row := range rows {
+			slots := row.Slots
+			used["tasks"]++
+			used["daily_slots"] += slots
 			if ep == nil || row.Endpoint == ep.ID {
 				out = append(out, s.scheduleView(row))
+				continue
 			}
+			others = append(others, scheduleOther{ID: row.Spec.ID, Name: row.Spec.Name, Login: row.Login, Machine: row.Hostname,
+				Cron: row.Spec.Cron, At: row.Spec.At, Timezone: row.Spec.Timezone, Enabled: row.Spec.Enabled, Slots: slots})
 		}
 		unread, _ := s.Store.ScheduleUnread(owner)
-		writeJSON(w, 200, map[string]any{"schedules": out, "unread": unread, "limits": map[string]int{"tasks": 10, "daily_slots": 24, "daily_starts": 30, "concurrent": 1}})
+		lim := s.scheduleLimitsFor(owner)
+		resp := map[string]any{"schedules": out, "unread": unread, "used": used,
+			"limits": map[string]int{"tasks": lim.Tasks, "daily_slots": lim.DailySlots, "daily_starts": lim.DailyStarts, "concurrent": 1}}
+		if ep != nil {
+			resp["others"] = others
+		}
+		writeJSON(w, 200, resp)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -303,7 +319,7 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 		scheduleError(w, e)
 		return
 	}
-	row, e = s.Store.SaveSchedule(owner, in.Key, string(raw), row, in.Revision, time.Now())
+	row, e = s.Store.SaveScheduleWithin(s.scheduleLimitsFor(owner), owner, in.Key, string(raw), row, in.Revision, time.Now())
 	if e != nil {
 		scheduleError(w, e)
 		return
@@ -317,6 +333,29 @@ func (s *Server) scheduleRequest(w http.ResponseWriter, r *http.Request, owner s
 	}
 	writeJSON(w, 200, map[string]any{"action": in.Action, "schedule": s.scheduleView(row)})
 }
+
+// scheduleLimitsFor is the limits owner's schedules are held to: the
+// operator's override (CCQUOTA_FLEET_SCHEDULE_LIMITS) else the defaults. The
+// store's checks and the list's "limits" both read it, so what a person is
+// shown is what is enforced.
+func (s *Server) scheduleLimitsFor(owner string) store.ScheduleLimits {
+	return s.ScheduleLimits.For(owner)
+}
+
+// scheduleOther is a schedule of the same owner on another login, as a node's
+// list shows it: enough to see what counts toward the limits, no prompt.
+type scheduleOther struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Login    string `json:"login"`
+	Machine  string `json:"machine"`
+	Cron     string `json:"cron,omitempty"`
+	At       string `json:"at,omitempty"`
+	Timezone string `json:"timezone"`
+	Enabled  bool   `json:"enabled"`
+	Slots    int    `json:"slots"`
+}
+
 func (s *Server) scheduleView(row store.Schedule) any {
 	// Use the existing heartbeat as the live read, with an explicit observed time.
 	nodes, _ := s.Store.Nodes()
@@ -554,7 +593,7 @@ func (s *Server) scheduleRunRequest(w http.ResponseWriter, r *http.Request, owne
 			httpError(w, 429, err.Error())
 			return
 		}
-		run, e = s.Store.AdmitSchedule(owner, ep.ID, in.ID, in.Slot, in.Revision, in.Attempt, in.Manual, time.Now())
+		run, e = s.Store.AdmitScheduleWithin(s.scheduleLimitsFor(owner), owner, ep.ID, in.ID, in.Slot, in.Revision, in.Attempt, in.Manual, time.Now())
 	} else {
 		if len(in.Summary) > 128<<10 || len(in.Error) > 2000 || len(in.SessionID) > 200 {
 			httpError(w, 400, "result too large")

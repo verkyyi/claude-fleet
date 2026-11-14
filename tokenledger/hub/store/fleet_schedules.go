@@ -26,14 +26,17 @@ type Schedule struct {
 	Observed  json.RawMessage `json:"observed"`
 	Updated   int64           `json:"updated"`
 	Created   int64           `json:"created"`
+	// Slots is the daily slots this row holds toward its owner's limit, as
+	// stored (0 when paused or deleted).
+	Slots int `json:"-"`
 }
 
-const scheduleCols = `owner, endpoint, hostname, login, spec, sync_state, sync_note, observed, updated, created`
+const scheduleCols = `owner, endpoint, hostname, login, spec, sync_state, sync_note, observed, updated, created, slots`
 
 func scanSchedule(row interface{ Scan(...any) error }) (Schedule, error) {
 	var s Schedule
 	var raw, observed string
-	err := row.Scan(&s.Owner, &s.Endpoint, &s.Hostname, &s.Login, &raw, &s.SyncState, &s.SyncNote, &observed, &s.Updated, &s.Created)
+	err := row.Scan(&s.Owner, &s.Endpoint, &s.Hostname, &s.Login, &raw, &s.SyncState, &s.SyncNote, &observed, &s.Updated, &s.Created, &s.Slots)
 	if err == nil {
 		err = json.Unmarshal([]byte(raw), &s.Spec)
 		s.Observed = json.RawMessage(observed)
@@ -69,7 +72,15 @@ func scheduleLock(tx *sql.Tx, owner string) error {
 	_, e := tx.Exec(`UPDATE fleet_schedule_owners SET revision=revision+1 WHERE owner=?`, owner)
 	return e
 }
+
+// SaveSchedule checks the owner against the default limits.
 func (s *Store) SaveSchedule(owner, key, request string, next Schedule, expected int64, now time.Time) (Schedule, error) {
+	return s.SaveScheduleWithin(DefaultScheduleLimits, owner, key, request, next, expected, now)
+}
+
+// SaveScheduleWithin is SaveSchedule against lim, the owner's limits
+// (ScheduleOverrides.For): task count and daily slots across all their logins.
+func (s *Store) SaveScheduleWithin(lim ScheduleLimits, owner, key, request string, next Schedule, expected int64, now time.Time) (Schedule, error) {
 	slots, e := schedule.Validate(next.Spec)
 	if e != nil {
 		return Schedule{}, e
@@ -123,7 +134,7 @@ func (s *Store) SaveSchedule(owner, key, request string, next Schedule, expected
 	if !next.Spec.Enabled || next.Spec.Deleted {
 		slots = 0
 	}
-	if !next.Spec.Deleted && (count >= schedule.MaxTasks || total+slots > schedule.MaxDailySlots) {
+	if !next.Spec.Deleted && (count >= lim.Tasks || total+slots > lim.DailySlots) {
 		return Schedule{}, ErrScheduleLimit
 	}
 	raw, _ := json.Marshal(next.Spec)
@@ -239,6 +250,12 @@ func (s *Store) ScheduleManual(owner, id, run string, now time.Time) error {
 // daemon asks when it has a due slot. Replaying an admitted attempt cannot spend
 // twice or release another run's concurrency slot.
 func (s *Store) AdmitSchedule(owner, endpoint, id, slot string, revision int64, attempt int, manual bool, now time.Time) (ScheduleRun, error) {
+	return s.AdmitScheduleWithin(DefaultScheduleLimits, owner, endpoint, id, slot, revision, attempt, manual, now)
+}
+
+// AdmitScheduleWithin is AdmitSchedule against lim's daily starts; one running
+// at a time and the hourly minimum are the same for every owner.
+func (s *Store) AdmitScheduleWithin(lim ScheduleLimits, owner, endpoint, id, slot string, revision int64, attempt int, manual bool, now time.Time) (ScheduleRun, error) {
 	tx, e := s.write.Begin()
 	if e != nil {
 		return ScheduleRun{}, e
@@ -286,7 +303,7 @@ func (s *Store) AdmitSchedule(owner, endpoint, id, slot string, revision int64, 
 	if e != nil {
 		return ScheduleRun{}, e
 	}
-	if running > 0 || count >= schedule.MaxDailyStarts {
+	if running > 0 || count >= lim.DailyStarts {
 		return ScheduleRun{}, ErrScheduleLimit
 	}
 	if attempt == 1 && !manual {

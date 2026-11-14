@@ -1503,7 +1503,8 @@ TOOLS = {
         "description": "Manage this user's recurring Tokenman tasks on THIS login: create/list/update/pause/resume/delete/run-now/runs. "
                        "Reuse the existing node task scheduler. Default timezone Asia/Shanghai; explain the timezone and next run. "
                        "Never choose another user's login. list returns stable ids and revisions; send revision on edits. "
-                       "Limits: 10 tasks, minimum hourly, 24 scheduled slots and 30 total starts/day, one running at a time. "
+                       "Limits count across ALL this user's logins: by default 10 tasks, 24 scheduled slots and 30 total starts/day (list's `limits` is this user's actual numbers, `used` what counts now); minimum hourly, one running at a time. "
+                       "list's `others` shows, read-only, this user's schedules on their other logins; edit those from that login. "
                        "A pending registration is not yet scheduled. Results stay private; delivery may opt into the user's own WeChat/live page.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["create", "list", "update", "pause", "resume", "delete", "run-now", "runs"]},

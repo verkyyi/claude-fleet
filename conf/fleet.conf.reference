@@ -2852,3 +2852,9 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 for up to a year; any other client starts with read only
 #                                 and connects for at most 30 days · 可选 (unset =
 #                                 claude.ai claude.com; none = no host is known)
+#   CCQUOTA_FLEET_SCHEDULE_LIMITS JSON {"<principal>":{"tasks":N,"daily_slots":N,
+#                                 "daily_starts":N}}: those owners' scheduled-task limits
+#                                 instead of the defaults 10 / 24 / 30 (a field left out
+#                                 keeps its default; caps 100 / 480 / 500). Read at start;
+#                                 a bad value is logged and ignored, everyone keeps the
+#                                 defaults (task PVG9) · 可选 (unset = defaults for all)
