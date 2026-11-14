@@ -291,8 +291,17 @@ func TestNodeIdentityCountedCost(t *testing.T) {
 	nc := h.srv.nodes.get("ep_mac-a-root")
 	// workerMap reads the roster once for availability; the link's own
 	// identity comes from the link, never a second roster scan.
-	if q := cnt.measure(func() { nc.workersAt.Store(0); h.srv.pushWorkers(*epM, nc) }); countStmt(q, "status_json FROM nodes") > 1 {
-		t.Errorf("the worker map scanned the roster %d times: %v", countStmt(q, "status_json FROM nodes"), q)
+	// Background readers (the push channel) can only add statements: the
+	// fewest of a few runs is the road's own.
+	fewest := -1
+	for i := 0; i < 5; i++ {
+		q := cnt.measure(func() { nc.workersAt.Store(0); h.srv.pushWorkers(*epM, nc) })
+		if n := countStmt(q, "status_json FROM nodes"); fewest < 0 || n < fewest {
+			fewest = n
+		}
+	}
+	if fewest > 1 {
+		t.Errorf("the worker map scanned the roster %d times", fewest)
 	}
 	const beats = 5
 	q := cnt.measure(func() {
@@ -376,6 +385,10 @@ func TestNodeIdentityCacheFollowsAccountsAndRoles(t *testing.T) {
 	if h.srv.memberDevice(cd.id) {
 		t.Fatalf("an admin's device read as a member's")
 	}
+	// Demote her once nothing of hers is being served (the list is the
+	// server's configuration, read by every link).
+	cd.c.CloseNow()
+	waitFor(t, 3*time.Second, "carol's link gone", func() bool { return h.srv.nodes.get(cd.id) == nil })
 	h.srv.Admins = h.srv.Admins[:len(h.srv.Admins)-1]
 	if !h.srv.memberDevice(cd.id) {
 		t.Errorf("after carol's demotion her device is still read as an admin's")
