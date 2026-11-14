@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
@@ -289,10 +290,23 @@ const (
 	dailyMax         = 400
 	windowsMax       = 32
 	labelMax         = 120
+	idMax            = 128 // an account / workspace id
+	emailMax         = 254
+	planMax          = 64
 )
 
-// clipLine is s on one line, at most n bytes (on a rune boundary).
+// clipLine is s on one line, without control or formatting characters, at
+// most n bytes (on a rune boundary).
 func clipLine(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) <= n {
 		return s
@@ -312,6 +326,13 @@ func (a *codexOpAnswer) sanitize(now time.Time) {
 	a.Error = clipLine(a.Error, reasonMax)
 	if a.Auth != nil {
 		a.Auth.Mode = clipLine(a.Auth.Mode, 32)
+		a.Auth.AccountID = clipLine(a.Auth.AccountID, idMax)
+		id := &a.Auth.Identity
+		id.Source = model.SourceCodex
+		id.AccountUUID, id.OrgUUID = clipLine(id.AccountUUID, idMax), clipLine(id.OrgUUID, idMax)
+		id.Email = clipLine(id.Email, emailMax)
+		id.OrgName, id.DisplayName = clipLine(id.OrgName, labelMax), clipLine(id.DisplayName, labelMax)
+		id.SubscriptionType, id.RateLimitTier = clipLine(id.SubscriptionType, planMax), clipLine(id.RateLimitTier, planMax)
 	}
 	r := a.Result
 	if r == nil {

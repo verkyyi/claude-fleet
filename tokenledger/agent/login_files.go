@@ -166,7 +166,29 @@ func (a *Agent) loadStamps(maxAge time.Duration) (*sessions.Index, error) {
 	}
 	return sessions.LoadWith(a.cfg.SessionsDir, maxAge, func(p string) ([]byte, error) {
 		return a.readFileFor(p, true, stampFileMax)
-	}, stampEntriesMax)
+	}, a.listFor(stampEntriesMax))
+}
+
+// listFor lists a directory for this machine tenant, at most max names: in
+// the login's home opened through homeDir (no link followed, a directory
+// only — never a FIFO's open), anywhere else (a place root configured) by its
+// path.
+func (a *Agent) listFor(max int) func(string) ([]string, error) {
+	ra := a.cfg.RunAs
+	return func(dir string) ([]string, error) {
+		var d *homeDir
+		var err error
+		if underLogin(ra, dir) {
+			d, err = openLoginDir(ra, dir)
+		} else {
+			d, err = openHomeDir(dir, false, 0)
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer d.Close()
+		return d.listN(max)
+	}
 }
 
 // linkedHomePath is "skipped: linked home path (…)" naming every one of paths

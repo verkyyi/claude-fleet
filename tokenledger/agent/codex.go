@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +47,9 @@ type codexCollector struct {
 	failStreak int
 	live       []liveSession // snapshots guarded by mu; scanner itself has one owner
 	handedBack bool          // a machine tenant's home: the agent's own leftovers handed to the login
+	// handBackReason: the agent's own auth.json from an earlier version was
+	// left as it is (codex_handback.go); shown until the login's own reads
+	handBackReason string
 }
 
 func (a *Agent) codexProfileSnapshot() []*codexCollector {
@@ -60,12 +64,8 @@ func (a *Agent) initCodex() error {
 		return err
 	}
 	if ra := a.cfg.RunAs; ra != nil {
-		// A machine tenant's profiles are its login's own directories: one
-		// anywhere else (the registry is the login's to write) is refused.
-		for _, profile := range profiles {
-			if !underLogin(ra, profile.Home) {
-				return fmt.Errorf("Codex profile %s: %s is not inside %s's home", profile.Name, profile.Home, ra.Login)
-			}
+		if err := tenantProfilesOK(ra, profiles); err != nil {
+			return err
 		}
 	}
 	existing := map[string]*codexCollector{}
@@ -97,6 +97,41 @@ func (a *Agent) initCodex() error {
 	a.codexProfilesMu.Unlock()
 	if a.codex == nil && len(next) > 0 {
 		a.codex = next[0].scanner
+	}
+	return nil
+}
+
+// tenantCodexProfilesMax is the most Codex profiles one machine tenant's
+// registry may list (each is scanned, renewed and read on the login's behalf);
+// far above any real use.
+const tenantCodexProfilesMax = 16
+
+// fleetStateDirs are the fleet's own directories in a login's home (its
+// state, the agent's records and session stamps, Claude's home); a Codex
+// profile is never one of them or inside one.
+var fleetStateDirs = []string{".config/claude-fleet", ".ccquota", ".claude"}
+
+// tenantProfilesOK holds a machine tenant's Codex profiles to its login's own
+// directories (the registry is the login's to write): each inside the login's
+// home and not in one of the fleet's own directories there, and at most
+// tenantCodexProfilesMax of them. The error is the reason the hub shows.
+func tenantProfilesOK(ra *RunAs, profiles []codex.Profile) error {
+	if len(profiles) > tenantCodexProfilesMax {
+		return fmt.Errorf("the Codex profile registry lists %d profiles; at most %d are collected for a login", len(profiles), tenantCodexProfilesMax)
+	}
+	home := filepath.Clean(ra.Home)
+	for _, profile := range profiles {
+		if !underLogin(ra, profile.Home) {
+			return fmt.Errorf("Codex profile %s: %s is not inside %s's home", profile.Name, profile.Home, ra.Login)
+		}
+		// compared without case: a default macOS volume is case-insensitive
+		p := strings.ToLower(filepath.Clean(profile.Home))
+		for _, d := range fleetStateDirs {
+			d = filepath.Join(home, filepath.FromSlash(d))
+			if l := strings.ToLower(d); p == l || strings.HasPrefix(p, l+string(os.PathSeparator)) {
+				return fmt.Errorf("Codex profile %s: %s is in the fleet's own directory %s, not a Codex home", profile.Name, profile.Home, d)
+			}
+		}
 	}
 	return nil
 }
@@ -248,11 +283,17 @@ func (a *Agent) cycleCodexProfile(ctx context.Context, p *codexCollector) error 
 	now := time.Now().UTC()
 	if ra := a.cfg.RunAs; ra != nil && !p.handedBack {
 		// once, before the login's first machine-op and the reads below
-		if n, err := handBackCodexHome(ra, p.home); err != nil && !os.IsNotExist(err) {
+		res, err := handBackCodexHome(ra, p.home, p.binding.Account)
+		switch {
+		case err != nil && !os.IsNotExist(err):
 			log.Printf("machine agent: %s: Codex home %s: hand back: %v", ra.Login, p.home, err)
-		} else if n > 0 {
-			log.Printf("machine agent: %s: Codex home %s: %d of the agent's own files handed back to the login", ra.Login, p.home, n)
+		case res.dirs+res.removed > 0 || res.auth:
+			log.Printf("machine agent: %s: Codex home %s: earlier agent files repaired (%d directories handed to the login, %d records removed, login file rewritten: %v)", ra.Login, p.home, res.dirs, res.removed, res.auth)
 		}
+		if res.degraded != "" {
+			log.Printf("machine agent: %s: %s", ra.Login, res.degraded)
+		}
+		p.handBackReason = clipLine(res.degraded, reasonMax)
 		p.handedBack = true
 	}
 	rf := a.loginReader(smallFileMax)
@@ -368,6 +409,12 @@ func (a *Agent) cycleCodexProfile(ctx context.Context, p *codexCollector) error 
 	}
 	if skipped != "" {
 		status.State, status.Reason = "degraded", skipped
+	} else if p.handBackReason != "" {
+		if authErr == nil {
+			p.handBackReason = "" // signed in again: the login's own file now
+		} else {
+			status.State, status.Reason = "degraded", p.handBackReason
+		}
 	}
 	if a.codexInitErr != "" && status.Reason == "" {
 		status.State, status.Reason = "degraded", clipLine("Codex profiles not reread: "+a.codexInitErr, reasonMax)

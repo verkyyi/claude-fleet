@@ -145,3 +145,35 @@ func TestAccountUUIDFromIDTokenMatchesReadAuth(t *testing.T) {
 		}
 	}
 }
+
+// ParseAuthFile takes a Codex subscription login and nothing else: no other
+// key, nothing after the object, no API-key login, no login without an
+// account identity.
+func TestParseAuthFileStrict(t *testing.T) {
+	tok := fakeJWT(map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "workspace", "chatgpt_user_id": "member"}})
+	doc := func(extra map[string]any) []byte {
+		m := map[string]any{"auth_mode": "chatgpt", "OPENAI_API_KEY": nil, "last_refresh": time.Now().UTC(), "tokens": map[string]string{"access_token": tok, "id_token": fakeJWT(map[string]string{}), "refresh_token": "r", "account_id": "workspace"}}
+		for k, v := range extra {
+			m[k] = v
+		}
+		b, _ := json.Marshal(m)
+		return b
+	}
+	a, err := ParseAuthFile(doc(nil))
+	if err != nil || a.Identity.AccountUUID != AccountUUID("workspace", "member") {
+		t.Fatalf("a Codex login: %v %+v", err, a)
+	}
+	for name, b := range map[string][]byte{
+		"extra key":     doc(map[string]any{"root_secret": "x"}),
+		"trailing data": append(doc(nil), []byte(` {"x":1}`)...),
+		"api key":       doc(map[string]any{"OPENAI_API_KEY": "sk-x"}),
+		"no tokens":     []byte(`{"auth_mode":"chatgpt"}`),
+		"not json":      []byte("root:*:0:0::/var/root:/bin/sh\n"),
+		"array":         []byte(`[1,2]`),
+		"nested extra":  []byte(`{"tokens":{"access_token":"` + tok + `","other":"x"}}`),
+	} {
+		if _, err := ParseAuthFile(b); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

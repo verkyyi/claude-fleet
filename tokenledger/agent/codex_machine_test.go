@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -288,6 +289,34 @@ func TestCodexOpAnswerSanitized(t *testing.T) {
 	}
 }
 
+// The identity a login's machine-op names is held to short single-line
+// strings without control or formatting characters.
+func TestCodexOpAnswerIdentitySanitized(t *testing.T) {
+	big := strings.Repeat("y", 5000)
+	ans := codexOpAnswer{Auth: &codex.Auth{Mode: "subscription", AccountID: big, Identity: model.Identity{
+		Source: "claude", AccountUUID: "codex:account:abc", Email: "grace\x1b[2J@example.com" + big,
+		OrgUUID: big, OrgName: "org\u202e", SubscriptionType: "plus\x00\npro", DisplayName: "Codex\taccount" + big, RateLimitTier: big}}}
+	ans.sanitize(time.Now())
+	id := ans.Auth.Identity
+	if id.Source != model.SourceCodex || id.AccountUUID != "codex:account:abc" {
+		t.Fatalf("identity %+v", id)
+	}
+	if len(id.Email) > emailMax+3 || strings.ContainsAny(id.Email, "\x1b") || !strings.HasPrefix(id.Email, "grace[2J@example.com") {
+		t.Fatalf("email %q", id.Email[:40])
+	}
+	if id.SubscriptionType != "plus pro" || id.OrgName != "org" || !strings.HasPrefix(id.DisplayName, "Codex account") {
+		t.Fatalf("labels %q %q %q", id.SubscriptionType, id.OrgName, id.DisplayName[:20])
+	}
+	for _, s := range []string{ans.Auth.AccountID, id.OrgUUID} {
+		if len(s) > idMax+3 {
+			t.Fatalf("id of %d bytes", len(s))
+		}
+	}
+	if len(id.DisplayName) > labelMax+3 || len(id.RateLimitTier) > planMax+3 {
+		t.Fatal("labels not capped")
+	}
+}
+
 // The agent's proxy / CA / locale variables travel in the request (the
 // seat's core builds the job's environment itself); the machine-op takes those
 // names only.
@@ -308,5 +337,35 @@ func TestCodexOpEnvTravelsInTheRequest(t *testing.T) {
 	}
 	if os.Getenv("HTTPS_PROXY") != "http://p.example:1" || os.Getenv("ODD_VAR") != "" {
 		t.Fatalf("machine-op env: HTTPS_PROXY=%q ODD_VAR=%q", os.Getenv("HTTPS_PROXY"), os.Getenv("ODD_VAR"))
+	}
+}
+
+// A machine tenant's Codex profiles are its own directories: inside its home,
+// none of them the fleet's own directories there (in any letter case), and at
+// most tenantCodexProfilesMax of them.
+func TestTenantProfilesOK(t *testing.T) {
+	home := t.TempDir()
+	ra := &RunAs{Login: "grace", Home: home}
+	p := func(rel string) codex.Profile { return codex.Profile{Name: "p", Home: filepath.Join(home, rel)} }
+	if err := tenantProfilesOK(ra, []codex.Profile{p(".codex"), p(".codex-accounts/work"), p("work/codex"), p(".claude-other")}); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{".ccquota", ".ccquota/x", ".config/claude-fleet", ".config/claude-fleet/cred-proxy/codex-homes/w1", ".claude", ".claude/x", ".CCQuota/x", ".Config/Claude-Fleet"} {
+		if err := tenantProfilesOK(ra, []codex.Profile{p(".codex"), p(bad)}); err == nil || !strings.Contains(err.Error(), "fleet's own directory") {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	if err := tenantProfilesOK(ra, []codex.Profile{{Name: "x", Home: t.TempDir()}}); err == nil {
+		t.Error("a profile outside the home accepted")
+	}
+	var many []codex.Profile
+	for i := 0; i <= tenantCodexProfilesMax; i++ {
+		many = append(many, p(fmt.Sprintf(".codex-accounts/a%d", i)))
+	}
+	if err := tenantProfilesOK(ra, many[:tenantCodexProfilesMax]); err != nil {
+		t.Fatal(err)
+	}
+	if err := tenantProfilesOK(ra, many); err == nil || !strings.Contains(err.Error(), "at most 16") {
+		t.Fatalf("%d profiles: %v", len(many), err)
 	}
 }

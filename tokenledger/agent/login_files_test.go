@@ -227,3 +227,55 @@ func TestMachineTenantLinkedHomePaths(t *testing.T) {
 		t.Fatal("a plain agent reports its own links")
 	}
 }
+
+// The stamp directory itself is opened as a directory of the login's home: a
+// link there (to another login's stamps) is not listed, a FIFO there does not
+// hold the read, and a listing stops at its cap.
+func TestMachineTenantSessionsDirConfined(t *testing.T) {
+	home, other := t.TempDir(), t.TempDir()
+	stamp := `{"session_id":"s9","transcript_path":"/t","stamped_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
+	os.MkdirAll(filepath.Join(other, "sessions"), 0o700)
+	os.WriteFile(filepath.Join(other, "sessions", "s9.json"), []byte(stamp), 0o600)
+	os.MkdirAll(filepath.Join(home, ".ccquota"), 0o700)
+	ra := &RunAs{Login: "grace", UID: uint32(os.Getuid()), Home: home}
+	a := &Agent{cfg: Config{Home: home, RunAs: ra, SessionsDir: filepath.Join(home, ".ccquota")}}
+	load := func() (*sessions.Index, error) {
+		t.Helper()
+		done := make(chan struct{})
+		var idx *sessions.Index
+		var err error
+		go func() { idx, err = a.loadStamps(time.Hour); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("still reading")
+		}
+		return idx, err
+	}
+	dir := filepath.Join(home, ".ccquota", "sessions")
+	if err := os.Symlink(filepath.Join(other, "sessions"), dir); err != nil {
+		t.Fatal(err)
+	}
+	if idx, _ := load(); idx != nil && len(idx.BySession) != 0 {
+		t.Fatalf("listed a linked stamp directory: %v", idx.BySession)
+	}
+	os.Remove(dir)
+	if err := syscall.Mkfifo(dir, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if idx, _ := load(); idx != nil && len(idx.BySession) != 0 {
+		t.Fatalf("a FIFO listed as stamps: %v", idx.BySession)
+	}
+	os.Remove(dir)
+	os.MkdirAll(dir, 0o700)
+	for i := 0; i < 10; i++ {
+		os.WriteFile(filepath.Join(dir, "x"+string(rune('a'+i))+".json"), []byte("{}"), 0o600)
+	}
+	names, err := a.listFor(4)(dir)
+	if err != nil || len(names) != 4 {
+		t.Fatalf("capped listing: %v %v", names, err)
+	}
+	if names, err := a.listFor(4)(filepath.Join(home, "missing")); !os.IsNotExist(err) || len(names) != 0 {
+		t.Fatalf("missing directory: %v %v", names, err)
+	}
+}

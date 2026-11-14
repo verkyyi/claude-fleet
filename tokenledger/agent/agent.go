@@ -641,12 +641,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		default:
 		}
 	}
+	var watched []string
 	if a.claudeEnabled {
-		go a.watchTranscripts(ctx, identity.ProjectsDir(a.cfg.Home), wakeScan)
+		watched = append(watched, identity.ProjectsDir(a.cfg.Home))
 	}
 	for _, p := range a.codexProfileSnapshot() {
-		go a.watchTranscripts(ctx, filepath.Join(p.home, "sessions"), wakeScan)
-		go a.watchTranscripts(ctx, filepath.Join(p.home, "archived_sessions"), wakeScan)
+		watched = append(watched, filepath.Join(p.home, "sessions"), filepath.Join(p.home, "archived_sessions"))
+	}
+	if len(watched) > 0 {
+		go a.watchTranscripts(ctx, watched, wakeScan)
 	}
 
 	// Jitter the first tick so a fleet restarted together by a config

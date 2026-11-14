@@ -25,6 +25,11 @@ type homeDir struct {
 
 const dirFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC
 
+// walkFlags opens one component of a path under a login's home: O_NONBLOCK so
+// a FIFO put where a directory belongs never holds the open (O_DIRECTORY then
+// refuses it).
+const walkFlags = dirFlags | unix.O_NOFOLLOW | unix.O_NONBLOCK
+
 // openHomeDir opens dir. Under a tenant's home every component below the home
 // is opened without following a link — one that is a link (or no directory)
 // is refused; create makes the missing ones with mode, handed to the login.
@@ -70,20 +75,20 @@ func openLoginDir(ra *RunAs, dir string) (*homeDir, error) {
 }
 
 func openUnder(ra *RunAs, home string, rel []string, dir string, create bool, mode os.FileMode) (*homeDir, error) {
-	fd, err := unix.Open(home, dirFlags, 0)
+	fd, err := unix.Open(home, dirFlags|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: home, Err: err}
 	}
 	at := home
 	for _, c := range rel {
 		at = filepath.Join(at, c)
-		next, err := unix.Openat(fd, c, dirFlags|unix.O_NOFOLLOW, 0)
+		next, err := unix.Openat(fd, c, walkFlags, 0)
 		if err == unix.ENOENT && create {
 			if merr := unix.Mkdirat(fd, c, uint32(mode.Perm())); merr != nil && merr != unix.EEXIST {
 				unix.Close(fd)
 				return nil, &os.PathError{Op: "mkdir", Path: at, Err: merr}
 			}
-			next, err = unix.Openat(fd, c, dirFlags|unix.O_NOFOLLOW, 0)
+			next, err = unix.Openat(fd, c, walkFlags, 0)
 			if err == nil {
 				_ = unix.Fchown(next, int(ra.UID), int(ra.GID))
 			}
@@ -322,14 +327,21 @@ func removeAllAt(dirfd int, name, path string, depth int) error {
 }
 
 // list is d's entries' names.
-func (d *homeDir) list() ([]string, error) {
+func (d *homeDir) list() ([]string, error) { return d.listN(-1) }
+
+// listN is at most n of d's entries' names (n <= 0: all of them).
+func (d *homeDir) listN(n int) ([]string, error) {
 	fd, err := unix.Openat(d.fd, ".", dirFlags, 0)
 	if err != nil {
 		return nil, d.err("open", ".", err)
 	}
 	f := os.NewFile(uintptr(fd), d.path)
 	defer f.Close()
-	return f.Readdirnames(-1)
+	names, err := f.Readdirnames(n)
+	if n > 0 && errors.Is(err, io.EOF) {
+		err = nil
+	}
+	return names, err
 }
 
 // openRead opens name in d for reading (see open; not owner-checked).

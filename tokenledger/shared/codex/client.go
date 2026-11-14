@@ -87,6 +87,29 @@ func ReadAuthWith(home string, rf ReadFile) (*Auth, error) {
 		}
 		src = bytes.NewReader(b)
 	}
+	return parseAuth(src, false)
+}
+
+// ParseAuthFile is b read strictly as a Codex file login (auth.json): one JSON
+// object holding the file login's own keys only and nothing after it, a
+// ChatGPT subscription login with a stable account identity. Anything else is
+// an error.
+func ParseAuthFile(b []byte) (*Auth, error) {
+	a, err := parseAuth(bytes.NewReader(b), true)
+	if err != nil {
+		return nil, err
+	}
+	if a.Mode != "subscription" || a.Identity.AccountUUID == "" {
+		return nil, errors.New("not a Codex subscription login")
+	}
+	return a, nil
+}
+
+func parseAuth(src io.Reader, strict bool) (*Auth, error) {
+	dec := json.NewDecoder(src)
+	if strict {
+		dec.DisallowUnknownFields()
+	}
 	var doc struct {
 		Mode        string     `json:"auth_mode"`
 		APIKey      *string    `json:"OPENAI_API_KEY"`
@@ -98,8 +121,13 @@ func ReadAuthWith(home string, rf ReadFile) (*Auth, error) {
 			Refresh string `json:"refresh_token"`
 		} `json:"tokens"`
 	}
-	if err := json.NewDecoder(src).Decode(&doc); err != nil {
+	if err := dec.Decode(&doc); err != nil {
 		return nil, errors.New("invalid Codex credential file")
+	}
+	if strict {
+		if _, err := dec.Token(); err != io.EOF {
+			return nil, errors.New("invalid Codex credential file")
+		}
 	}
 	hub := doc.Tokens.Refresh == HubManagedRefreshToken
 	a := &Auth{Mode: "unknown", LastRefresh: doc.LastRefresh, HasRefreshToken: doc.Tokens.Refresh != "" && !hub, HubManaged: hub}

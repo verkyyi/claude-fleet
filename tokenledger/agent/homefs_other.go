@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -148,13 +149,19 @@ func (d *homeDir) remove(name string) error {
 
 func (d *homeDir) removeAll(name string) error { return os.RemoveAll(d.at(name)) }
 
-func (d *homeDir) list() ([]string, error) {
+func (d *homeDir) list() ([]string, error) { return d.listN(-1) }
+
+func (d *homeDir) listN(n int) ([]string, error) {
 	f, err := os.Open(d.path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return f.Readdirnames(-1)
+	names, err := f.Readdirnames(n)
+	if n > 0 && errors.Is(err, io.EOF) {
+		err = nil
+	}
+	return names, err
 }
 
 func (d *homeDir) openRead(name string) (*os.File, error) {

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -31,7 +32,16 @@ const watchDebounce = 700 * time.Millisecond
 //
 // Failing to start is not an error worth stopping for: the agent simply falls
 // back to the interval it already had.
-func (a *Agent) watchTranscripts(ctx context.Context, root string, trigger func()) {
+//
+// One watcher covers every root (the Claude projects and each Codex profile's
+// session directories), so one agent holds one watch descriptor set.
+func (a *Agent) watchTranscripts(ctx context.Context, roots []string, trigger func()) {
+	on, limit := a.watchPolicy()
+	if !on {
+		log.Printf("transcript watch off for %s on this platform; transcripts are scanned every %s",
+			a.osLogin(), a.cfg.ScanInterval)
+		return
+	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("transcript watch unavailable (%v); falling back to the %s scan interval",
@@ -40,15 +50,11 @@ func (a *Agent) watchTranscripts(ctx context.Context, root string, trigger func(
 	}
 	defer w.Close()
 
-	// A machine tenant's watches are capped (claude-fleet#2333): every one is
-	// a descriptor of the one root program, and the login decides how many
-	// directories it has. Past the cap the scan interval covers the rest.
-	limit := 0
-	if a.cfg.RunAs != nil {
-		limit = machineWatchMax
-	}
 	wt := &watchSet{w: w, limit: limit, who: a.osLogin(), every: a.cfg.ScanInterval}
-	added := wt.tree(root)
+	added := 0
+	for _, root := range roots {
+		added += wt.tree(root)
+	}
 	log.Printf("watching %d transcript directories; scanning within %s of a write",
 		added, watchDebounce)
 
@@ -105,6 +111,36 @@ func (a *Agent) watchTranscripts(ctx context.Context, root string, trigger func(
 
 // machineWatchMax is the most directories one machine tenant watches.
 const machineWatchMax = 1024
+
+// watchPerFileFD says this platform's file watch holds a descriptor for every
+// FILE in a watched directory, not one per directory: kqueue (darwin and the
+// BSDs) does; inotify (Linux) counts watches per directory. A seam for the
+// tests.
+var watchPerFileFD = kqueueGOOS(runtime.GOOS)
+
+func kqueueGOOS(goos string) bool {
+	switch goos {
+	case "darwin", "ios", "freebsd", "openbsd", "netbsd", "dragonfly":
+		return true
+	}
+	return false
+}
+
+// watchPolicy is whether this agent watches its transcripts and at most how
+// many directories (0: no cap). A machine tenant's watches are descriptors of
+// the one root program, and the login decides how many directories and files
+// it has (claude-fleet#2333): where a watch costs a descriptor per file it is
+// not watched at all — the scan interval collects it — and elsewhere it stops
+// at machineWatchMax directories. A plain agent watches everything, as before.
+func (a *Agent) watchPolicy() (on bool, limit int) {
+	if a.cfg.RunAs == nil {
+		return true, 0
+	}
+	if watchPerFileFD {
+		return false, 0
+	}
+	return true, machineWatchMax
+}
 
 // watchSet is one watcher's directories, at most limit of them (0: no cap).
 type watchSet struct {
