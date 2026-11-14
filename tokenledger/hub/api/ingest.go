@@ -169,6 +169,12 @@ func (s *Server) ingest(ep *store.Endpoint, batch *model.Batch) (*model.IngestRe
 	if osUser == "" {
 		osUser = ep.OSUser
 	}
+	// ... and held to the login it enrolled as (task MPCX): a push cannot
+	// put its usage under another login by naming it.
+	osUser = s.nodeSelfFrom(ep, id.Hostname, osUser).User
+	if osUser == store.ServiceNoLogin {
+		osUser = "" // a service that never named a login (stampPlan)
+	}
 	for i := range batch.Events {
 		batch.Events[i].Source = id.Source
 		batch.Events[i].AccountUUID = id.AccountUUID

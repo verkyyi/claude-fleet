@@ -176,14 +176,12 @@ func (s *Server) handleNodeMaintenance(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	now := time.Now()
-	// The machine is the roster's word (its heartbeats carry the hostname and
-	// login), not the enrollment's: a token enrolled before the agent first
-	// reported has neither.
-	host, user := ep.Hostname, ep.OSUser
+	// The machine is the roster's word held to the enrollment, as its links
+	// are routed to (routeSelf, task MPCX): a node flags only its own
+	// machine, never another one by naming it. A token enrolled before the
+	// agent first reported has neither.
+	host, user := s.routeSelf(ep, s.nodeSelf(ep))
 	n := s.nodeRow(ep.ID)
-	if n != nil {
-		host, user = n.Hostname, n.OSUser
-	}
 	if host == "" {
 		httpError(w, http.StatusConflict, "this node has not reported yet — the hub does not know which machine it is")
 		return

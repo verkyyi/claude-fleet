@@ -149,16 +149,28 @@ func (s *Server) handleNodeLease(w http.ResponseWriter, r *http.Request) {
 		if user == "" {
 			user = ep.OSUser
 		}
-		granted, l, displaced, err := s.Store.AcquireLease(store.LeaseClaim{Repo: req.Repo, Issue: req.Issue,
+		owner := s.nodeTaskOwner(ep)
+		claim := store.LeaseClaim{Repo: req.Repo, Issue: req.Issue,
 			WorkerID: req.WorkerID, FleetID: fleetID, EndpointID: ep.ID, Hostname: host, OSUser: user,
-			Force: req.Force, Owner: s.nodeTaskOwner(ep)}, leaseStartGrace, now)
+			Force: req.Force, Owner: owner, ForceAnyOwner: owner == "operator"}
+		granted, l, displaced, err := s.Store.AcquireLease(claim, leaseStartGrace, now)
 		if err != nil {
 			httpError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if !granted {
 			s.leaseAudit(actor, "lease_acquire", fleetID, "HELD by "+l.WorkerID+" on "+nodeLabel(l.Hostname), now)
-			writeJSON(w, http.StatusConflict, map[string]any{"granted": false, "holder": leaseView(l)})
+			holder := leaseView(l)
+			out := map[string]any{"granted": false, "holder": holder}
+			if !claim.ForceAllowed(l) {
+				// Another person's lease (task MPCX): that it is held and
+				// until when — never whose session, machine or login.
+				*holder = LeaseView{Node: "-", WorkerID: "-", ExpiresAt: l.ExpiresAt}
+				if req.Force {
+					out["force_refused"] = "another person holds this issue; --force takes back only your own"
+				}
+			}
+			writeJSON(w, http.StatusConflict, out)
 			return
 		}
 		out := map[string]any{"granted": true, "lease": leaseView(l)}

@@ -209,6 +209,7 @@ func (s *Store) UpsertHubUser(u HubUser) error { return s.upsertHubUser(u, false
 func (s *Store) AdmitHubUser(u HubUser) error { return s.upsertHubUser(u, true) }
 
 func (s *Store) upsertHubUser(u HubUser, admit bool) error {
+	defer s.identityChanged()
 	if u.PrincipalID == "" && u.GitHubID > 0 {
 		u.PrincipalID = GitHubPrincipalPrefix + strconv.FormatInt(u.GitHubID, 10)
 	}
@@ -280,6 +281,7 @@ func (s *Store) TouchHubPrincipal(pid, login string, at time.Time) error {
 // refused. Reports whether a row was removed. The username pin and the
 // person's ways of signing in stay: added again, they are the same person.
 func (s *Store) DeleteHubUser(id int64) (bool, error) {
+	defer s.identityChanged()
 	res, err := s.write.Exec(`DELETE FROM hub_users WHERE github_id = ?`, id)
 	if err != nil {
 		return false, err
@@ -290,6 +292,7 @@ func (s *Store) DeleteHubUser(id int64) (bool, error) {
 
 // DeleteHubPrincipal is DeleteHubUser for any person.
 func (s *Store) DeleteHubPrincipal(pid string) (bool, error) {
+	defer s.identityChanged()
 	res, err := s.write.Exec(`DELETE FROM hub_users WHERE principal_id = ?`, pid)
 	if err != nil {
 		return false, err
@@ -351,6 +354,7 @@ func (s *Store) HubIdentities(pid string) ([]HubIdentity, error) {
 // they have. One that lets another person in is ErrIdentityTaken and changes
 // nothing: a sign-in never moves between people.
 func (s *Store) AddHubIdentity(i HubIdentity) error {
+	defer s.identityChanged()
 	if !SignInKind(i.Kind) || strings.TrimSpace(i.Subject) == "" || i.PrincipalID == "" {
 		return fmt.Errorf("identity needs a known kind, a subject and a person")
 	}
@@ -379,6 +383,7 @@ func (s *Store) AddHubIdentity(i HubIdentity) error {
 // they have no such one, ErrLastIdentity when it is their only one. The
 // count and the delete are one statement, so two removals racing leave one.
 func (s *Store) RemoveHubIdentity(pid, kind, subject string) (bool, error) {
+	defer s.identityChanged()
 	subject = NormIdentitySubject(kind, subject)
 	res, err := s.write.Exec(`DELETE FROM hub_identities WHERE principal_id = ? AND kind = ? AND subject = ?
 		AND (SELECT COUNT(*) FROM hub_identities WHERE principal_id = ?) > 1`, pid, kind, subject, pid)
@@ -426,6 +431,7 @@ func (s *Store) PinnedLogin(id int64) (string, error) {
 // Pinning the same pair again is a no-op (created=false); a name already
 // pinned to another ID is ErrPinConflict and changes nothing.
 func (s *Store) PinLogin(login string, id int64, at time.Time) (created bool, err error) {
+	defer s.identityChanged()
 	name := normLogin(login)
 	if name == "" || id <= 0 {
 		return false, fmt.Errorf("pin needs a username and a GitHub ID")

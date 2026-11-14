@@ -57,6 +57,7 @@ func (s *Server) chatRelayNode(host, login string) (string, *nodeConn, error) {
 // the chat relay's and the terminal's (claude-fleet#3838) one picker. A link
 // of that login without it answers missing; none at all, NODE_OFFLINE.
 func (s *Server) loginRelayNode(host, login string, has func(*nodeConn) bool, missing, what string) (string, *nodeConn, error) {
+	owner := s.loginOwner(host, login) // a device's link carries only its person's (task MPCX)
 	s.nodes.mu.Lock()
 	defer s.nodes.mu.Unlock()
 	ids := make([]string, 0, len(s.nodes.conns))
@@ -67,7 +68,7 @@ func (s *Server) loginRelayNode(host, login string, has func(*nodeConn) bool, mi
 	seen := false
 	for _, epID := range ids {
 		c := s.nodes.conns[epID]
-		if c.hostname() != host || c.user() != login || !control.Compatible(int(c.proto.Load())) {
+		if c.hostname() != host || c.user() != login || !control.Compatible(int(c.proto.Load())) || !s.linkServes(epID, owner) {
 			continue
 		}
 		if !has(c) {

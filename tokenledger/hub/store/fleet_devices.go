@@ -123,6 +123,7 @@ func (s *Store) RebindDevice(d FleetDevice, now time.Time) (bool, error) {
 }
 
 func (s *Store) registerDevice(d FleetDevice, now time.Time, proven bool) (bool, error) {
+	defer s.identityChanged()
 	ts := now.UTC().Format(rfc)
 	q := `INSERT INTO fleet_devices (fingerprint, principal_id, public_key, name, registered_at, last_used_at)
 		VALUES (?, ?, ?, ?, ?, ?)
@@ -228,6 +229,7 @@ func (s *Store) TouchDevice(fingerprint string, at time.Time, machine string, re
 
 // SetDeviceName keeps the device's newest self-reported name.
 func (s *Store) SetDeviceName(fingerprint, name string) error {
+	defer s.identityChanged()
 	_, err := s.write.Exec(`UPDATE fleet_devices SET name = ? WHERE fingerprint = ?`, name, fingerprint)
 	return err
 }
@@ -235,6 +237,7 @@ func (s *Store) SetDeviceName(fingerprint, name string) error {
 // RevokeDevice stops a device renewing. False when it is unknown or already
 // revoked — nothing changed.
 func (s *Store) RevokeDevice(fingerprint, by string, at time.Time) (bool, error) {
+	defer s.identityChanged()
 	res, err := s.write.Exec(`UPDATE fleet_devices SET revoked_at = ?, revoked_by = ?
 		WHERE fingerprint = ? AND revoked_at = ''`, at.UTC().Format(rfc), by, fingerprint)
 	if err != nil {

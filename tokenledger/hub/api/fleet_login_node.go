@@ -1,11 +1,16 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
+	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -82,8 +87,31 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 			"the signed timestamp is too far from the hub's clock — check this computer's time")
 		return
 	}
+	// A generous budget per source before the signature (task MPCX): a flood
+	// never reaches the check unbounded, and one caller behind a shared
+	// address cannot spend everyone's; the tight ones come after it.
+	if !s.loginNodeBudgets().pre.allow(r, now) {
+		w.Header().Set("Retry-After", "60")
+		refuseJSON(w, http.StatusTooManyRequests, "rate_limited", "too many node passes asked — try again in a minute")
+		return
+	}
 	if err := verifySSHSig(key, []byte(req.Sig), []byte(control.LoginNodeSigMessage(req.TS)), control.LoginNodeSigNamespace); err != nil {
 		refuseJSON(w, http.StatusUnauthorized, "bad_signature", "node pass signature refused: "+err.Error())
+		return
+	}
+	// Then the source's and the device key's own budgets — after the
+	// signature, so nobody holding only a public key, or only an address,
+	// can spend them.
+	if !s.loginNodeBudgets().source.allow(r, now) || !s.loginNodeBudgets().device.allowFrom(fpAddr(fp), now) {
+		w.Header().Set("Retry-After", "60")
+		refuseJSON(w, http.StatusTooManyRequests, "rate_limited", "too many node passes asked for this computer — try again in a minute")
+		return
+	}
+	// One signed timestamp buys one node pass (task MPCX): the same signature
+	// sent again inside the clock window is refused, not answered with a
+	// fresh token. Kept per replica.
+	if !s.loginNodeOnce(fp, req.TS, now) {
+		refuseJSON(w, http.StatusUnauthorized, "request_replayed", "this signed request was already answered — sign a new one")
 		return
 	}
 	dev, ok := s.usableDevice(w, fp, store.DeviceNodePassRefused, now)
@@ -109,7 +137,12 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	var tn *trustedNameErr
 	var mm *machineManagedErr
 	var rl *reservedLoginErr
+	var nt *nameTakenErr
 	switch {
+	case errors.As(err, &nt):
+		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
+		refuseJSON(w, http.StatusConflict, "name_taken", err.Error())
+		return
 	case errors.As(err, &tn):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
 		refuseJSON(w, http.StatusConflict, "trusted_name", err.Error())
@@ -127,7 +160,6 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out.AccountRefused = s.recordLoginAccount(pid, fp, out, req.OSUser, now)
 	s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("%s %s (%s) · untrusted · 随登录登记", what, out.Label, out.EndpointID), now)
 	log.Printf("fleet: device %s of %s %s node %s (%s) at login", fp, pid, what, out.Label, out.EndpointID)
 	w.Header().Set("Cache-Control", "no-store")
@@ -199,7 +231,7 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 		// The token is handed back, so only a bearer can say it — and not one
 		// its node turned off (claude-fleet#3710).
 		if ep, _ := s.nodeAuthOpt(r); ep != nil &&
-			(ep.OSUser == "" || ep.OSUser == sanitizeJoinField(osUser)) {
+			(ep.OSUser == "" || ep.OSUser == sanitizeJoinLogin(osUser) || ep.OSUser == deviceRoadLogin(pid, fp, osUser)) {
 			if id, err := s.Store.DeviceNodeEndpoint(fp); err != nil || id != ep.ID {
 				code, err := MintJoinCode()
 				if err != nil {
@@ -212,14 +244,16 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 					log.Printf("join audit: %v", err)
 				}
 			}
-			return s.joinResponse(r, ep.ID, ep.Label, tok, ep.OSUser), "linked", nil
+			out := s.joinResponse(r, ep.ID, ep.Label, tok, ep.OSUser)
+			s.noteDeviceLogin(out, pid, fp, ep.ID, osUser, now)
+			return out, "linked", nil
 		}
 	}
 	if id, err := s.Store.DeviceNodeEndpoint(fp); err == nil {
 		if mach := s.machineServing(id); mach != "" {
 			// The login runs on its machine's node program, which holds
 			// the token this would replace (claude-fleet#2501).
-			return nil, "", &machineManagedErr{osUser: sanitizeJoinField(osUser), host: mach}
+			return nil, "", &machineManagedErr{osUser: sanitizeJoinLogin(osUser), host: mach}
 		}
 		tok, err := MintToken()
 		if err != nil {
@@ -235,7 +269,9 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 		if err := s.Store.FleetAudit("device:"+fp, "node_join", "endpoint:"+id, "REISSUED "+ep.Label+" 随登录登记", "", now); err != nil {
 			log.Printf("join audit: %v", err)
 		}
-		return s.joinResponse(r, id, ep.Label, tok, ep.OSUser), "reissued", nil
+		out := s.joinResponse(r, id, ep.Label, tok, ep.OSUser)
+		s.noteDeviceLogin(out, pid, fp, id, osUser, now)
+		return out, "reissued", nil
 	} else if !errors.Is(err, store.ErrNoSuchEndpoint) {
 		return nil, "", err
 	}
@@ -267,7 +303,10 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 // login — enrolls, as an ordinary node: memberDevice keeps it from ever being
 // an admin node or a machine's program, and the audit says so.
 func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser string) (*NodeJoinResponse, error) {
-	login := sanitizeJoinField(osUser)
+	// The login it enrolls as (task MPCX): the OS login as reported, or the
+	// person's alias login when it runs as root or names none — never root,
+	// so a device is never a machine's program.
+	login := deviceRoadLogin(pid, fp, osUser)
 	if !s.isOperator(pid) {
 		if adminRoleLogins[login] {
 			return nil, &reservedLoginErr{login}
@@ -279,19 +318,178 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 			}
 		}
 	}
-	code, err := MintJoinCode()
-	if err != nil {
-		return nil, err
+	// The first free name of deviceHosts; the store refuses, atomically, a
+	// name a live endpoint holds — then the next is tried (task MPCX).
+	var out *NodeJoinResponse
+	for _, host := range s.deviceHosts(pid, fp, hostname) {
+		code, err := MintJoinCode()
+		if err != nil {
+			return nil, err
+		}
+		if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
+			return nil, err
+		}
+		out, err = s.redeemJoin(r, code, host, login)
+		if errors.Is(err, store.ErrHostTaken) {
+			// The code stays unspent: minted here, never shown, gone at
+			// its TTL.
+			out = nil
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		break
 	}
-	if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
-		return nil, err
+	if out == nil {
+		return nil, &nameTakenErr{sanitizeJoinField(hostname)}
 	}
-	out, err := s.redeemJoin(r, code, hostname, osUser)
-	if err == nil && (login == "root" || s.isFleetAdmin(login)) && !s.isOperator(pid) {
+	now := time.Now()
+	s.noteDeviceLogin(out, pid, fp, out.EndpointID, osUser, now)
+	if s.isFleetAdmin(login) && !s.isOperator(pid) {
 		_ = s.Store.FleetAudit("device:"+fp, "node_identity", "endpoint:"+out.EndpointID,
-			"ENROLLED AS AN ORDINARY NODE — "+login+" by a member's device: never an admin node or a machine's program", "", time.Now())
+			"ENROLLED AS AN ORDINARY NODE — "+login+" by a member's device: never an admin node", "", now)
 	}
-	return out, err
+	return out, nil
+}
+
+// deviceHosts are the machine names a device road may enroll a new node
+// under, in order (task MPCX): the reported name, then the name with 4, 8 and
+// 16 hex of this device's fingerprint (`MacBook-Pro-1a2b`) — each only if it
+// passes the same checks: no other live endpoint enrolled as it, no one else's
+// login recorded there, no trust word for it (trusted or untrusted), not a
+// user pod's name. A machine name stays unique to one enrollment, so every
+// lookup by machine and login reaches this device's node and no one else's;
+// nobody is refused because another device used the name first. The store
+// re-checks the chosen name atomically at the insert (store.ErrHostTaken).
+func (s *Server) deviceHosts(pid, fp, hostname string) []string {
+	base := sanitizeJoinField(hostname)
+	if base == "" {
+		return []string{""}
+	}
+	sum := sha256.Sum256([]byte(fp))
+	full := hex.EncodeToString(sum[:])
+	var out []string
+	for i, n := range []int{0, 4, 8, 16} {
+		name := base
+		if i > 0 {
+			suffix := "-" + full[:n]
+			b := base
+			if len(b)+len(suffix) > 32 {
+				b = b[:32-len(suffix)]
+			}
+			name = b + suffix
+		}
+		if s.deviceNameFree(pid, name) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// deviceNameFree: name passes deviceHosts' checks for pid. An unreadable
+// answer is no.
+func (s *Server) deviceNameFree(pid, name string) bool {
+	if isUserPodName(name) {
+		return false
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return false
+	}
+	if _, ok := settings[trustKey(name)]; ok {
+		return false
+	}
+	if _, ok := settings[trustKey(firstLabel(name))]; ok {
+		return false
+	}
+	if taken, err := s.Store.EnrolledByAnother("", name); err != nil || taken {
+		return false
+	}
+	held, err := s.Store.HostHeldByOthers(name, pid)
+	return err == nil && !held
+}
+
+// nameTakenErr: every name a device road could enroll a new node under is
+// taken.
+type nameTakenErr struct{ name string }
+
+func (e *nameTakenErr) Error() string {
+	return fmt.Sprintf("no free machine name for %s on this hub — rename this computer and run fleet login again", e.name)
+}
+
+// noteDeviceLogin records the device's login (deviceRoadLogin) on endpointID's
+// machine as pid's (登录即认人) and says on the node pass what the node lacks:
+// AccountRefused when the row could not be written — the node is still the
+// device's person's (principalOnNode) — and EntryNote when the login is one
+// the door, entry relay and peer certificates do not serve (2–16 lowercase
+// letters and digits, no reserved name): the node runs sessions; nobody
+// reaches it over SSH as that login.
+func (s *Server) noteDeviceLogin(out *NodeJoinResponse, pid, fp, endpointID, osUser string, now time.Time) {
+	login := deviceRoadLogin(pid, fp, osUser)
+	out.AccountRefused = s.recordLoginAccount(pid, fp, endpointID, login, now)
+	if !control.ValidExistingLogin(login) {
+		out.EntryNote = fmt.Sprintf("login %s is a node for sessions only: SSH entry, the door and peer certificates serve logins of 2–16 lowercase letters and digits", login)
+		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, "endpoint "+endpointID+": "+out.EntryNote, now)
+	}
+}
+
+// sanitizeJoinLogin keeps a reported OS login as the login it is (task MPCX):
+// letters (either case), digits, `_`, `-` and `.`, 32 at most — never cut at a
+// dot the way a hostname is (`john.smith` stays `john.smith`).
+func sanitizeJoinLogin(v string) string {
+	v = strings.TrimSpace(v)
+	var b strings.Builder
+	for _, c := range v {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			b.WriteRune(c)
+		}
+		if b.Len() >= 32 {
+			break
+		}
+	}
+	// Never one that starts with `.` / `-` (an option, a dotfile) or is
+	// punctuation alone: that is no login.
+	out := strings.TrimLeft(b.String(), ".-")
+	if strings.IndexFunc(out, func(c rune) bool {
+		return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+	}) < 0 {
+		return ""
+	}
+	return out
+}
+
+// deviceAliasPrefix starts the login a device road records for a device that
+// runs as root or names no login: `dev-` and eight hex of its person and
+// device, stable across reissues.
+const deviceAliasPrefix = "dev-"
+
+// deviceRoadLogin is the login a device road enrolls and records (task MPCX): the
+// OS login (sanitizeJoinLogin), or — for root, or none at all — the person's
+// alias for this device, so a container or devcontainer run as root is still
+// its person's ordinary node.
+func deviceRoadLogin(pid, fp, osUser string) string {
+	l := sanitizeJoinLogin(osUser)
+	if l != "" && l != "root" {
+		return l
+	}
+	sum := sha256.Sum256([]byte(pid + "|" + fp))
+	return deviceAliasPrefix + hex.EncodeToString(sum[:4])
+}
+
+// isDeviceAlias: login is a deviceRoadLogin alias.
+func isDeviceAlias(login string) bool {
+	if len(login) != len(deviceAliasPrefix)+8 || !strings.HasPrefix(login, deviceAliasPrefix) {
+		return false
+	}
+	_, err := hex.DecodeString(login[len(deviceAliasPrefix):])
+	return err == nil
+}
+
+// deviceLoginRecordable: a device road's login the hub records as its
+// person's — any sanitized login but root and the admin role account.
+func deviceLoginRecordable(login string) bool {
+	return login != "" && login != "root" && !adminRoleLogins[login] && login == sanitizeJoinLogin(login)
 }
 
 // principalOnNode is the person behind login on a node: the machine's
@@ -305,9 +503,41 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 func (s *Server) principalOnNode(endpointID, host, login string) (string, error) {
 	p, err := s.nodeLoginPrincipal(endpointID, host, login)
 	if errors.Is(err, store.ErrNoPrincipal) {
-		return s.Store.PrincipalForEndpointLogin(endpointID, login)
+		p, err = s.Store.PrincipalForEndpointLogin(endpointID, login)
+	}
+	if errors.Is(err, store.ErrNoPrincipal) {
+		if d := s.devicePerson(endpointID, login); d != "" {
+			return d, nil
+		}
 	}
 	return p, err
+}
+
+// devicePerson is the person a device road's endpoint belongs to when no
+// account row names it (task MPCX): its device's person, for the login it
+// enrolled as — the node is bound to (person, device), not to a machine and
+// login name another device may share. "" for any other endpoint, a login it
+// did not enroll as, or devices of more than one person.
+func (s *Server) devicePerson(endpointID, login string) string {
+	e := s.enrollment(endpointID)
+	if !e.ByDevice || login == "" {
+		return ""
+	}
+	et, err := s.Store.EndpointTrustOf(endpointID)
+	if err != nil || et.EnrolledUser != login {
+		return ""
+	}
+	who := ""
+	for _, p := range e.DevicePeople {
+		switch {
+		case p == "":
+		case who == "":
+			who = p
+		case !strings.EqualFold(who, p):
+			return ""
+		}
+	}
+	return who
 }
 
 // accountOpLeaseWindow bounds the lease an account op's own login is answered
@@ -395,34 +625,96 @@ func (s *Server) leaseInFlight(endpointID, host, login string, now time.Time) (s
 // left alone and audited; it never fails the node pass. It answers why the
 // login is NOT the person's afterwards — read back the way every reader reads
 // it (principalOnNode) — empty when it is (claude-fleet#2249).
-func (s *Server) recordLoginAccount(pid, fp string, out *NodeJoinResponse, osUser string, now time.Time) string {
-	osUser = sanitizeJoinField(osUser)
-	if osUser == "" || !control.ValidExistingLogin(osUser) {
+func (s *Server) recordLoginAccount(pid, fp, endpointID, osUser string, now time.Time) string {
+	if !deviceLoginRecordable(osUser) {
 		return fmt.Sprintf("system login %s is not one the hub records", osUser)
 	}
-	ep, err := s.Store.EndpointByTokenHash(HashToken(out.Token))
-	if err != nil || ep.Hostname == "" {
+	ep, err := s.Store.EndpointByID(endpointID)
+	if err != nil {
+		return "this node has no machine name on the hub"
+	}
+	// On the machine it ENROLLED as (task MPCX): unique to this device's
+	// enrollment (deviceHost), never a name a later report gave.
+	host := ep.Hostname
+	if et, err := s.Store.EndpointTrustOf(endpointID); err == nil && enrolledMachine(et) != "" {
+		host = enrolledMachine(et)
+	}
+	if host == "" {
 		return "this node has no machine name on the hub"
 	}
 	p, err := s.Store.Principal(pid)
 	if err != nil {
 		return "account not recorded: " + err.Error()
 	}
-	wrote, err := s.Store.RecordLoginAccount(p, ep.Hostname, osUser, ep.ID, "登录即认人 · device "+fp, now)
+	wrote, err := s.Store.RecordLoginAccount(p, host, osUser, ep.ID, "登录即认人 · device "+fp, now)
 	switch {
 	case err != nil:
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, "account not recorded: "+err.Error(), now)
 		return "account not recorded: " + err.Error()
 	case wrote:
-		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("account %s on %s is %s · 登录即认人", osUser, ep.Hostname, pid), now)
+		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("account %s on %s is %s · 登录即认人", osUser, host, pid), now)
 	}
-	if who, err := s.principalOnNode(ep.ID, ep.Hostname, osUser); err != nil || who != pid {
-		why := fmt.Sprintf("login %s on %s is not recorded as yours", osUser, ep.Hostname)
+	if who, err := s.principalOnNode(ep.ID, host, osUser); err != nil || who != pid {
+		why := fmt.Sprintf("login %s on %s is not recorded as yours", osUser, host)
 		if who != "" {
-			why = fmt.Sprintf("login %s on %s already belongs to someone else", osUser, ep.Hostname)
+			why = fmt.Sprintf("login %s on %s already belongs to someone else", osUser, host)
 		}
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, why, now)
 		return why
 	}
 	return ""
 }
+
+// loginNodeLimits are the node-pass road's budgets (task MPCX): per source
+// address, and per device key (fpAddr). Per replica, like every clientBudget.
+type loginNodeLimits struct{ pre, source, device *clientBudget }
+
+func (s *Server) loginNodeBudgets() *loginNodeLimits {
+	s.loginNodeInit.Do(func() {
+		s.loginNodeLim = &loginNodeLimits{
+			pre:    &clientBudget{burst: 600, perSec: 600.0 / 60, max: 4096},
+			source: &clientBudget{burst: 60, perSec: 60.0 / 60, max: 4096},
+			device: &clientBudget{burst: 12, perSec: 12.0 / 60, max: 4096},
+		}
+	})
+	return s.loginNodeLim
+}
+
+// fpAddr keys a device key's budget in clientBudget's table: an address
+// taken from the fingerprint's hash (never a real source address).
+func fpAddr(fp string) netip.Addr {
+	sum := sha256.Sum256([]byte("device-key:" + fp))
+	var a [16]byte
+	copy(a[:], sum[:16])
+	return netip.AddrFrom16(a)
+}
+
+// loginNodeOnce marks (fp, ts) used and says whether it was fresh: a signed
+// node-pass request is answered once. Entries older than twice the clock
+// window are dropped; the table is bounded.
+func (s *Server) loginNodeOnce(fp string, ts int64, now time.Time) bool {
+	s.loginNodeMu.Lock()
+	defer s.loginNodeMu.Unlock()
+	if s.loginNodeSeen == nil {
+		s.loginNodeSeen = map[string]time.Time{}
+	}
+	key := fp + "|" + strconv.FormatInt(ts, 10)
+	if _, used := s.loginNodeSeen[key]; used {
+		return false
+	}
+	if len(s.loginNodeSeen) >= loginNodeSeenMax {
+		for k, at := range s.loginNodeSeen {
+			if now.Sub(at) > 2*renewClockSkew {
+				delete(s.loginNodeSeen, k)
+			}
+		}
+	}
+	if len(s.loginNodeSeen) >= loginNodeSeenMax {
+		return false // full of live entries: refuse rather than forget one
+	}
+	s.loginNodeSeen[key] = now
+	return true
+}
+
+// loginNodeSeenMax bounds loginNodeOnce's table.
+const loginNodeSeenMax = 1 << 16

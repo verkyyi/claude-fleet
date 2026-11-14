@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -81,6 +82,9 @@ type Store struct {
 	// usage_events on this open, 0 when the rollup was already current. The
 	// hub logs it so an operator can see a first-run backfill happen.
 	BackfilledRollup int64
+
+	// identGen is IdentityGen (task MPCX).
+	identGen atomic.Uint64
 }
 
 // Open opens (creating if needed) the database at path and applies the schema.
@@ -121,8 +125,13 @@ func openPool(d dialect, src string, readOnly bool) (*sql.DB, error) {
 	if readOnly {
 		dsn += "&_pragma=query_only(1)"
 	}
-	return sql.Open("sqlite", dsn)
+	return sql.Open(SQLiteDriver, dsn)
 }
+
+// SQLiteDriver is the database/sql driver a SQLite store opens: "sqlite". A
+// test may register a wrapping driver under another name (to count the
+// statements a road issues) and set this before opening a store.
+var SQLiteDriver = "sqlite"
 
 // SetReadOnly turns the store's writer into a reader: from here on every write
 // fails, every read works (CCQUOTA_READONLY=1, claude-fleet#2122). It is how a
@@ -327,17 +336,33 @@ func migrate(db *sql.DB) error {
 // Idempotent like enrolled_host's: a stamped row is left alone, and a row
 // that said no login anywhere stays empty until its first report stamps it.
 func backfillEnrolledUser(db *sql.DB) error {
+	// Never root or the admin role account onto an endpoint a device enrolled
+	// or was linked to (task MPCX, as stampPlan): it stays unstamped.
+	notHeld := ""
+	if has, err := hasColumn(db, "fleet_join_codes", "device_fp"); err != nil {
+		return err
+	} else if has {
+		notHeld = ` AND NOT (%s IN ('root', '_fleetadmin', 'fleetadmin') AND EXISTS (SELECT 1 FROM fleet_join_codes d
+			  WHERE d.endpoint_id = endpoints.endpoint_id AND d.device_fp <> '' AND d.used_at IS NOT NULL))`
+	}
+	held := func(expr string) string {
+		if notHeld == "" {
+			return ""
+		}
+		return fmt.Sprintf(notHeld, expr)
+	}
 	if has, err := hasColumn(db, "fleet_join_codes", "joined_user"); err != nil {
 		return err
 	} else if has {
-		if _, err := db.Exec(`UPDATE endpoints SET enrolled_user = (SELECT c.joined_user FROM fleet_join_codes c
-			  WHERE c.endpoint_id = endpoints.endpoint_id AND c.joined_user <> '' ORDER BY c.used_at LIMIT 1)
+		first := `(SELECT c.joined_user FROM fleet_join_codes c
+			  WHERE c.endpoint_id = endpoints.endpoint_id AND c.joined_user <> '' ORDER BY c.used_at LIMIT 1)`
+		if _, err := db.Exec(`UPDATE endpoints SET enrolled_user = ` + first + `
 			WHERE enrolled_user = '' AND EXISTS (SELECT 1 FROM fleet_join_codes c
-			  WHERE c.endpoint_id = endpoints.endpoint_id AND c.joined_user <> '')`); err != nil {
+			  WHERE c.endpoint_id = endpoints.endpoint_id AND c.joined_user <> '')` + held(first)); err != nil {
 			return fmt.Errorf("backfill endpoints.enrolled_user from its join: %w", err)
 		}
 	}
-	if _, err := db.Exec(`UPDATE endpoints SET enrolled_user = os_user WHERE enrolled_user = '' AND os_user <> ''`); err != nil {
+	if _, err := db.Exec(`UPDATE endpoints SET enrolled_user = os_user WHERE enrolled_user = '' AND os_user <> ''` + held("os_user")); err != nil {
 		return fmt.Errorf("backfill endpoints.enrolled_user: %w", err)
 	}
 	return nil
@@ -803,16 +828,23 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 		}
 	}
 
+	// The enrollment a first report stamps (task MPCX): computed from one
+	// read, applied only to a row still unstamped, and the identity
+	// generation moves only when something is actually stamped.
+	stampUser, changed := s.stampPlan(endpointID, id.OSUser, id.Hostname)
+	if changed {
+		defer s.identityChanged()
+	}
 	if login || prevAccount == "" {
 		_, err = s.write.Exec(`
 			UPDATE endpoints SET account_uuid = ?, hostname = ?, os = ?, arch = ?,
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
 			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END,
-			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN os_user <> '' THEN os_user ELSE ? END
+			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user ELSE ? END
 			WHERE endpoint_id = ?`,
 			id.AccountUUID, id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, id.OSUser, endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, stampUser, endpointID)
 	} else {
 		// Everything except the account: the machine is still reporting, and
 		// its hardware facts are just as true on a secondary batch.
@@ -821,10 +853,10 @@ func (s *Store) TouchEndpoint(endpointID string, id model.Identity, agentVersion
 			       machine_id = COALESCE(NULLIF(?,''), machine_id),
 			       cc_version = COALESCE(NULLIF(?,''), cc_version), agent_version = ?, os_user = ?,
 			       last_seen = ?, enrolled_host = CASE WHEN enrolled_host = '' THEN ? ELSE enrolled_host END,
-			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user WHEN os_user <> '' THEN os_user ELSE ? END
+			       enrolled_user = CASE WHEN enrolled_user <> '' THEN enrolled_user ELSE ? END
 			WHERE endpoint_id = ?`,
 			id.Hostname, id.OS, id.Arch, id.MachineID,
-			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, id.OSUser, endpointID)
+			id.CCVersion, agentVersion, id.OSUser, fmtTime(time.Now()), id.Hostname, stampUser, endpointID)
 	}
 	if err != nil {
 		return "", false, fmt.Errorf("touch endpoint: %w", err)

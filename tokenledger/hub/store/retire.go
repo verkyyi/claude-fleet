@@ -203,6 +203,7 @@ type RetireResult struct {
 // alone happens, exactly as before. A re-run against a retired endpoint only
 // settles what is still open, and changes and records nothing when nothing is.
 func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time) (RetireResult, error) {
+	defer s.identityChanged()
 	var out RetireResult
 	tx, err := s.write.Begin()
 	if err != nil {
@@ -300,6 +301,7 @@ func (e *InUseError) Error() string {
 // row has no history to protect, and making an operator keep it forever is how
 // the roster fills with things nobody can explain.
 func (s *Store) DeleteEndpoint(endpointID string) error {
+	defer s.identityChanged()
 	if _, err := s.EndpointByID(endpointID); err != nil {
 		return err
 	}

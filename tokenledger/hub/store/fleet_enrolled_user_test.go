@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -74,5 +76,76 @@ func TestEnrolledUserWrittenOnceAndBackfilled(t *testing.T) {
 	}
 	if got := enrolled("ep_c"); got != "carol" {
 		t.Fatalf("carol's code: %q", got)
+	}
+}
+
+// The boot backfill never stamps root or the admin role account onto an
+// endpoint a device enrolled or was linked to (task MPCX): it stays
+// unstamped, as a first report would leave it.
+func TestEnrolledUserBackfillSkipsDeviceHeldLogins(t *testing.T) {
+	s := taskStore(t)
+	now := time.Now()
+	if err := s.CreateJoinCodeForDevice("dc", "SHA256:dev", now, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RedeemJoinCode("dc", now, "ep_dev", "dev", "hd", "bob-box", "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Enroll("ep_ops", "ops", "ho"); err != nil {
+		t.Fatal(err)
+	}
+	for id, login := range map[string]string{"ep_dev": "root", "ep_ops": "root"} {
+		if _, err := s.write.Exec(`UPDATE endpoints SET enrolled_user = '', os_user = ? WHERE endpoint_id = ?`, login, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.write.Exec(`UPDATE fleet_join_codes SET joined_user = '_fleetadmin' WHERE endpoint_id = 'ep_dev'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := backfillEnrolledUser(s.write); err != nil {
+		t.Fatal(err)
+	}
+	if et, _ := s.EndpointTrustOf("ep_dev"); et.EnrolledUser != "" {
+		t.Errorf("a device endpoint backfilled as %q; want unstamped", et.EnrolledUser)
+	}
+	if et, _ := s.EndpointTrustOf("ep_ops"); et.EnrolledUser != "root" {
+		t.Errorf("an operator's endpoint backfilled as %q; want root, as before", et.EnrolledUser)
+	}
+}
+
+// Two device codes redeemed at once under one machine name: exactly one
+// enrolls, the other is ErrHostTaken and spends nothing (task MPCX) — on
+// SQLite the one writer, on Postgres the name's transaction lock.
+func TestDeviceEnrollmentNameIsTakenOnce(t *testing.T) {
+	s := taskStore(t)
+	now := time.Now()
+	for round := 0; round < 10; round++ {
+		host := fmt.Sprintf("race-%d", round)
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i := 0; i < 2; i++ {
+			code := fmt.Sprintf("dc-%d-%d", round, i)
+			if err := s.CreateJoinCodeForDevice(code, fmt.Sprintf("SHA256:d%d", i), now, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			wg.Add(1)
+			go func(i int, code string) {
+				defer wg.Done()
+				errs[i] = s.RedeemJoinCode(code, now, fmt.Sprintf("ep_%d_%d", round, i), host, "h"+code, host, "sam")
+			}(i, code)
+		}
+		wg.Wait()
+		taken := 0
+		for _, err := range errs {
+			switch {
+			case errors.Is(err, ErrHostTaken):
+				taken++
+			case err != nil:
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+		if taken != 1 {
+			t.Fatalf("round %d: %d of 2 refused; want exactly 1 (errors %v)", round, taken, errs)
+		}
 	}
 }

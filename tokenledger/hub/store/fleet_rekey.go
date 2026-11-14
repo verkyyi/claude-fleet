@@ -70,6 +70,7 @@ type RekeyResult struct {
 // to must have no principal row of its own (ErrRekeyTarget); from must exist
 // (ErrNoPrincipal). Nothing is sent anywhere.
 func (s *Store) RekeyPrincipal(from, to, displayName, actor string, at time.Time) (*RekeyResult, error) {
+	defer s.identityChanged()
 	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
 	if from == "" || to == "" {
 		return nil, errors.New("rekey needs both principal ids")

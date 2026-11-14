@@ -296,17 +296,30 @@ func (s *Store) NodeHeartbeat(endpointID, hostname, osUser, machineID string, pr
 	// operator's) enrolls under the first one it reports (claude-fleet#2214);
 	// a join always names one, and a stamped name is never moved.
 	if hostname != "" {
-		if _, err := s.write.Exec(`UPDATE endpoints SET enrolled_host = ? WHERE endpoint_id = ? AND enrolled_host = ''`,
-			hostname, endpointID); err != nil {
+		res, err := s.write.Exec(`UPDATE endpoints SET enrolled_host = ? WHERE endpoint_id = ? AND enrolled_host = ''`,
+			hostname, endpointID)
+		if err != nil {
 			return fmt.Errorf("stamp enrolled host: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			s.identGen.Add(1)
 		}
 	}
 	// Its login likewise (task MPCX): the login its join recorded when there
-	// was one (a row an older replica enrolled), else the first it reports.
+	// was one (a row an older replica enrolled), else the first it reports —
+	// never root or the admin role account on an endpoint a device enrolled
+	// or was linked to (it stays unstamped). One statement, no extra read.
 	if osUser != "" {
-		if _, err := s.write.Exec(`UPDATE endpoints SET enrolled_user = CASE WHEN os_user <> '' THEN os_user ELSE ? END
-			WHERE endpoint_id = ? AND enrolled_user = ''`, osUser, endpointID); err != nil {
+		res, err := s.write.Exec(`UPDATE endpoints SET enrolled_user = CASE WHEN os_user <> '' THEN os_user ELSE ? END
+			WHERE endpoint_id = ? AND enrolled_user = ''
+			  AND NOT ((CASE WHEN os_user <> '' THEN os_user ELSE ? END) IN ('root', '_fleetadmin', 'fleetadmin')
+			    AND EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = endpoints.endpoint_id
+			      AND c.device_fp <> '' AND c.used_at IS NOT NULL))`, osUser, endpointID, osUser)
+		if err != nil {
 			return fmt.Errorf("stamp enrolled user: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			s.identGen.Add(1)
 		}
 	}
 	return nil

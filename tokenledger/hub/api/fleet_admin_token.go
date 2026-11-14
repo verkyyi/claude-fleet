@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -59,7 +58,6 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 	// operator's or the hub's code (nodeSelf, task MPCX); its machine is the
 	// one it speaks for, never a report or a hello's capability.
 	self := s.nodeSelf(ep)
-	host := self.Host
 	link := false
 	if c := s.nodes.get(ep.ID); c != nil && c.machineLink {
 		link = true
@@ -68,9 +66,13 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusForbidden, "only the machine's own node token asks for its admin role account's token")
 		return
 	}
-	if host == "" {
-		host = s.endpointHost(*ep)
+	if s.podEndpoint(ep.ID) {
+		httpError(w, http.StatusForbidden, "a person's pod has no admin role account")
+		return
 	}
+	// The seat is the machine's the endpoint ENROLLED as (task MPCX) — never
+	// a name its report gives: a machine's program asks for its own seat only.
+	host := self.EnrolledHost
 	if host == "" {
 		httpError(w, http.StatusConflict, "this machine has not said its name yet — wait for its first heartbeat")
 		return
@@ -92,7 +94,7 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.joinNow()
-	out, err := s.issueAdminToken(r, host, login, now)
+	out, err := s.issueAdminToken(r, host, login, s.seatOf(host, login), now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -107,21 +109,21 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 // issueAdminToken is the token itself: the live endpoint of login on host
 // gets a new one, else a fixed-kind endpoint is enrolled pinned to host
 // (a code the hub mints for that machine and spends at once).
-func (s *Server) issueAdminToken(r *http.Request, host, login string, now time.Time) (*AdminTokenResponse, error) {
+func (s *Server) issueAdminToken(r *http.Request, host, login, seat string, now time.Time) (*AdminTokenResponse, error) {
 	tok, err := MintToken()
 	if err != nil {
 		return nil, err
 	}
 	out := &AdminTokenResponse{Login: login, Machine: firstLabel(host), Token: tok, Hub: s.nodeHubURL(r)}
-	if id, err := s.Store.LiveEndpointOn(host, login); err == nil {
-		if err := s.Store.RotateEndpointToken(id, HashToken(tok), now, ReissueTokenGrace); err != nil {
+	if seat != "" {
+		if err := s.Store.RotateEndpointToken(seat, HashToken(tok), now, ReissueTokenGrace); err != nil {
 			return nil, err
 		}
-		out.EndpointID, out.Outcome = id, "reissued"
+		out.EndpointID, out.Outcome = seat, "reissued"
 		return out, nil
-	} else if !errors.Is(err, store.ErrNoSuchEndpoint) {
-		return nil, err
 	}
+	// No seat on this enrolled machine (seatOf): a new one, pinned to it —
+	// never one found by a reported name (task MPCX).
 	code, err := MintJoinCode()
 	if err != nil {
 		return nil, err
@@ -136,4 +138,17 @@ func (s *Server) issueAdminToken(r *http.Request, host, login string, now time.T
 	}
 	out.EndpointID, out.Outcome = id, "issued"
 	return out, nil
+}
+
+// seatOf is the live admin seat this machine already has, "" for none (task
+// MPCX): only one enrolled as the machine the asking program enrolled as
+// (first label, any case). A seat an older hub issued under a name the program
+// reported is never matched by that name — the program gets a seat under its
+// own enrolled machine instead, and the old one is left for the operator to
+// retire.
+func (s *Server) seatOf(host, login string) string {
+	if id, err := s.Store.LiveSeatOn(host, login); err == nil {
+		return id
+	}
+	return ""
 }

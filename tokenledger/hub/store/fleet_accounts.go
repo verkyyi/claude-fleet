@@ -168,6 +168,7 @@ func (s *Store) EnsurePrincipal(id, displayName string, maxLen int, valid func(s
 // name minted from id, and skipped — never suffixed — when valid refuses it
 // or another principal holds it. An existing principal keeps its login.
 func (s *Store) EnsurePrincipalAs(id, displayName, preferred string, maxLen int, valid func(string) bool, at time.Time) (*Principal, error) {
+	defer s.identityChanged()
 	if id == "" {
 		return nil, errors.New("empty principal id")
 	}
@@ -223,6 +224,7 @@ func (s *Store) EnsurePrincipalAs(id, displayName, preferred string, maxLen int,
 // by (claude-fleet#2577). A row the operator adopted before the first sign-in
 // has none; no row is no error (nothing to name yet).
 func (s *Store) NamePrincipal(id, displayName string) error {
+	defer s.identityChanged()
 	if id == "" || displayName == "" {
 		return nil
 	}
@@ -412,6 +414,7 @@ func (s *Store) HostOpenRecord(hostname string) (opened, lastFailed bool, err er
 // creation that worked, and a create that may have half-run is re-run only
 // on an explicit retry. created reports whether anything was queued.
 func (s *Store) RequestAccount(p *Principal, hostname string, retry bool, at time.Time) (created bool, err error) {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, 'create', ?, ?) ON CONFLICT(principal_id, hostname) DO NOTHING`,
@@ -444,6 +447,7 @@ func (s *Store) RequestAccount(p *Principal, hostname string, retry bool, at tim
 // AdoptAccount records a login that already exists on hostname as active,
 // without running anything there.
 func (s *Store) AdoptAccount(p *Principal, hostname string, at time.Time) error {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	_, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, 'adopt', 'adopted: existed before the hub', ?, ?)
@@ -464,6 +468,7 @@ func (s *Store) AdoptAccount(p *Principal, hostname string, at time.Time) error 
 // so does a person with no row there (assign them instead). Undo is `adopt`
 // of the old login, which writes the row back without running anything.
 func (s *Store) RequestRelogin(principalID, hostname, login string, at time.Time) (from string, err error) {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	tx, err := s.write.Begin()
 	if err != nil {
@@ -513,6 +518,7 @@ var ErrRenameTaken = errors.New("login is another person's")
 // disagreeing with them. from == to is a no-op (no error). ErrAccountState: no
 // active account on hostname; ErrRenameTaken: another person holds that login.
 func (s *Store) AlignPrincipalLogin(principalID, hostname string) (from, to string, err error) {
+	defer s.identityChanged()
 	tx, err := s.write.Begin()
 	if err != nil {
 		return "", "", err
@@ -561,6 +567,7 @@ func (s *Store) AlignPrincipalLogin(principalID, hostname string) (from, to stri
 // is atomic against MarkAccountSent; in-flight operations stay refused. Any other
 // row refuses with ErrAccountState: adopt never invents a second login.
 func (s *Store) AdoptReloginAccount(principalID, hostname, login string, at time.Time) error {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op = 'adopt', detail = ?, op_id = '', endpoint_id = '', updated_at = ?
 		WHERE `+s.d.eqNocase("principal_id")+` AND hostname = ? AND login = ? AND state IN (?, ?, ?, ?, ?)`,
@@ -584,6 +591,7 @@ func (s *Store) AdoptReloginAccount(principalID, hostname, login string, at time
 // remove_pending), an unknown, and an active row are left exactly as they
 // are. adopted reports whether a row was written.
 func (s *Store) AdoptAccountIfOpen(p *Principal, hostname string, at time.Time) (adopted bool, err error) {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, 'adopt', 'adopted: an agent runs as this login', ?, ?)
@@ -609,6 +617,7 @@ func (s *Store) AdoptAccountIfOpen(p *Principal, hostname string, at time.Time) 
 // ErrAccountState: an active login is removed, not forgotten; an op in
 // flight or unknown is settled first.
 func (s *Store) ForgetPrincipal(principalID, hostname string) error {
+	defer s.identityChanged()
 	if principalID == "" {
 		return errors.New("empty principal id")
 	}
@@ -673,6 +682,7 @@ func (s *Store) ForgetPrincipal(principalID, hostname string) error {
 // did NOT happen there. It runs nothing and sends nothing; the caller checks the
 // machine has no live admin and audits. from is the state it left.
 func (s *Store) CloseAccountMachineGone(principalID, hostname string, detail func(from string) string, at time.Time) (from string, err error) {
+	defer s.identityChanged()
 	tx, err := s.write.Begin()
 	if err != nil {
 		return "", err
@@ -701,6 +711,7 @@ func (s *Store) CloseAccountMachineGone(principalID, hostname string, detail fun
 
 // RequestAccountRemoval queues closing p's login on hostname.
 func (s *Store) RequestAccountRemoval(principalID, hostname string, at time.Time) error {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op = 'remove', op_id = '', endpoint_id = '',
 		detail = '', requested_at = ?, updated_at = ?
@@ -719,6 +730,7 @@ func (s *Store) RequestAccountRemoval(principalID, hostname string, at time.Time
 // written BEFORE the send, so a hub that dies mid-send restarts into unknown,
 // never into a silent pending that would run the op a second time.
 func (s *Store) MarkAccountSent(principalID, hostname, fromState, toState, opID, endpointID string, at time.Time) (bool, error) {
+	defer s.identityChanged()
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op_id = ?, endpoint_id = ?, detail = '', updated_at = ?
 		WHERE principal_id = ? AND hostname = ? AND state = ?`,
 		toState, opID, endpointID, at.UTC().Format(rfc), principalID, hostname, fromState)
@@ -732,6 +744,7 @@ func (s *Store) MarkAccountSent(principalID, hostname, fromState, toState, opID,
 // RevertAccountSent puts an op that provably never left the hub back in the
 // queue.
 func (s *Store) RevertAccountSent(opID, toState, detail string, at time.Time) error {
+	defer s.identityChanged()
 	_, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op_id = '', endpoint_id = '', detail = ?, updated_at = ?
 		WHERE op_id = ?`, toState, detail, at.UTC().Format(rfc), opID)
 	return err
@@ -761,6 +774,7 @@ func (s *Store) AccountByOp(opID string) (*FleetAccount, error) {
 // endpointID must be the node the op was sent to: an answer from any other
 // connection is not an answer.
 func (s *Store) FinishAccountOp(opID, endpointID, state, detail string, at time.Time) (applied bool, err error) {
+	defer s.identityChanged()
 	if opID == "" {
 		return false, nil
 	}
@@ -802,6 +816,7 @@ func (s *Store) SpareOpInFlight(principalID string) (*FleetAccount, error) {
 // LoseAccountOps marks every op in flight through endpointID unknown: its link
 // is gone and nobody can say whether the op ran.
 func (s *Store) LoseAccountOps(endpointID string, at time.Time) error {
+	defer s.identityChanged()
 	_, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, detail = 'control channel closed before the node answered',
 		updated_at = ? WHERE endpoint_id = ? AND state IN (?, ?, ?)`,
 		AccountUnknown, at.UTC().Format(rfc), endpointID, AccountCreating, AccountRemoving, AccountResetting)
@@ -826,6 +841,7 @@ const AccountOpAdopt = "adopt"
 // unless that row is itself a login row or never reached the machine, and
 // reports whether it wrote.
 func (s *Store) RecordLoginAccount(p *Principal, hostname, osUser, endpointID, detail string, at time.Time) (bool, error) {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`INSERT INTO fleet_accounts (principal_id, hostname, login, state, op, endpoint_id, detail, requested_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

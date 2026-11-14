@@ -57,10 +57,15 @@ var (
 
 // jobPod is the caller's own pod: the live pod row its machine is.
 func (s *Server) jobPod(ep *store.Endpoint) (*store.ClusterPod, error) {
-	if !s.Fleet || s.Store == nil || s.accountKey == nil || !isUserPodName(ep.Hostname) {
+	if !s.Fleet || s.Store == nil || s.accountKey == nil {
 		return nil, errNotAPod
 	}
-	p, err := s.Store.ClusterPodOf(firstLabel(strings.ToLower(ep.Hostname)))
+	// The pod it ENROLLED as (task MPCX), never a name its report gives.
+	host := s.nodeSelf(ep).EnrolledHost
+	if !isUserPodName(host) {
+		return nil, errNotAPod
+	}
+	p, err := s.Store.ClusterPodOf(firstLabel(strings.ToLower(host)))
 	if err != nil || p.State != store.PodLive {
 		return nil, errNotAPod
 	}

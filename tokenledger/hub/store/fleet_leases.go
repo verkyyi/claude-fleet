@@ -86,6 +86,18 @@ type LeaseClaim struct {
 	// lease's account_owner, so a cutover counts only that person's leases.
 	// "" consults no authority: every API caller sets it.
 	Owner string
+	// ForceAnyOwner lets Force take a lease another owner holds (the
+	// operator's own node). Without it Force displaces only a holder of the
+	// same owner or the same endpoint, or a lease that names no owner (task
+	// MPCX).
+	ForceAnyOwner bool
+}
+
+// ForceAllowed says claim c may force cur off: the same endpoint, the same
+// owner, a lease that names none, or a claim that may force any owner's.
+func (c LeaseClaim) ForceAllowed(cur Lease) bool {
+	return c.ForceAnyOwner || cur.EndpointID == c.EndpointID || cur.AccountOwner == "" ||
+		strings.EqualFold(cur.AccountOwner, c.Owner)
 }
 
 // NormRepo is the lease table's spelling of a repo: owner/name, lower case.
@@ -177,7 +189,7 @@ func (s *Store) AcquireLease(c LeaseClaim, grace time.Duration, at time.Time) (g
 	// by the spawn that arrives there.
 	mine := cur.WorkerID == c.WorkerID || (cur.FleetID != "" && cur.FleetID == c.FleetID)
 	if live && !mine {
-		if !c.Force {
+		if !c.Force || !c.ForceAllowed(cur) {
 			return false, cur, nil, nil
 		}
 		d := cur

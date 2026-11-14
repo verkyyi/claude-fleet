@@ -739,6 +739,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		go s.redeliverTaskStops(ep)
 	}
 	defer s.nodes.drop(ep.ID, nc)
+	defer s.forgetIdentity(ep.ID) // the identity caches hold live links (task MPCX)
 	// Where this link ends, for the other replicas (claude-fleet#2124) —
 	// the refresh relay listed only when the hub granted it here (task MPCX),
 	// so another replica never offers it a refresh this one would refuse.
@@ -1006,8 +1007,12 @@ type NodeView struct {
 	heartbeat *control.Heartbeat
 	*control.ParkMetrics
 
-	EndpointID    string     `json:"endpoint_id"`
-	Hostname      string     `json:"hostname"`
+	EndpointID string `json:"endpoint_id"`
+	Hostname   string `json:"hostname"`
+	// MachineIDHeld: this node's heartbeats name a machine id another live
+	// node holds, so its fleets are not registered (task MPCX) — the id, and
+	// what to do, on the roster.
+	MachineIDHeld string     `json:"machine_id_held,omitempty"`
 	OSUser        string     `json:"os_user"`
 	MachineID     string     `json:"machine_id,omitempty"`
 	Proto         int        `json:"proto"`
@@ -1345,7 +1350,10 @@ func (s *Server) nodesWhere(now time.Time, visible func(hostname, osUser string)
 		if !known {
 			et, _ = s.Store.EndpointTrustOf(n.EndpointID)
 		}
-		v.Trust, v.TrustSource = nodeTrust(n.Hostname, et, settings)
+		v.Trust, v.TrustSource = s.deviceTrust(n.EndpointID, n.Hostname, et, settings)
+		if m, ok := s.machineHeld.Load(n.EndpointID); ok {
+			v.MachineIDHeld = m.(string)
+		}
 		v.Role = et.Role
 		if m, flagged := maintenanceOf(n.Hostname, settings); flagged {
 			v.Maintenance = &m

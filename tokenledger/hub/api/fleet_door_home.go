@@ -359,6 +359,7 @@ func (s *Server) handleDoorSession(w http.ResponseWriter, r *http.Request) {
 // a connected, compatible agent there that listed CapEntryRelay — the
 // person's own login's first (it is theirs), then the admin agent, then any.
 func (s *Server) entryRelayNode(host, login string) (string, *nodeConn, error) {
+	owner := s.loginOwner(host, login) // a device's link carries only its person's (task MPCX)
 	s.nodes.mu.Lock()
 	defer s.nodes.mu.Unlock()
 	ids := make([]string, 0, len(s.nodes.conns))
@@ -369,7 +370,8 @@ func (s *Server) entryRelayNode(host, login string) (string, *nodeConn, error) {
 	best, rank := "", 99
 	for _, epID := range ids {
 		c := s.nodes.conns[epID]
-		if !c.canSSHRelay || !c.canEntryRelay || c.hostname() != host || !control.Compatible(int(c.proto.Load())) {
+		if !c.canSSHRelay || !c.canEntryRelay || c.hostname() != host || !control.Compatible(int(c.proto.Load())) ||
+			!s.linkServes(epID, owner) {
 			continue
 		}
 		r := 2

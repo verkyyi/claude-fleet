@@ -346,6 +346,7 @@ func (s *Store) DefaultOrgFor(principal string) (string, error) {
 // SetPersonOrg puts principal in org with role. Only a person on the list
 // (hub_users) has a row to hold it: ErrNoMember otherwise.
 func (s *Store) SetPersonOrg(principal, org, role string) error {
+	defer s.identityChanged()
 	if _, err := s.Org(org); err != nil {
 		return err
 	}

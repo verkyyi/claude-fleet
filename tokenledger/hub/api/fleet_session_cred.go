@@ -666,12 +666,8 @@ func (s *Server) issueSessionCred(w http.ResponseWriter, r *http.Request, ep *st
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if fl.Hostname != "" {
-		host = fl.Hostname
-	}
-	if fl.OSUser != "" {
-		user = fl.OSUser
-	}
+	// The machine and login are the node's, held to its enrollment
+	// (nodeIdentity, task MPCX) — never the fleet row's.
 	var req sessionCredIssueRequest
 	if err := readOptionalJSON(r, &req); err != nil {
 		sessionCredRefuse(w, http.StatusBadRequest, "invalid_argument", "body: "+err.Error())

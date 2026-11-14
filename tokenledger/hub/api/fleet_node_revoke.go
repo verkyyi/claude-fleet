@@ -117,6 +117,7 @@ func (s *Server) handleNodeRevoke(w http.ResponseWriter, r *http.Request) {
 // instead, outside the set's lock), its relay credential, the cached verdicts
 // on its passes.
 func (s *Server) revokeNodeRest(ep *store.Endpoint, now time.Time, closeLink bool) (relay, linkClosed bool) {
+	s.forgetIdentity(ep.ID)
 	s.sessCred.drop("")
 	host, osUser := s.nodeIdentity(ep)
 	if host != "" && osUser != "" {

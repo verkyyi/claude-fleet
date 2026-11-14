@@ -801,6 +801,12 @@ func (s *Server) handleNodeClient(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if owner == "" && !s.ownerlessOperator(ep.ID) {
+		// Nobody's login holds the operator's lease only from the operator's
+		// own node (task MPCX).
+		httpError(w, http.StatusForbidden, errOwnerless.Error())
+		return
+	}
 	now := time.Now()
 	if r.Method == http.MethodPost {
 		s.nodeClientAct(w, r, owner, host+"/"+user, now)

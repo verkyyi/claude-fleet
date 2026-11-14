@@ -113,14 +113,15 @@ func (s *Store) LiveJoinCodes(label, machine string, cutoff, now time.Time) (int
 // RedeemJoinCode spends a code and enrolls an agent endpoint under it, in one
 // transaction. label names the endpoint when the code carries none.
 func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label, tokenHash, host, osUser string) error {
+	defer s.identityChanged()
 	tx, err := s.write.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var codeLabel, kind, trust, role, machine string
-	err = tx.QueryRow(`SELECT label, kind, trust, role, machine FROM fleet_join_codes
-		WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`, codeHash, fmtTime(now)).Scan(&codeLabel, &kind, &trust, &role, &machine)
+	var codeLabel, kind, trust, role, machine, deviceFP string
+	err = tx.QueryRow(`SELECT label, kind, trust, role, machine, device_fp FROM fleet_join_codes
+		WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?`, codeHash, fmtTime(now)).Scan(&codeLabel, &kind, &trust, &role, &machine, &deviceFP)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrJoinCode
 	}
@@ -169,6 +170,28 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 	if enrolled == "" {
 		enrolled = "?"
 	}
+	// A device's code enrolls under a machine name no live endpoint holds
+	// (task MPCX): checked and inserted in this one transaction — SQLite's
+	// writer is one connection and claimWrites takes its lock up front;
+	// Postgres serializes on a transaction lock for the name — so two
+	// enrollments can never both take one name.
+	if deviceFP != "" && enrolled != "?" {
+		if err := s.d.claimWrites(tx, "endpoints"); err != nil {
+			return err
+		}
+		name := lowerFirstLabel(enrolled)
+		if err := s.d.lockKey(tx, "endpoints", "enrolled_host:"+name); err != nil {
+			return err
+		}
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM endpoints WHERE retired_at IS NULL
+			AND (LOWER(enrolled_host) = ? OR LOWER(enrolled_host) LIKE ? ESCAPE '\')`, name, likeDotted(name)).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			return ErrHostTaken
+		}
+	}
 	// enrolled_user is the login it joined as (task MPCX), written once
 	// here: the hub's authorization reads it, never a later report.
 	if _, err := tx.Exec(`INSERT INTO endpoints (endpoint_id, account_uuid, label, token_hash, enrolled_at, kind, hostname, os_user, node_kind,
@@ -179,6 +202,10 @@ func (s *Store) RedeemJoinCode(codeHash string, now time.Time, endpointID, label
 	}
 	return tx.Commit()
 }
+
+// ErrHostTaken: a device's code named a machine a live endpoint already
+// enrolled as (task MPCX); nothing is spent.
+var ErrHostTaken = errors.New("this machine name is taken")
 
 // openedLoginOf is the login a code minted for one opened login names
 // (api loginJoinCode: label `<machine>-<login>`, the machine pinned, managed,
@@ -245,17 +272,33 @@ func (s *Store) DeviceNodeEndpoint(deviceFP string) (string, error) {
 	return id, err
 }
 
+// LiveSeatOn is the newest live admin-role endpoint whose ENROLLED machine is
+// host — the full name, any case (task MPCX): the seat a machine's program
+// enrolled as host may reuse. Never a reported name, never another machine
+// that shares a first label (`mac-a.home` is not `mac-a.office`);
+// ErrNoSuchEndpoint when none.
+func (s *Store) LiveSeatOn(host, login string) (string, error) {
+	if host == "" || host == "?" {
+		return "", ErrNoSuchEndpoint
+	}
+	var id string
+	err := s.read.QueryRow(`SELECT endpoint_id FROM endpoints
+		WHERE enrolled_user = ? AND retired_at IS NULL AND LOWER(enrolled_host) = LOWER(?)
+		ORDER BY enrolled_at DESC LIMIT 1`, login, host).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "") {
+		return "", ErrNoSuchEndpoint
+	}
+	return id, err
+}
+
 // LiveEndpointOn is the newest live endpoint that ENROLLED as OS user osUser
-// on machine host (the login and the name it enrolled as — task MPCX — else,
-// for a row that never said them, the ones it reports); ErrNoSuchEndpoint when
-// none. The admin seat's token is reissued on it rather than a second node
-// minted (claude-fleet#3724).
+// on machine host — the enrolled login and name only, never a reported one
+// (task MPCX); ErrNoSuchEndpoint when none.
 func (s *Store) LiveEndpointOn(host, osUser string) (string, error) {
 	var id string
 	err := s.read.QueryRow(`SELECT endpoint_id FROM endpoints
-		WHERE (enrolled_user = ? OR (enrolled_user = '' AND os_user = ?)) AND retired_at IS NULL
-		  AND (enrolled_host = ? OR (enrolled_host = '' AND hostname = ?))
-		ORDER BY enrolled_at DESC LIMIT 1`, osUser, osUser, host, host).Scan(&id)
+		WHERE enrolled_user = ? AND retired_at IS NULL AND enrolled_host = ?
+		ORDER BY enrolled_at DESC LIMIT 1`, osUser, host).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && id == "") {
 		return "", ErrNoSuchEndpoint
 	}
@@ -295,6 +338,7 @@ func (s *Store) EndReissueGrace(endpointID string) error {
 // once, and from then on DeviceNodeEndpoint finds it — a used code row, the
 // same audit trail every enrollment leaves.
 func (s *Store) LinkDeviceEndpoint(codeHash, deviceFP, endpointID string, now time.Time) error {
+	defer s.identityChanged()
 	ts := fmtTime(now)
 	_, err := s.write.Exec(`INSERT INTO fleet_join_codes (code_hash, label, kind, created_at, expires_at, used_at, endpoint_id, device_fp)
 		VALUES (?, '', ?, ?, ?, ?, ?, ?)`, codeHash, NodeKindFixed, ts, ts, ts, endpointID, deviceFP)

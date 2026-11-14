@@ -20,7 +20,7 @@ import (
 // and asks for its node pass.
 func (d *device) loginNode(t *testing.T, h *harness, host, osUser string) (int, map[string]any) {
 	t.Helper()
-	ts := time.Now().Unix()
+	ts := d.nextTS()
 	code, body := postJSON(t, h, control.LoginNodePath, map[string]any{"public_key": d.pub, "ts": ts,
 		"hostname": host, "os_user": osUser,
 		"sig": sshsig(t, d.signer, control.LoginNodeSigNamespace, []byte(control.LoginNodeSigMessage(ts)))})
@@ -183,7 +183,7 @@ func TestLoginNodeRevokedDevice(t *testing.T) {
 // client does when node.env already holds one.
 func (d *device) loginNodeAs(t *testing.T, h *harness, host, osUser, nodeTok string) (int, map[string]any) {
 	t.Helper()
-	ts := time.Now().Unix()
+	ts := d.nextTS()
 	b, _ := json.Marshal(map[string]any{"public_key": d.pub, "ts": ts, "hostname": host, "os_user": osUser,
 		"sig": sshsig(t, d.signer, control.LoginNodeSigNamespace, []byte(control.LoginNodeSigMessage(ts)))})
 	req, _ := http.NewRequest(http.MethodPost, h.http.URL+control.LoginNodePath, bytes.NewReader(b))

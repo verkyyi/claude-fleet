@@ -460,10 +460,13 @@ func TestMeUsage_FromScan_TwoLogins(t *testing.T) {
 	}
 	mini, box := meEndpoint(t, h, "ep_mini", "mini"), meEndpoint(t, h, "ep_box", "box")
 	stray, cbox := meEndpoint(t, h, "ep_stray", "stray"), meEndpoint(t, h, "ep_cbox", "cbox")
+	// Each login pushes through its own endpoint: usage is filed under the
+	// login an endpoint enrolled as (task MPCX), never one a push names.
+	boxNobody := meEndpoint(t, h, "ep_box_nobody", "box")
 	mini("claude", "bob", meEvent("claude-opus-5-5", 100, 10, now.Add(-2*time.Hour), "issue-1", "o/app"),
 		meEvent("claude-opus-5-5", 5, 0, now.Add(-3*24*time.Hour), "", ""))
 	box("codex", "bobby", meEvent("gpt-5.4-codex", 1000, 0, now.Add(-24*time.Hour), "", ""))
-	box("claude", "nobody", meEvent("claude-opus-5-5", 50000, 0, now.Add(-time.Hour), "", ""))
+	boxNobody("claude", "nobody", meEvent("claude-opus-5-5", 50000, 0, now.Add(-time.Hour), "", ""))
 	stray("claude", "bob", meEvent("claude-opus-5-5", 70000, 0, now.Add(-time.Hour), "", ""))
 	cbox("claude", "carol", meEvent("claude-opus-5-5", 9000, 0, now.Add(-time.Hour), "", ""))
 	for _, a := range []struct {

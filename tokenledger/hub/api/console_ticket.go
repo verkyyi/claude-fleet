@@ -222,12 +222,8 @@ func (s *Server) handleNodeConsoleTicket(w http.ResponseWriter, r *http.Request)
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if fl.Hostname != "" {
-		host = fl.Hostname
-	}
-	if fl.OSUser != "" {
-		user = fl.OSUser
-	}
+	// The machine and login are the node's, held to its enrollment
+	// (nodeIdentity, task MPCX) — never the fleet row's.
 	var req struct {
 		Next   string `json:"next"`
 		TTLSec int    `json:"ttl_sec"`

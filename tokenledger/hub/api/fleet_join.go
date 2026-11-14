@@ -232,6 +232,9 @@ type NodeJoinResponse struct {
 	// person's, empty when it is. The client keeps no node-login.ok then and
 	// says the reason, rather than believe it is bound.
 	AccountRefused string `json:"account_refused,omitempty"`
+	// EntryNote: the device road's login is one SSH entry, the door and peer
+	// certificates do not serve — the node runs sessions only (task MPCX).
+	EntryNote string `json:"entry_note,omitempty"`
 }
 
 // handleNodeJoin trades a join code for an enrollment token. No credential
@@ -279,7 +282,7 @@ func (s *Server) handleNodeJoin(w http.ResponseWriter, r *http.Request) {
 // login's node pass, claude-fleet#2212).
 func (s *Server) redeemJoin(r *http.Request, code, hostname, osUser string) (*NodeJoinResponse, error) {
 	host := sanitizeJoinField(hostname)
-	osUser = sanitizeJoinField(osUser)
+	osUser = sanitizeJoinLogin(osUser) // a login is never cut at a dot (task MPCX)
 	label := host
 	if osUser != "" && host != "" {
 		label = host + "-" + osUser

@@ -63,6 +63,7 @@ func randomLowerAlnum(n int) (string, error) {
 // create. valid is the node's login whitelist (a candidate it refuses is
 // skipped).
 func (s *Store) CreateSpare(hostname string, valid func(string) bool, at time.Time) (*FleetAccount, error) {
+	defer s.identityChanged()
 	if hostname == "" {
 		return nil, errors.New("empty hostname")
 	}
@@ -136,6 +137,7 @@ func (s *Store) SpareAccounts() ([]FleetAccount, error) {
 // all three (claude-fleet#4673, spareCheckedSQL): a machine's spare never
 // checked is never handed. A pod (its cluster's, never checked) passes false.
 func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time, checked bool) (*FleetAccount, error) {
+	defer s.identityChanged()
 	to = strings.TrimSpace(to)
 	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
 		return nil, fmt.Errorf("principal id %q cannot claim a spare", to)
@@ -218,6 +220,7 @@ func (s *Store) ClaimSpare(hostname, to, displayName, actor string, at time.Time
 // not recorded (ClaimSpare is that road); ErrNoSpare when hostname has none
 // ready — checked as ClaimSpare (claude-fleet#4673).
 func (s *Store) ClaimSpareFor(hostname, to, actor string, at time.Time, checked bool) (*FleetAccount, error) {
+	defer s.identityChanged()
 	to = strings.TrimSpace(to)
 	if to == "" || IsSparePrincipal(to) || to == PoolPrincipal {
 		return nil, fmt.Errorf("principal id %q cannot claim a spare", to)
