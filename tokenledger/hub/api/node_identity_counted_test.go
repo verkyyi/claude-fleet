@@ -48,8 +48,13 @@ func (d *countingDriver) record(q string) {
 	}
 }
 
-// measure runs f and answers the statements it prepared.
+// measure runs f and answers the statements it prepared (nil, f run all the
+// same, for a nil driver: the Postgres leg).
 func (d *countingDriver) measure(f func()) []string {
+	if d == nil {
+		f()
+		return nil
+	}
 	d.mu.Lock()
 	d.stmts = nil
 	d.mu.Unlock()
@@ -91,11 +96,13 @@ var (
 	counting     *countingDriver
 )
 
-// countedHarness is bobHarness on a store whose statements are counted.
+// countedHarness is bobHarness on a store whose statements are counted; on
+// the Postgres leg the store is not wrapped and the driver is nil — the roads
+// still run, only the counts are SQLite's.
 func countedHarness(t *testing.T) (*harness, *countingDriver) {
 	t.Helper()
 	if os.Getenv("CCQUOTA_DB_URL") != "" {
-		t.Skip("counts SQLite statements")
+		return bobHarness(t), nil
 	}
 	countingOnce.Do(func() {
 		db, err := sql.Open("sqlite", ":memory:")
@@ -311,6 +318,9 @@ func TestNodeIdentityCountedCost(t *testing.T) {
 			time.Sleep(150 * time.Millisecond)
 		}
 	})
+	if cnt == nil {
+		return // the Postgres leg ran the roads; the counts are SQLite's
+	}
 	per := len(q) / beats
 	t.Logf("statements per machine-program heartbeat (one fleet, warm): %d", per)
 	if per > heartbeatStmtBudget {
