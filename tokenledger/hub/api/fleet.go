@@ -473,6 +473,11 @@ func (s *Server) visibleFleets(p fleetPrincipal, now time.Time) ([]FleetView, []
 		if !p.sees(r.Hostname, r.OSUser) {
 			continue
 		}
+		// A person sees, and places on, another device's fleet never — even
+		// one enrolled under their machine and login (task MPCX).
+		if p.Person != "" && !s.linkServes(r.EndpointID, p.Person) {
+			continue
+		}
 		a := avail[r.EndpointID]
 		if a == "" {
 			a = "lost"

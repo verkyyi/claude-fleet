@@ -1227,7 +1227,7 @@ drill_node_identity_machine_report() {
 # hub holds a node to, never its report.
 drill_node_identity_device_road() {
   CAP=120; local t0 out tests
-  tests='TestNodeIdentityDeviceRoadNeedsALogin TestNodeIdentityRegistryRowIsHeld TestNodeIdentityDeviceIsNeverOperator TestNodeIdentityOwnerlessNodeActsForNoOne TestNodeIdentityDeviceTakesNoMachineTrust TestNodeLeaseForceStaysInTheFamily TestNodeIdentityUsageUnderTheEnrolledLogin TestLoginNodeCannotSelfTrust TestRelayOwnerBoundary TestNodeIdentityLinkedEndpointIsTheDevices TestNodeIdentityWorkerMapIsTheHeldLogins TestNodeIdentitySpareLoginIsNotTheOperators TestNodeIdentityMachineIDTakeover TestNodeIdentityDeviceLoginsAsTheyAre TestNodeIdentityDevicesSharingANameEachTheirOwn TestNodeIdentityDeviceLoginEntryNote TestNodeIdentityServiceShipperIsQuiet'
+  tests='TestNodeIdentityDeviceRoadNeedsALogin TestNodeIdentityRegistryRowIsHeld TestNodeIdentityDeviceIsNeverOperator TestNodeIdentityOwnerlessNodeActsForNoOne TestNodeIdentityDeviceTakesNoMachineTrust TestNodeLeaseForceStaysInTheFamily TestNodeIdentityUsageUnderTheEnrolledLogin TestLoginNodeCannotSelfTrust TestRelayOwnerBoundary TestNodeIdentityLinkedEndpointIsTheDevices TestNodeIdentityWorkerMapIsTheHeldLogins TestNodeIdentitySpareLoginIsNotTheOperators TestNodeIdentityMachineIDTakeover TestNodeIdentityDeviceLoginsAsTheyAre TestNodeIdentityDevicesSharingANameEachTheirOwn TestNodeIdentityDeviceLoginEntryNote TestNodeIdentityServiceShipperIsQuiet TestNodeIdentityGroundSuffixBuysNothing TestNodeIdentityConcurrentDeviceNames TestNodeIdentityReplayCodeAndFullSeatName'
   t0=$(now)
   for out in $tests; do
     grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
@@ -1237,10 +1237,10 @@ drill_node_identity_device_road() {
   grep -q 'machineHolderOK(tx, machineID, endpointID, at)' "$ROOT/tokenledger/hub/store/fleet.go" \
     || { WHY="a snapshot's machine id is no longer bound to the node that holds it"; return 1; }
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
-    0) WHAT='设备路按原样记登录（大小写、_ - .、32 位内），root 与无登录记成本人的别名、永不是机器程序；同名同登录的两台设备各有自己的节点、绑各自的人，谁也不被拒；签过的请求只答一次、按来源与设备限速；登录不在 SSH 入口范围的节点通行证上写明；只上报用量的服务不动身份缓存；后来绑到设备的端点也算设备；老的未记登录的设备端点不当机器程序、首报不记成 root；登记行按入册身份写、machine_id 不被活着的别的节点改指（久未出声、同机未记登录可接手，花名册上写明）；设备、开出来还没人认的登录都不是运营者；运营者绑过设备的电脑照旧；名字另有端点入册时设备不继承信任；--force 只收自家租约；用量与 worker 图按入册登录（go test 十七条）' ;;
+    0) WHAT='设备路按原样记登录（大小写、_ - .、32 位内），root 与无登录记成本人的别名、永不是机器程序；同名同登录的两台设备各有自己的节点、绑各自的人，谁也不被拒；签过的请求只答一次、按来源与设备限速；登录不在 SSH 入口范围的节点通行证上写明；只上报用量的服务不动身份缓存；后来绑到设备的端点也算设备；老的未记登录的设备端点不当机器程序、首报不记成 root；登记行按入册身份写、machine_id 不被活着的别的节点改指（久未出声、同机未记登录可接手，花名册上写明）；设备、开出来还没人认的登录都不是运营者；运营者绑过设备的电脑照旧；名字另有端点入册时设备不继承信任；--force 只收自家租约；用量与 worker 图按入册登录；带后缀的名字同样复查、不够就加长、入库时原子地防重名，算出同一后缀也拿不到别人的名字；中继与会话列表只给设备自己那个人（go test 二十条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十七条测试按名核对在' ;;
-    3) WHAT='没有 go：十七条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；二十条测试按名核对在' ;;
+    3) WHAT='没有 go：二十条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }

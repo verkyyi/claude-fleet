@@ -87,9 +87,10 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 			"the signed timestamp is too far from the hub's clock — check this computer's time")
 		return
 	}
-	// The source's budget first (task MPCX): a flood never reaches the
-	// signature check unbounded.
-	if !s.loginNodeBudgets().source.allow(r, now) {
+	// A generous budget per source before the signature (task MPCX): a flood
+	// never reaches the check unbounded, and one caller behind a shared
+	// address cannot spend everyone's; the tight ones come after it.
+	if !s.loginNodeBudgets().pre.allow(r, now) {
 		w.Header().Set("Retry-After", "60")
 		refuseJSON(w, http.StatusTooManyRequests, "rate_limited", "too many node passes asked — try again in a minute")
 		return
@@ -98,9 +99,10 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 		refuseJSON(w, http.StatusUnauthorized, "bad_signature", "node pass signature refused: "+err.Error())
 		return
 	}
-	// Then the device key's own budget — after its signature, so nobody
-	// holding only its public key can spend it.
-	if !s.loginNodeBudgets().device.allowFrom(fpAddr(fp), now) {
+	// Then the source's and the device key's own budgets — after the
+	// signature, so nobody holding only a public key, or only an address,
+	// can spend them.
+	if !s.loginNodeBudgets().source.allow(r, now) || !s.loginNodeBudgets().device.allowFrom(fpAddr(fp), now) {
 		w.Header().Set("Retry-After", "60")
 		refuseJSON(w, http.StatusTooManyRequests, "rate_limited", "too many node passes asked for this computer — try again in a minute")
 		return
@@ -109,7 +111,7 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	// sent again inside the clock window is refused, not answered with a
 	// fresh token. Kept per replica.
 	if !s.loginNodeOnce(fp, req.TS, now) {
-		refuseJSON(w, http.StatusUnauthorized, "bad_signature", "this signed request was already used — sign a new one")
+		refuseJSON(w, http.StatusUnauthorized, "request_replayed", "this signed request was already answered — sign a new one")
 		return
 	}
 	dev, ok := s.usableDevice(w, fp, store.DeviceNodePassRefused, now)
@@ -135,7 +137,12 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	var tn *trustedNameErr
 	var mm *machineManagedErr
 	var rl *reservedLoginErr
+	var nt *nameTakenErr
 	switch {
+	case errors.As(err, &nt):
+		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
+		refuseJSON(w, http.StatusConflict, "name_taken", err.Error())
+		return
 	case errors.As(err, &tn):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
 		refuseJSON(w, http.StatusConflict, "trusted_name", err.Error())
@@ -311,16 +318,31 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 			}
 		}
 	}
-	code, err := MintJoinCode()
-	if err != nil {
-		return nil, err
+	// The first free name of deviceHosts; the store refuses, atomically, a
+	// name a live endpoint holds — then the next is tried (task MPCX).
+	var out *NodeJoinResponse
+	for _, host := range s.deviceHosts(pid, fp, hostname) {
+		code, err := MintJoinCode()
+		if err != nil {
+			return nil, err
+		}
+		if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
+			return nil, err
+		}
+		out, err = s.redeemJoin(r, code, host, login)
+		if errors.Is(err, store.ErrHostTaken) {
+			// The code stays unspent: minted here, never shown, gone at
+			// its TTL.
+			out = nil
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		break
 	}
-	if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
-		return nil, err
-	}
-	out, err := s.redeemJoin(r, code, s.deviceHost(pid, fp, hostname), login)
-	if err != nil {
-		return nil, err
+	if out == nil {
+		return nil, &nameTakenErr{sanitizeJoinField(hostname)}
 	}
 	now := time.Now()
 	s.noteDeviceLogin(out, pid, fp, out.EndpointID, osUser, now)
@@ -331,34 +353,69 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 	return out, nil
 }
 
-// deviceHost is the machine name a device road enrolls a new node under (task
-// MPCX): the reported name, unless another live endpoint enrolled as it or
-// someone else's login is recorded there — a default name like MacBook-Pro
-// that another person's device, or another of this person's computers,
-// already holds — then the name with four hex of this device's fingerprint
-// (`MacBook-Pro-1a2b`). A machine name stays unique to one enrollment, so
-// every lookup by machine and login (relays, chat, terminals, peer
-// certificates, placement, a person's view) reaches this device's node and
-// no one else's; nobody is refused a node because another device used the
-// same name first. An unreadable answer reads as taken.
-func (s *Server) deviceHost(pid, fp, hostname string) string {
-	host := sanitizeJoinField(hostname)
-	if host == "" {
-		return host
-	}
-	taken, err := s.Store.EnrolledByAnother("", host)
-	if err == nil && !taken {
-		taken, err = s.Store.HostHeldByOthers(host, pid)
-	}
-	if err == nil && !taken {
-		return host
+// deviceHosts are the machine names a device road may enroll a new node
+// under, in order (task MPCX): the reported name, then the name with 4, 8 and
+// 16 hex of this device's fingerprint (`MacBook-Pro-1a2b`) — each only if it
+// passes the same checks: no other live endpoint enrolled as it, no one else's
+// login recorded there, no trust word for it (trusted or untrusted), not a
+// user pod's name. A machine name stays unique to one enrollment, so every
+// lookup by machine and login reaches this device's node and no one else's;
+// nobody is refused because another device used the name first. The store
+// re-checks the chosen name atomically at the insert (store.ErrHostTaken).
+func (s *Server) deviceHosts(pid, fp, hostname string) []string {
+	base := sanitizeJoinField(hostname)
+	if base == "" {
+		return []string{""}
 	}
 	sum := sha256.Sum256([]byte(fp))
-	suffix := "-" + hex.EncodeToString(sum[:2])
-	if len(host)+len(suffix) > 32 {
-		host = host[:32-len(suffix)]
+	full := hex.EncodeToString(sum[:])
+	var out []string
+	for i, n := range []int{0, 4, 8, 16} {
+		name := base
+		if i > 0 {
+			suffix := "-" + full[:n]
+			b := base
+			if len(b)+len(suffix) > 32 {
+				b = b[:32-len(suffix)]
+			}
+			name = b + suffix
+		}
+		if s.deviceNameFree(pid, name) {
+			out = append(out, name)
+		}
 	}
-	return host + suffix
+	return out
+}
+
+// deviceNameFree: name passes deviceHosts' checks for pid. An unreadable
+// answer is no.
+func (s *Server) deviceNameFree(pid, name string) bool {
+	if isUserPodName(name) {
+		return false
+	}
+	settings, err := s.Store.FleetSettings()
+	if err != nil {
+		return false
+	}
+	if _, ok := settings[trustKey(name)]; ok {
+		return false
+	}
+	if _, ok := settings[trustKey(firstLabel(name))]; ok {
+		return false
+	}
+	if taken, err := s.Store.EnrolledByAnother("", name); err != nil || taken {
+		return false
+	}
+	held, err := s.Store.HostHeldByOthers(name, pid)
+	return err == nil && !held
+}
+
+// nameTakenErr: every name a device road could enroll a new node under is
+// taken.
+type nameTakenErr struct{ name string }
+
+func (e *nameTakenErr) Error() string {
+	return fmt.Sprintf("no free machine name for %s on this hub — rename this computer and run fleet login again", e.name)
 }
 
 // noteDeviceLogin records the device's login (deviceRoadLogin) on endpointID's
@@ -610,11 +667,12 @@ func (s *Server) recordLoginAccount(pid, fp, endpointID, osUser string, now time
 
 // loginNodeLimits are the node-pass road's budgets (task MPCX): per source
 // address, and per device key (fpAddr). Per replica, like every clientBudget.
-type loginNodeLimits struct{ source, device *clientBudget }
+type loginNodeLimits struct{ pre, source, device *clientBudget }
 
 func (s *Server) loginNodeBudgets() *loginNodeLimits {
 	s.loginNodeInit.Do(func() {
 		s.loginNodeLim = &loginNodeLimits{
+			pre:    &clientBudget{burst: 600, perSec: 600.0 / 60, max: 4096},
 			source: &clientBudget{burst: 60, perSec: 60.0 / 60, max: 4096},
 			device: &clientBudget{burst: 12, perSec: 12.0 / 60, max: 4096},
 		}

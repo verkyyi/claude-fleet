@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -123,15 +122,8 @@ func (s *Server) issueAdminToken(r *http.Request, host, login, seat string, now 
 		out.EndpointID, out.Outcome = seat, "reissued"
 		return out, nil
 	}
-	if id, err := s.Store.LiveEndpointOn(host, login); err == nil {
-		if err := s.Store.RotateEndpointToken(id, HashToken(tok), now, ReissueTokenGrace); err != nil {
-			return nil, err
-		}
-		out.EndpointID, out.Outcome = id, "reissued"
-		return out, nil
-	} else if !errors.Is(err, store.ErrNoSuchEndpoint) {
-		return nil, err
-	}
+	// No seat on this enrolled machine (seatOf): a new one, pinned to it —
+	// never one found by a reported name (task MPCX).
 	code, err := MintJoinCode()
 	if err != nil {
 		return nil, err

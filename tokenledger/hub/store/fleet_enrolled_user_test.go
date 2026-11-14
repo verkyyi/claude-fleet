@@ -2,6 +2,8 @@ package store
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -108,5 +110,42 @@ func TestEnrolledUserBackfillSkipsDeviceHeldLogins(t *testing.T) {
 	}
 	if et, _ := s.EndpointTrustOf("ep_ops"); et.EnrolledUser != "root" {
 		t.Errorf("an operator's endpoint backfilled as %q; want root, as before", et.EnrolledUser)
+	}
+}
+
+// Two device codes redeemed at once under one machine name: exactly one
+// enrolls, the other is ErrHostTaken and spends nothing (task MPCX) — on
+// SQLite the one writer, on Postgres the name's transaction lock.
+func TestDeviceEnrollmentNameIsTakenOnce(t *testing.T) {
+	s := taskStore(t)
+	now := time.Now()
+	for round := 0; round < 10; round++ {
+		host := fmt.Sprintf("race-%d", round)
+		var wg sync.WaitGroup
+		errs := make([]error, 2)
+		for i := 0; i < 2; i++ {
+			code := fmt.Sprintf("dc-%d-%d", round, i)
+			if err := s.CreateJoinCodeForDevice(code, fmt.Sprintf("SHA256:d%d", i), now, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			wg.Add(1)
+			go func(i int, code string) {
+				defer wg.Done()
+				errs[i] = s.RedeemJoinCode(code, now, fmt.Sprintf("ep_%d_%d", round, i), host, "h"+code, host, "sam")
+			}(i, code)
+		}
+		wg.Wait()
+		taken := 0
+		for _, err := range errs {
+			switch {
+			case errors.Is(err, ErrHostTaken):
+				taken++
+			case err != nil:
+				t.Fatalf("round %d: %v", round, err)
+			}
+		}
+		if taken != 1 {
+			t.Fatalf("round %d: %d of 2 refused; want exactly 1 (errors %v)", round, taken, errs)
+		}
 	}
 }

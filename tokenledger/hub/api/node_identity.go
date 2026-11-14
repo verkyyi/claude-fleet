@@ -235,17 +235,10 @@ type enrollRec struct {
 // unreadable record reads as the most held one: a member's device, pinned, a
 // pod — never the operator's own; it is not cached.
 func (s *Server) enrollment(endpointID string) enrollRec {
-	gen := s.Store.IdentityGen()
-	var e store.EndpointEnrollment
-	if v, ok := s.enrollCache.Load(endpointID); ok && v.(enrollEntry).gen == gen && time.Since(v.(enrollEntry).at) < identTTL {
-		e = v.(enrollEntry).rec
-	} else {
-		var err error
-		if e, err = s.Store.EnrollmentOf(endpointID); err != nil {
-			log.Printf("node %s: read how it enrolled: %v", endpointID, err)
-			return enrollRec{EndpointEnrollment: store.EndpointEnrollment{ByDevice: true, Pinned: true, Pod: true}, Member: true}
-		}
-		s.cacheStore(&s.enrollCache, &s.enrollCount, endpointID, enrollEntry{gen: gen, at: time.Now(), rec: e})
+	e, err := s.enrollmentRaw(endpointID)
+	if err != nil {
+		log.Printf("node %s: read how it enrolled: %v", endpointID, err)
+		return enrollRec{EndpointEnrollment: store.EndpointEnrollment{ByDevice: true, Pinned: true, Pod: true}, Member: true}
 	}
 	// Whether a device's person is an admin is read every time, never
 	// cached (task MPCX): a demotion or a revoked device counts at once.
@@ -257,6 +250,69 @@ func (s *Server) enrollment(endpointID string) enrollRec {
 		}
 	}
 	return rec
+}
+
+// enrollmentRaw is the join-code facts alone (cached; no person's role read).
+func (s *Server) enrollmentRaw(endpointID string) (store.EndpointEnrollment, error) {
+	gen := s.Store.IdentityGen()
+	if v, ok := s.enrollCache.Load(endpointID); ok && v.(enrollEntry).gen == gen && time.Since(v.(enrollEntry).at) < identTTL {
+		return v.(enrollEntry).rec, nil
+	}
+	e, err := s.Store.EnrollmentOf(endpointID)
+	if err != nil {
+		return e, err
+	}
+	s.cacheStore(&s.enrollCache, &s.enrollCount, endpointID, enrollEntry{gen: gen, at: time.Now(), rec: e})
+	return e, nil
+}
+
+// loginOwner is the person whose active account (host, login) is ("" for
+// none): whom a relay to that login is for.
+func (s *Server) loginOwner(host, login string) string {
+	p, err := s.Store.PrincipalForLogin(host, login)
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// linkServes: the link of endpointID may carry traffic meant for owner's
+// login (task MPCX). A device's link carries only its own person's — never
+// another person's, whatever machine and login it enrolled as — and a login
+// no one owns only when the device is an admin's own; any other link as
+// before. An unreadable record carries nothing.
+func (s *Server) linkServes(endpointID, owner string) bool {
+	e, err := s.enrollmentRaw(endpointID)
+	if err != nil {
+		return false
+	}
+	if !e.ByDevice {
+		return true
+	}
+	if owner == "" {
+		// A login no person owns: the operator's. Only the operator's own
+		// device carries it (its people all admins) — a linked computer of
+		// theirs that never recorded a login.
+		saw := false
+		for _, p := range e.DevicePeople {
+			if p == "" || !s.isOperator(p) {
+				return false
+			}
+			saw = true
+		}
+		return saw
+	}
+	saw := false
+	for _, p := range e.DevicePeople {
+		if p == "" {
+			continue
+		}
+		if !strings.EqualFold(p, owner) {
+			return false
+		}
+		saw = true
+	}
+	return saw
 }
 
 type enrollEntry struct {
@@ -398,21 +454,15 @@ var errNodeDrift = errors.New("this node reports a login other than the one it e
 // routeSelf is the machine and login a link is routed to by (task MPCX): the
 // identity nodeSelf holds it to — so a report naming another person's machine
 // or login moves none of their relays, chats, terminals, service logs, svc
-// runs or previews onto this link — except one shape: a member's device whose
-// machine name moved (a renamed laptop) to a name nothing else on the hub
-// holds — no other endpoint reports it, no login is open on it, it is no
-// machine the hub has a trust word for — keeps that name, since its sessions
-// are listed under it. Its login stays held either way. Cached with nodeSelf's
-// answer.
+// runs or previews onto this link. A member's renamed laptop is routed to
+// under the name it enrolled as, where its person's login is recorded and its
+// sessions are listed. Cached with nodeSelf's answer.
 func (s *Server) routeSelf(ep *store.Endpoint, id nodeIdent) (host, user string) {
 	if h, u, ok := s.routeCached(ep.ID, id); ok {
 		return h, u
 	}
 	gen := s.Store.IdentityGen()
 	host, user = id.Host, id.User
-	if id.HostDrift && id.Member && id.ReportedHost != "" && !s.hostClaimed(ep.ID, id.ReportedHost) {
-		host = id.ReportedHost
-	}
 	s.routeStore(ep.ID, id, gen, host, user)
 	return host, user
 }
@@ -516,35 +566,4 @@ func (s *Server) routeStore(endpointID string, id nodeIdent, gen uint64, host, u
 	}
 	e.routed, e.rHost, e.rUser = true, host, user
 	s.cacheStore(&s.identCache, &s.identCount, endpointID, e)
-}
-
-// hostClaimed: host names a machine the hub knows apart from endpointID — a
-// trust word for it, a login open on it, or another endpoint reporting it. An
-// unreadable answer is a yes.
-func (s *Server) hostClaimed(endpointID, host string) bool {
-	settings, err := s.Store.FleetSettings()
-	if err != nil {
-		return true
-	}
-	if _, ok := settings[trustKey(host)]; ok {
-		return true
-	}
-	if accts, err := s.Store.ActiveAccountsOn(host); err != nil || len(accts) > 0 {
-		return true
-	}
-	if fl := firstLabel(host); fl != host {
-		if accts, err := s.Store.ActiveAccountsOn(fl); err != nil || len(accts) > 0 {
-			return true
-		}
-	}
-	rows, err := s.Store.Nodes()
-	if err != nil {
-		return true
-	}
-	for _, n := range rows {
-		if n.EndpointID != endpointID && (sameMachine(n.Hostname, host) || sameMachine(host, n.Hostname)) {
-			return true
-		}
-	}
-	return false
 }

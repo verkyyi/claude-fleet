@@ -416,15 +416,15 @@ func TestNodeIdentityReReportIsNotRoutedTo(t *testing.T) {
 		t.Errorf("chat for bob@bob-mbp: %s %v; want his device %s", id, err, bob.id)
 	}
 
-	// His laptop renamed to a name nothing else holds: its sessions are
-	// listed under the new name, and it is routed to under it — as bob.
+	// His laptop renamed: its sessions are listed, and it is routed to, under
+	// the name it enrolled as — where his login is recorded (task MPCX).
 	reReport(t, h, bob, "bob-mbp-2", "bob", false)
-	waitFor(t, 3*time.Second, "routed as bob@bob-mbp-2", func() bool {
+	waitFor(t, 3*time.Second, "routed as bob@bob-mbp", func() bool {
 		c := h.srv.nodes.get(bob.id)
-		return c != nil && c.hostname() == "bob-mbp-2" && c.user() == "bob"
+		return c != nil && c.hostname() == "bob-mbp" && c.user() == "bob"
 	})
-	if id, _, err := h.srv.chatRelayNode("bob-mbp-2", "bob"); err != nil || id != bob.id {
-		t.Errorf("chat for bob@bob-mbp-2: %s %v; want his device %s", id, err, bob.id)
+	if id, _, err := h.srv.chatRelayNode("bob-mbp", "bob"); err != nil || id != bob.id {
+		t.Errorf("chat for bob@bob-mbp after the rename: %s %v; want his device %s", id, err, bob.id)
 	}
 	// ... but a renamed laptop never takes another login with it.
 	reReport(t, h, bob, "bob-mbp-2", "alice", false)

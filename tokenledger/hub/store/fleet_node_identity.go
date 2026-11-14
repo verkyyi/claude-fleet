@@ -171,28 +171,6 @@ func (s *Store) PodEnrolled(endpointID string) (bool, error) {
 	return n > 0, err
 }
 
-// MachineEnrolledByOthers: a live endpoint other than endpointID, enrolled by
-// any road but a device's, enrolled as machine (first label, any case)
-// — the name is a machine's, not only a device's (task MPCX). Names are
-// matched literally (likeDotted).
-func (s *Store) MachineEnrolledByOthers(endpointID, machine string) (bool, error) {
-	if i := strings.IndexByte(machine, '.'); i > 0 {
-		machine = machine[:i]
-	}
-	machine = strings.ToLower(machine)
-	if machine == "" {
-		return false, nil
-	}
-	var n int
-	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints e
-		WHERE e.retired_at IS NULL AND e.endpoint_id <> ?
-		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ? ESCAPE '\')
-		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
-		      AND c.device_fp <> '' AND c.used_at IS NOT NULL)`,
-		endpointID, machine, likeDotted(machine)).Scan(&n)
-	return n > 0, err
-}
-
 // MachineProgramEnrolledAs: a live endpoint other than endpointID enrolled as
 // machine (first label, any case) as root by any road but a device's — that
 // machine's own node program (task MPCX). Names are matched

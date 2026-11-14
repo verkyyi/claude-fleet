@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -135,9 +137,6 @@ func TestNodeIdentityNamesMatchLiterally(t *testing.T) {
 	for _, name := range []string{"%", "_", "mac_a", "ma%", `mac\`} {
 		if ok, err := st.EnrolledByAnother("nobody", name); err != nil || ok {
 			t.Errorf("EnrolledByAnother(%q) = %v %v; want no", name, ok, err)
-		}
-		if ok, err := st.MachineEnrolledByOthers("nobody", name); err != nil || ok {
-			t.Errorf("MachineEnrolledByOthers(%q) = %v %v; want no", name, ok, err)
 		}
 		if ok, err := st.MachineProgramEnrolledAs("nobody", name); err != nil || ok {
 			t.Errorf("MachineProgramEnrolledAs(%q) = %v %v; want no", name, ok, err)
@@ -433,4 +432,182 @@ func newDeviceScanned(t *testing.T, h *harness, pid, host string) *device {
 	d := newDevice(t)
 	d.scan(t, h, pid, host)
 	return d
+}
+
+// grindDevice generates device keys until one's fingerprint gives the 4-hex
+// suffix want (deviceHosts' first suffix) — what a member could do offline.
+func grindDevice(t *testing.T, want string) *device {
+	t.Helper()
+	for i := 0; i < 1<<20; i++ {
+		d := newDevice(t)
+		sum := sha256.Sum256([]byte(d.fp))
+		if hex.EncodeToString(sum[:2]) == want {
+			return d
+		}
+	}
+	t.Fatalf("no key ground for %s", want)
+	return nil
+}
+
+func enrolledHostOf(t *testing.T, h *harness, ep string) string {
+	t.Helper()
+	et, err := h.srv.Store.EndpointTrustOf(ep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return et.EnrolledHost
+}
+
+// A ground fingerprint never buys another device's suffixed name: the final
+// name is checked like the reported one and the next, longer suffix is taken.
+// And should two links ever share a machine and login (an older hub's rows),
+// a person's chat, terminal, entry and SSH relays pick only their own
+// person's device — with the owner offline, none — and a device never takes
+// a trusted name another endpoint enrolled as.
+func TestNodeIdentityGroundSuffixBuysNothing(t *testing.T) {
+	h := bobHarness(t)
+	memberDeviceNode(t, h, pBob, "mbp", "bob", false) // Bob takes mbp
+	ad := newDevice(t)
+	ad.scan(t, h, pAlice, "mbp")
+	code, out := ad.loginNode(t, h, "mbp", "alice")
+	if code != 200 {
+		t.Fatalf("alice's device: %d %v", code, out)
+	}
+	alice := &fleetNode{token: out["token"].(string), id: out["endpoint_id"].(string)}
+	aliceHost := enrolledHostOf(t, h, alice.id)
+	if !strings.HasPrefix(aliceHost, "mbp-") || len(aliceHost) != len("mbp-")+4 {
+		t.Fatalf("alice's device enrolled as %q; want mbp-<4 hex>", aliceHost)
+	}
+
+	g := grindDevice(t, aliceHost[len("mbp-"):])
+	g.scan(t, h, pBob, "mbp")
+	code, out = g.loginNode(t, h, "mbp", "alice")
+	if code != 200 {
+		t.Fatalf("bob's ground device: %d %v", code, out)
+	}
+	bobG := out["endpoint_id"].(string)
+	if got := enrolledHostOf(t, h, bobG); strings.EqualFold(got, aliceHost) {
+		t.Errorf("bob's ground key enrolled as alice's %s", got)
+	}
+
+	// An older hub's duplicate: force Bob's ground node onto Alice's name.
+	if _, err := h.srv.Store.DB().Exec(`UPDATE endpoints SET enrolled_host = ? WHERE endpoint_id = ?`, aliceHost, bobG); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.Store.TouchIdentity()
+	caps := []string{control.CapChat, control.CapTerm, control.CapSSHRelay, control.CapEntryRelay}
+	bc := dialHello(t, h, out["token"].(string), control.Hello{HeartbeatMS: 5000, Capabilities: caps})
+	beat(t, bc.c, control.Proto, control.Heartbeat{Hostname: "mbp", OSUser: "alice"})
+	waitFor(t, 3*time.Second, "bob's ground link as alice@"+aliceHost, func() bool {
+		c := h.srv.nodes.get(bobG)
+		return c != nil && c.hostname() == aliceHost && c.user() == "alice"
+	})
+	if who := h.srv.loginOwner(aliceHost, "alice"); who != pAlice {
+		t.Fatalf("owner of alice@%s = %q", aliceHost, who)
+	}
+	for name, pick := range map[string]func() (string, *nodeConn, error){
+		"chat":     func() (string, *nodeConn, error) { return h.srv.chatRelayNode(aliceHost, "alice") },
+		"terminal": func() (string, *nodeConn, error) { return h.srv.termRelayNode(aliceHost, "alice") },
+		"entry":    func() (string, *nodeConn, error) { return h.srv.entryRelayNode(aliceHost, "alice") },
+		"peer ssh": func() (string, *nodeConn, error) { return h.srv.peerSSHRelayNode(aliceHost, "alice") },
+		"ssh relay": func() (string, *nodeConn, error) {
+			return h.srv.sshRelayNode(sshRelayIdentity{Principal: pAlice}, aliceHost)
+		},
+	} {
+		if id, _, err := pick(); err == nil && id == bobG {
+			t.Errorf("%s for alice@%s (her node offline) picked bob's device", name, aliceHost)
+		}
+	}
+	// Alice's view of her machine never lists Bob's device's fleet.
+	f := fakeFleet(t, machineC, "fleet-g", "o/r", "/g", 1)
+	beat(t, bc.c, control.Proto, control.Heartbeat{Hostname: "mbp", OSUser: "alice", MachineID: machineC,
+		Fleets: []control.Fleet{f}, ObservedAt: time.Now()})
+	waitFor(t, 3*time.Second, "the ground fleet", func() bool { _, err := h.srv.Store.Fleet(f.FleetID); return err == nil })
+	scope := func(host, user string) bool { return strings.EqualFold(host, aliceHost) && user == "alice" }
+	_, rows, err := h.srv.visibleFleets(fleetPrincipal{Actor: pAlice, Person: pAlice, scope: scope}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.EndpointID == bobG {
+			t.Errorf("alice's view lists bob's device's fleet")
+		}
+	}
+
+	// Trust: Carol (an admin) has a device whose name the operator trusts; a
+	// member's device enrolled under that same name inherits nothing.
+	h.srv.Admins = append(h.srv.Admins, pCarol)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCarol, Hostname: "mac-e", Login: "carol"}); code != 200 {
+		t.Fatalf("adopt carol: %d", code)
+	}
+	cd := memberDeviceNode(t, h, pCarol, "carol-mini", "carol", false)
+	trustMachines(t, h, "carol-mini")
+	mb := memberDeviceNode(t, h, pBob, "bob-mini", "bob", false)
+	if _, err := h.srv.Store.DB().Exec(`UPDATE endpoints SET enrolled_host = 'carol-mini' WHERE endpoint_id = ?`, mb.id); err != nil {
+		t.Fatal(err)
+	}
+	h.srv.Store.TouchIdentity()
+	settings, _ := h.srv.trustSettings(time.Now())
+	if tr, src := h.srv.endpointTrust(mb.id, "carol-mini", settings); tr == TrustTrusted {
+		t.Errorf("a member's device on carol-mini's name: %s (%s); want untrusted", tr, src)
+	}
+	_ = cd
+}
+
+// Two devices enrolling under one reported name at the same moment end on two
+// names — the store refuses the second at the insert, atomically.
+func TestNodeIdentityConcurrentDeviceNames(t *testing.T) {
+	h := bobHarness(t)
+	if code := operatorPost(t, h, FleetAccountRequest{Action: "adopt", PrincipalID: pCarol, Hostname: "mac-e", Login: "carol"}); code != 200 {
+		t.Fatalf("adopt carol: %d", code)
+	}
+	for round := 0; round < 5; round++ {
+		name := fmt.Sprintf("race-%d", round)
+		devs := []*device{newDeviceScanned(t, h, pBob, name), newDeviceScanned(t, h, pCarol, name)}
+		logins := []string{"bob", "carol"}
+		eps := make([]string, 2)
+		var wg sync.WaitGroup
+		for i := range devs {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				code, out := devs[i].loginNode(t, h, name, logins[i])
+				if code == 200 {
+					eps[i], _ = out["endpoint_id"].(string)
+				}
+			}(i)
+		}
+		wg.Wait()
+		if eps[0] == "" || eps[1] == "" {
+			t.Fatalf("round %d: a device got no node: %v", round, eps)
+		}
+		if a, b := enrolledHostOf(t, h, eps[0]), enrolledHostOf(t, h, eps[1]); strings.EqualFold(a, b) {
+			t.Fatalf("round %d: both devices enrolled as %s", round, a)
+		}
+	}
+}
+
+// Small rules: a replayed node pass says so; a seat is matched by the full
+// enrolled name (mac-a.home's program never takes mac-a.office's seat).
+func TestNodeIdentityReplayCodeAndFullSeatName(t *testing.T) {
+	h := bobHarness(t)
+	h.srv.FleetAdmins = []string{"_fleetadmin"}
+	d := newDeviceScanned(t, h, pBob, "bob-r2")
+	ts := d.nextTS()
+	body := map[string]any{"public_key": d.pub, "ts": ts, "hostname": "bob-r2", "os_user": "bob",
+		"sig": sshsig(t, d.signer, control.LoginNodeSigNamespace, []byte(control.LoginNodeSigMessage(ts)))}
+	postJSON(t, h, control.LoginNodePath, body)
+	c, raw := postJSON(t, h, control.LoginNodePath, body)
+	var out map[string]any
+	_ = json.Unmarshal(raw, &out)
+	if c != http.StatusUnauthorized || out["code"] != "request_replayed" {
+		t.Errorf("replayed: %d %v; want 401 request_replayed", c, out)
+	}
+
+	office, _ := h.srv.issueAdminToken(httptest.NewRequest(http.MethodPost, "/", nil), "mac-a.office", "_fleetadmin", "", time.Now())
+	home := enrollAs(t, h, "mac-a-home-root", "mac-a.home", "root")
+	st, seat, raw2 := adminTokenCall(t, h, home, http.MethodPost, map[string]string{"login": "_fleetadmin"})
+	if st != 200 || seat.EndpointID == office.EndpointID {
+		t.Errorf("mac-a.home's program: %d %+v %s; want a seat of its own, never mac-a.office's", st, seat, raw2)
+	}
 }

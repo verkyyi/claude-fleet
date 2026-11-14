@@ -250,7 +250,7 @@ func (s *Server) endpointTrust(endpointID, host string, settings map[string]stri
 
 // deviceTrust is nodeTrust, except that a member's device (memberDevice) takes
 // its machine name's trust only while the name is its own (task MPCX): no
-// endpoint but a member's device enrolled as that machine. The operator
+// other live endpoint, whoever enrolled it, enrolled as that machine. The operator
 // trusting a login-registered node on /nodes still trusts it; a device that
 // enrolled under the name of a machine an operator's or the hub's code also
 // enrolled — before or after — inherits nothing of that machine's. An
@@ -260,7 +260,9 @@ func (s *Server) deviceTrust(endpointID, host string, et store.EndpointTrust, se
 	if trust != TrustTrusted || !s.memberDevice(endpointID) {
 		return trust, source
 	}
-	if other, err := s.Store.MachineEnrolledByOthers(endpointID, enrolledMachine(et)); err != nil || other {
+	// Any other live endpoint enrolled as the same name — a device's too —
+	// means the name is not this device's alone (task MPCX).
+	if other, err := s.Store.EnrolledByAnother(endpointID, enrolledMachine(et)); err != nil || other {
 		return TrustUntrusted, TrustSourceDevice
 	}
 	return trust, source

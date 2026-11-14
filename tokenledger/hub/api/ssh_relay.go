@@ -578,6 +578,10 @@ func (s *Server) sshRelayNode(id sshRelayIdentity, host string) (string, *nodeCo
 		if !c.canSSHRelay || c.hostname() != host || !control.Compatible(int(c.proto.Load())) {
 			continue
 		}
+		// A device's link carries only its own person's relay (task MPCX).
+		if !id.Operator && !s.linkServes(epID, id.Principal) {
+			continue
+		}
 		r := 2
 		switch {
 		case own != "" && c.user() == own:
@@ -600,12 +604,13 @@ func (s *Server) sshRelayNode(id sshRelayIdentity, host string) (string, *nodeCo
 // peerTarget's first roster row is not necessarily the one carrying SSH.
 func (s *Server) peerSSHRelayNode(host, login string) (string, *nodeConn, error) {
 	pod := s.podBehindDoor(host)
+	owner := s.loginOwner(host, login) // a device's link carries only its person's (task MPCX)
 	s.nodes.mu.Lock()
 	defer s.nodes.mu.Unlock()
 	var best string
 	for epID, c := range s.nodes.conns {
 		if c.hostname() != host || c.user() != login || !c.canSSHRelay ||
-			!control.Compatible(int(c.proto.Load())) || (pod && !c.canPodRelay) {
+			!control.Compatible(int(c.proto.Load())) || (pod && !c.canPodRelay) || !s.linkServes(epID, owner) {
 			continue
 		}
 		if best == "" || epID < best {
