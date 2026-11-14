@@ -413,6 +413,7 @@ func (s *Store) SetEndpointTrust(endpointID, trust, source string) error {
 // SetEndpointRole writes an endpoint's role — the operator's word
 // (claude-fleet#4886): managed, client, or "" to clear it.
 func (s *Store) SetEndpointRole(endpointID, role string) error {
+	defer s.identityChanged()
 	if !ValidNodeRole(role) {
 		return fmt.Errorf("role: managed, client or empty, not %q", role)
 	}

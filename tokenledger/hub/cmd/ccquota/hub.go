@@ -902,6 +902,11 @@ func runHub(args []string) error {
 	if err != nil {
 		return fmt.Errorf("CCQUOTA_TRUSTED_PROXIES_MODE: %w", err)
 	}
+	// The client hosts the OAuth consent knows (oauth.go): unset, the default list.
+	oauthClientHosts, err := api.ParseOAuthClientHosts(os.Getenv("CCQUOTA_OAUTH_CLIENT_HOSTS"))
+	if err != nil {
+		return fmt.Errorf("CCQUOTA_OAUTH_CLIENT_HOSTS: %w", err)
+	}
 	if len(trustedProxies) > 0 {
 		mode := "enforced: X-Forwarded-* from any other peer is removed"
 		if trustedProxiesLogOnly {
@@ -942,6 +947,7 @@ func runHub(args []string) error {
 		// The peers whose X-Forwarded-* it reads (task MPCX, api/edge.go).
 		TrustedProxies:        trustedProxies,
 		TrustedProxiesLogOnly: trustedProxiesLogOnly,
+		OAuthClientHosts:      oauthClientHosts,
 		SiteFS:                web.Site(),
 		DocsFS:                web.Docs(),
 		ConsoleFS:             web.Console(),

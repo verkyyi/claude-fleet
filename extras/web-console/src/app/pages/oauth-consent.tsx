@@ -11,6 +11,10 @@
 // it says) is led by where it sends the person back to, not by its name; the
 // page says it is unverified, its boxes start at read alone with what it asked
 // marked beside each, and its expiry offers no more than the hub's max_days.
+// A metadata-document agent (kind cimd) is led by the host its document is
+// served from — what the hub checked — its name shown as that site's own word;
+// one at a host the hub does not list (verified false) also starts at read
+// alone, with a note saying the hub does not know it.
 import { useEffect, useState } from "react";
 import { CircleAlert, LoaderCircle, TriangleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -93,7 +97,30 @@ export default function OAuthConsentPage() {
             </CardContent>
           ) : ask ? (
             <>
-              {verified ? (
+              {ask.client.kind === "cimd" && ask.client.host ? (
+                <CardHeader className="grid gap-3">
+                  {verified ? null : (
+                    <p role="note" className="border-warn/50 bg-warn/10 flex items-start gap-2 rounded-lg border px-3 py-2 text-[13px] leading-relaxed">
+                      <TriangleAlert className="text-warn mt-0.5 size-4 shrink-0" aria-hidden />
+                      <span><b>{tr("不在已知名单上", "Not on this hub's known list")}</b>{" — "}{tr(
+                        `${BRAND} 只核对了它的资料来自下面这个网站，并不认识这个网站。只有在你刚刚亲手连接它时才允许。`,
+                        `${BRAND} only checked that its details come from the site below; it doesn't know that site. Only allow if you just connected it yourself.`)}</span>
+                    </p>
+                  )}
+                  <CardTitle className="font-display text-xl leading-snug">
+                    {tr(`一个应用想以你的身份使用 ${BRAND}`, `An app wants to use ${BRAND} as you`)}
+                  </CardTitle>
+                  <div className="grid gap-1">
+                    <p className="text-muted-foreground text-xs">{tr("应用资料所在的网站", "The site its details come from")}</p>
+                    <p className="font-mono text-lg font-semibold break-all">{ask.client.host}</p>
+                  </div>
+                  <CardDescription className="break-words">
+                    {ask.client.name && ask.client.name !== ask.client.host
+                      ? tr(`名称「${ask.client.name}」由 ${ask.client.host} 提供`, `Name “${ask.client.name}” as given by ${ask.client.host}`) : null}
+                    {who ? <>{ask.client.name && ask.client.name !== ask.client.host ? " · " : ""}{tr(`登录身份：${who}`, `signed in as ${who}`)}</> : null}
+                  </CardDescription>
+                </CardHeader>
+              ) : verified ? (
                 <CardHeader>
                   <CardTitle className="font-display text-xl leading-snug">
                     {tr(`「${ask.client.name}」想以你的身份使用 ${BRAND}`, `${ask.client.name} wants to use ${BRAND} as you`)}

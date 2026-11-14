@@ -98,28 +98,69 @@ func (s *Store) ensureFleetDevices() error {
 	return nil
 }
 
-// RegisterDevice binds a key to a person: a new row, or — for a key already
-// known — the person, name and last-used time are set again and any
-// revocation is cleared, because a fresh scan IS the strong proof. Returns
-// whether the device was new.
+// ErrDeviceBound: the key is registered to another person, or was revoked,
+// and the request did not show it holds the private key — the row is left
+// as it was.
+var ErrDeviceBound = errors.New("this key is registered to another person or was revoked")
+
+// RegisterDevice binds a key to a person without proof that the caller holds
+// the private key (a pasted public key, or a scan whose start was not
+// signed): a new row, or — for a key already registered to the same person
+// and not revoked — the name and last-used time set again. A key registered
+// to someone else, or revoked, is ErrDeviceBound and nothing changes: its
+// owner revokes it, or the computer that holds it signs in with proof
+// (RebindDevice). Returns whether the device was new.
 func (s *Store) RegisterDevice(d FleetDevice, now time.Time) (bool, error) {
+	return s.registerDevice(d, now, false)
+}
+
+// RebindDevice is RegisterDevice for a request that showed it holds the
+// private key (a signed login start): a known key is bound to this person,
+// and a revocation is cleared, because the computer holding the key asked
+// for it and a person confirmed it.
+func (s *Store) RebindDevice(d FleetDevice, now time.Time) (bool, error) {
+	return s.registerDevice(d, now, true)
+}
+
+func (s *Store) registerDevice(d FleetDevice, now time.Time, proven bool) (bool, error) {
 	defer s.identityChanged()
 	ts := now.UTC().Format(rfc)
-	if _, err := s.write.Exec(`INSERT INTO fleet_devices (fingerprint, principal_id, public_key, name, registered_at, last_used_at)
+	q := `INSERT INTO fleet_devices (fingerprint, principal_id, public_key, name, registered_at, last_used_at)
 		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(fingerprint) DO UPDATE SET principal_id = excluded.principal_id, public_key = excluded.public_key,
 		  name = CASE WHEN excluded.name <> '' THEN excluded.name ELSE fleet_devices.name END,
-		  last_used_at = excluded.last_used_at, revoked_at = '', revoked_by = ''`,
-		d.Fingerprint, d.PrincipalID, d.PublicKey, d.Name, ts, ts); err != nil {
+		  last_used_at = excluded.last_used_at, revoked_at = '', revoked_by = ''`
+	if !proven {
+		q += ` WHERE fleet_devices.principal_id = excluded.principal_id AND fleet_devices.revoked_at = ''`
+	}
+	if _, err := s.write.Exec(q, d.Fingerprint, d.PrincipalID, d.PublicKey, d.Name, ts, ts); err != nil {
 		return false, err
 	}
 	// SQLite's upsert reports one changed row either way; tell new from
-	// re-registered by the registered_at it kept.
-	var reg string
-	if err := s.read.QueryRow(`SELECT registered_at FROM fleet_devices WHERE fingerprint = ?`, d.Fingerprint).Scan(&reg); err != nil {
+	// re-registered by the registered_at it kept, and a refused update by
+	// the row it left.
+	var reg, pid, rev string
+	if err := s.read.QueryRow(`SELECT registered_at, principal_id, revoked_at FROM fleet_devices WHERE fingerprint = ?`,
+		d.Fingerprint).Scan(&reg, &pid, &rev); err != nil {
 		return false, err
 	}
+	if pid != d.PrincipalID || rev != "" {
+		return false, ErrDeviceBound
+	}
 	return reg == ts, nil
+}
+
+// DeviceBindable says whether pid may register the key fingerprint without
+// proof (RegisterDevice): unknown, or already pid's and not revoked.
+func (s *Store) DeviceBindable(fingerprint, pid string) (bool, error) {
+	d, err := s.Device(fingerprint)
+	if errors.Is(err, ErrNoDevice) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return d.PrincipalID == pid && !d.Revoked(), nil
 }
 
 // Device reads one device; ErrNoDevice when unknown.

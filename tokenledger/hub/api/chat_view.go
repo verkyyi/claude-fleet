@@ -217,7 +217,9 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		Transport:     one,
 		FlushInterval: -1,
 		ModifyResponse: func(resp *http.Response) error {
-			chatRelayHeaders(resp, true)
+			if err := chatRelayHeaders(resp, chatViewRoute); err != nil {
+				return err
+			}
 			// the first frame of a fresh read — the newest stretch, in place — is
 			// kept as the copy (the record stays the session's machine's)
 			if resp.StatusCode == http.StatusOK && fwd.Get("before") == "" && fwd.Get("tool") == "" && viewAsAsked(r) == "" && !s.consoleTicketCookie(r) && s.chatMirrorOn(person) {
@@ -234,6 +236,9 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			var re *sshRelayError
 			switch {
+			case errors.Is(err, errChatRelayType):
+				s.chatAudit(person, "chat_relay", "REFUSED type view "+where)
+				refuseJSON(w, http.StatusBadGateway, "relay_type", err.Error())
 			case r.Context().Err() != nil:
 				// the page went away
 			case dialErr != nil && errors.As(dialErr, &re) && re.code == "TOO_MANY":
@@ -247,6 +252,7 @@ func (s *Server) handleChatView(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	gz := &chatViewGzip{ResponseWriter: w}
 	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 		rp.ModifyResponse = chainModify(rp.ModifyResponse, func(resp *http.Response) error {

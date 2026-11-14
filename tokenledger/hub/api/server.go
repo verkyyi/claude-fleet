@@ -129,6 +129,14 @@ type Server struct {
 	TrustedProxiesLogOnly bool
 	// untrusted counts X-Forwarded-* from peers outside TrustedProxies.
 	untrusted untrustedForwarded
+	// OAuthClientHosts is CCQUOTA_OAUTH_CLIENT_HOSTS (oauth.go): the hosts
+	// whose client metadata documents the consent page treats as known — the
+	// longer connection and the asked permissions ticked. nil is the default
+	// (oauthDefaultClientHosts); empty (the value "none") knows none.
+	OAuthClientHosts []string
+	// OAuthClientsMax bounds the stored self-registered and metadata-document
+	// clients (oauthClientsMax when 0).
+	OAuthClientsMax int
 	// Optional human portal; machine addresses stay separate.
 	PortalURL       string   // CCQUOTA_PORTAL: optional canonical human HTTPS origin
 	PortalAliases   []string // exact legacy browser hosts; never preview wildcards
@@ -571,7 +579,7 @@ type Server struct {
 
 // Handler builds the router.
 func (s *Server) Handler() http.Handler {
-	return s.forwardedTrust(s.portal(s.logRequests(s.previewHosts(s.publicHealthRoutes(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes()))))))))
+	return s.forwardedTrust(s.portal(s.logRequests(s.previewHosts(s.cookieWriteGuard(s.publicHealthRoutes(s.viewAsGuard(s.readOnlyGate(s.appMount(s.routes())))))))))
 }
 
 // readOnlyRetryAfter is the Retry-After a write gets while the hub is

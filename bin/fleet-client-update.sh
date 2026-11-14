@@ -351,6 +351,33 @@ rel_pin() {
     || { rm -f "$pk.tmp.$$"; return 1; }
   ulog "pinned the hub's release key ($pk)"
 }
+# keep_release <verified tree> <version dir> — the verified tree's signed
+# manifest (.release/) and every bin/ or conf/ file of it the version does not
+# install, kept at <version dir>/.release-tree: fc_served (fleet-client-lib.sh)
+# takes a served file from there, held to that manifest, with no download. A
+# dot-dir at the top, so a switch never carries it (fleet_versions_carry); it
+# goes with its version.
+keep_release() {
+  python3 -c 'import os, shutil, sys
+src, ver = sys.argv[1], sys.argv[2]
+dst = os.path.join(ver, ".release-tree")
+shutil.rmtree(dst, ignore_errors=True)
+os.rename(src, dst)
+for top in os.listdir(dst):
+    if top not in ("bin", "conf", ".release"):
+        p = os.path.join(dst, top)
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p)
+        else:
+            os.remove(p)
+for sub in ("bin", "conf"):
+    for d, _, names in os.walk(os.path.join(dst, sub)):
+        for n in names:
+            p = os.path.join(d, n)
+            if os.path.islink(p) or os.path.lexists(os.path.join(ver, os.path.relpath(p, dst))):
+                os.remove(p)' "$1" "$2" 2>/dev/null && return 0
+  rm -rf "$2/.release-tree"; return 1
+}
 # refuse <version> <why> — a new version that is not installed: ONE line (in the
 # person's language); the why in update.state — the doctor's row, and the next
 # start's line instead of 「后台取」. The version in use is untouched.
@@ -433,6 +460,7 @@ stage() {
       c=$(sed -n 's/^FLEET_CLIENT_COMPAT=\([0-9][0-9]*\)$/\1/p' "$tmp/bin/fleet-client-update.sh" 2>/dev/null | head -n 1)
       printf 'version=%s\ncompat=%s\ncommit=%.7s\nhub=%s\nat=%s\n' "$want" "${c:-$FLEET_CLIENT_COMPAT}" "$want" "$HUB" "$(date +%s)" \
         > "$tmp/.client-version"
+      keep_release "$rel" "$tmp" || ulog "keep_release: the verified tree of $want not kept"
     fi
   else
     # the installer: the hub's (stable's own, through it) or stable's on GitHub

@@ -581,12 +581,20 @@ func (s *Server) handleFleetCert(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "malformed request")
 		return
 	}
+	if err := s.deviceBindable(pid, req.PublicKey, false); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, errDeviceBound) {
+			status = http.StatusConflict
+		}
+		httpError(w, status, err.Error())
+		return
+	}
 	resp, err := s.issueCert(r, pid, req.PublicKey, "web")
 	if err != nil {
 		httpError(w, certErrStatus(err), err.Error())
 		return
 	}
-	s.registerDevice(pid, req.PublicKey, "", "web", time.Now())
+	s.registerDevice(pid, req.PublicKey, "", "web", false, time.Now())
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -655,6 +663,7 @@ type deviceLogin struct {
 	issued     *CertResponse
 	err        string
 	code       string // why it was denied, for the poll (no_machine_login, claude-fleet#2090)
+	proven     bool   // start was signed by the key (control.LoginStartSigNamespace)
 }
 
 // deviceLogins is in memory on purpose: a pending login lives ten minutes,
@@ -802,6 +811,11 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		// (claude-fleet#2261): the sign-in this login sends the browser
 		// through presents it. Empty = the list alone decides, as before.
 		Invite string `json:"invite"`
+		// TS and Sig: LoginStartSigMessage(ts) signed by the key, optional.
+		// With them the confirmation may bind a key registered to someone
+		// else or a revoked one (registerDevice); a bad one is refused.
+		TS  int64  `json:"ts"`
+		Sig string `json:"sig"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "malformed request")
@@ -815,6 +829,19 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	proven := false
+	if req.Sig != "" {
+		if d := time.Since(time.Unix(req.TS, 0)); d > renewClockSkew || d < -renewClockSkew {
+			refuseJSON(w, http.StatusUnauthorized, "bad_signature",
+				"the signed timestamp is too far from the hub's clock — check this computer's time")
+			return
+		}
+		if err := verifySSHSig(key, []byte(req.Sig), []byte(control.LoginStartSigMessage(req.TS)), control.LoginStartSigNamespace); err != nil {
+			refuseJSON(w, http.StatusUnauthorized, "bad_signature", "login start signature refused: "+err.Error())
+			return
+		}
+		proven = true
 	}
 	var dc [32]byte
 	if _, err := rand.Read(dc[:]); err != nil {
@@ -836,6 +863,7 @@ func (s *Server) handleDeviceStart(w http.ResponseWriter, r *http.Request) {
 		source:  clientSource(r).String(),
 		started: now,
 		expires: now.Add(deviceTTL),
+		proven:  proven,
 	}
 	l.fromIP, l.fromPlace = s.requestOrigin(r)
 	if inv := strings.TrimSpace(req.Invite); validInviteCode(inv) {
@@ -1051,15 +1079,20 @@ var errLoginGone = errors.New("no pending login under that code")
 // issuance error the login is denied with it and resp is nil.
 func (s *Server) approveDeviceLogin(r *http.Request, pid, code string, now time.Time) (*CertResponse, string, error) {
 	var keyLine, devName, purpose, osUser string
+	var proven bool
 	s.devices.withUser(code, now, func(l *deviceLogin) {
 		if l.state == devicePending {
-			keyLine, devName, purpose, osUser = l.keyLine, l.name, l.purpose, l.osUser
+			keyLine, devName, purpose, osUser, proven = l.keyLine, l.name, l.purpose, l.osUser, l.proven
 		}
 	})
 	if keyLine == "" {
 		return nil, purpose, errLoginGone
 	}
-	resp, err := s.issueCert(r, pid, keyLine, "device")
+	err := s.deviceBindable(pid, keyLine, proven)
+	var resp *CertResponse
+	if err == nil {
+		resp, err = s.issueCert(r, pid, keyLine, "device")
+	}
 	if err == nil && purpose == purposeNode {
 		// Same eligibility as the certificate (an active login), then
 		// the node pass the old join code used to buy (#1627).
@@ -1091,7 +1124,7 @@ func (s *Server) approveDeviceLogin(r *http.Request, pid, code string, now time.
 	}
 	// The scan is the proof: this computer is now a registered
 	// device that renews without one (#1470).
-	s.registerDevice(pid, keyLine, devName, "device", now)
+	s.registerDevice(pid, keyLine, devName, "device", proven, now)
 	return resp, purpose, nil
 }
 

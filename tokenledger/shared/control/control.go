@@ -1577,7 +1577,18 @@ const (
 	// untrusted, coordinate-only node and reissues that node's token after.
 	LoginNodePath         = "/v1/fleet/login/node"
 	LoginNodeSigNamespace = "fleet-login-node@claude-fleet"
+	// LoginStartSigNamespace signs the optional {ts, sig} of a device
+	// login's start (POST /v1/fleet/login/start): LoginStartSigMessage(ts) by
+	// the key being registered. It shows the computer holds that key, which a
+	// confirmation needs before it may move a key registered to someone else
+	// or one that was revoked.
+	LoginStartSigNamespace = "fleet-login-start@claude-fleet"
 )
+
+// LoginStartSigMessage is what a device signs when it starts a login.
+func LoginStartSigMessage(unix int64) string {
+	return fmt.Sprintf("fleet-login-start %d", unix)
+}
 
 // LoginNodeSigMessage is what a device signs to ask for its node pass.
 func LoginNodeSigMessage(unix int64) string {

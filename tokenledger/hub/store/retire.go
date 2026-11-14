@@ -301,6 +301,7 @@ func (e *InUseError) Error() string {
 // row has no history to protect, and making an operator keep it forever is how
 // the roster fills with things nobody can explain.
 func (s *Store) DeleteEndpoint(endpointID string) error {
+	defer s.identityChanged()
 	if _, err := s.EndpointByID(endpointID); err != nil {
 		return err
 	}

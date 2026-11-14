@@ -252,6 +252,42 @@ func (s *Store) PutOAuthClient(c OAuthClient) error {
 	return err
 }
 
+// ErrOAuthClientsFull: the bound on stored clients is reached and every one
+// of them is in use.
+var ErrOAuthClientsFull = errors.New("this hub holds as many OAuth clients as it keeps; retry later")
+
+// PutOAuthClientBounded is PutOAuthClient within max stored clients: a new
+// one past the bound first drops the oldest that no grant names and no
+// unexpired code is waiting on; with none to drop it is refused
+// (ErrOAuthClientsFull) and nothing is stored. A refresh of a client already
+// held never counts against the bound.
+func (s *Store) PutOAuthClientBounded(c OAuthClient, max int, now time.Time) error {
+	var held int
+	if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_oauth_clients WHERE client_id = ?`, c.ClientID).Scan(&held); err != nil {
+		return err
+	}
+	if held == 0 && max > 0 {
+		var n int
+		if err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_oauth_clients`).Scan(&n); err != nil {
+			return err
+		}
+		if over := n - max + 1; over > 0 {
+			res, err := s.write.Exec(`DELETE FROM fleet_oauth_clients WHERE client_id IN (
+				SELECT c.client_id FROM fleet_oauth_clients c
+				WHERE NOT EXISTS (SELECT 1 FROM fleet_agent_grants g WHERE g.client_id = c.client_id)
+				  AND NOT EXISTS (SELECT 1 FROM fleet_oauth_codes k WHERE k.client_id = c.client_id AND k.expires_at >= ?)
+				ORDER BY c.created_at, c.client_id LIMIT ?)`, agentTime(now), over)
+			if err != nil {
+				return err
+			}
+			if gone, _ := res.RowsAffected(); gone < int64(over) {
+				return ErrOAuthClientsFull
+			}
+		}
+	}
+	return s.PutOAuthClient(c)
+}
+
 // OAuthClient reads a registered client; sql.ErrNoRows when none.
 func (s *Store) OAuthClient(id string) (OAuthClient, error) {
 	var c OAuthClient
