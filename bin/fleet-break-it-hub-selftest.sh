@@ -1234,7 +1234,7 @@ drill_node_identity_device_road() {
   done
   grep -q 'host, user = s.routeSelf(&ep, s.nodeSelfFrom(&ep, host, user))' "$ROOT/tokenledger/hub/api/fleet.go" \
     || { WHY="the registry row no longer names the identity the hub holds the node to"; return 1; }
-  grep -q 'machineHolderOK(tx, machineID, endpointID)' "$ROOT/tokenledger/hub/store/fleet.go" \
+  grep -q 'machineHolderOK(tx, machineID, endpointID, at)' "$ROOT/tokenledger/hub/store/fleet.go" \
     || { WHY="a snapshot's machine id is no longer bound to the node that holds it"; return 1; }
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
     0) WHAT='设备路按原样记登录（大小写、_ - .、32 位内），root 与无登录记成本人的别名、永不是机器程序，别人的登录不发节点令牌；后来绑到设备的端点也算设备；老的未记登录的设备端点不当机器程序、首报不记成 root；登记行按入册身份写、machine_id 不被活着的别的节点改指（久未出声、同机未记登录可接手，花名册上写明）；设备、开出来还没人认的登录都不是运营者；运营者绑过设备的电脑照旧；名字另有端点入册时设备不继承信任；--force 只收自家租约；用量与 worker 图按入册登录（go test 十四条）' ;;
