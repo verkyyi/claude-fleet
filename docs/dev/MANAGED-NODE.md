@@ -303,7 +303,7 @@ Claude Code 解析插件文件真实路径时都落在目录内（不报「Path 
   "schema": 1,
   "components": {
     "ccquota":    {"artifact": "ccquota-{os}-{arch}"},
-    "claude":     {"version": "2.1.322", "artifact": "claude-{version}-{os}-{arch}"},
+    "claude":     {"version": "2.1.323", "artifact": "claude-{version}-{os}-{arch}"},
     "codex":      {"version": "0.162.1", "artifact": "codex-{version}-{os}-{arch}"},
     "tmux":       {"version": "3.7c",    "artifact": "tmux-{version}-{os}-{arch}", "lock": "conf/vendor-tmux.lock"},
     "supervisor": {"script": "bin/fleet-node-supervisor.py"}
