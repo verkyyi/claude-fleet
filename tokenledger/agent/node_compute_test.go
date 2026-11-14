@@ -129,9 +129,16 @@ func TestProbeOnce(t *testing.T) {
 // files fleet-credsep-launch.py's agent branch read too, node.env a symlink into
 // the root-owned credential store (root follows it; the login could not).
 func TestMachineTenantBeatsComputeAndProbeLikeItsOwnAgent(t *testing.T) {
-	home, store := t.TempDir(), t.TempDir()
+	// the store is grace's under the credential stores' base, and not grace's
+	// to change (the tenant's uid owns none of these files)
+	home, base := t.TempDir(), t.TempDir()
+	t.Setenv("FLEET_CREDSEP_ROOT_BASE", base)
+	store := filepath.Join(base, "grace")
 	conf := filepath.Join(home, ".config", "claude-fleet")
 	if err := os.MkdirAll(conf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	stored := filepath.Join(store, "node.env")
@@ -155,7 +162,7 @@ func TestMachineTenantBeatsComputeAndProbeLikeItsOwnAgent(t *testing.T) {
 		return a
 	}
 	plain := build(nil)
-	tenant := build(&RunAs{Login: "grace", UID: 501, GID: 20, Home: home})
+	tenant := build(&RunAs{Login: "grace", UID: uint32(os.Getuid()) + 1, GID: 20, Home: home})
 	if tenant.cfg.FleetNodeEnvPath != filepath.Join(conf, "node.env") || tenant.cfg.FleetProbePath != filepath.Join(conf, "node-probe.json") ||
 		tenant.cfg.FleetNodeEnvPath != plain.cfg.FleetNodeEnvPath || tenant.cfg.FleetProbePath != plain.cfg.FleetProbePath {
 		t.Fatalf("tenant reads %q / %q; its own agent %q / %q", tenant.cfg.FleetNodeEnvPath, tenant.cfg.FleetProbePath,

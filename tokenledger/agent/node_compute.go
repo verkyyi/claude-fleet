@@ -2,11 +2,13 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -46,7 +48,7 @@ func (a *Agent) nodeEnv() (map[string]string, bool) {
 	}
 	pub := filepath.Join(filepath.Dir(a.cfg.FleetNodeEnvPath), "node.pub.env")
 	for _, p := range []string{a.cfg.FleetNodeEnvPath, pub} {
-		if env, ok := readEnvFile(p); ok {
+		if env, ok := a.readNodeEnv(p); ok {
 			a.lastNodeEnv.Store(&env)
 			return env, true
 		}
@@ -57,14 +59,39 @@ func (a *Agent) nodeEnv() (map[string]string, bool) {
 	return nil, false
 }
 
+// readNodeEnv is readEnvFile for this agent: a machine tenant's node.env inside
+// its login's home is read as readLoginEnvFile allows, bounded; one root
+// configured elsewhere by its path, bounded.
+func (a *Agent) readNodeEnv(path string) (map[string]string, bool) {
+	ra := a.cfg.RunAs
+	if ra == nil {
+		return readEnvFile(path)
+	}
+	var b []byte
+	var err error
+	if underLogin(ra, path) {
+		b, err = readLoginEnvFile(ra, path)
+	} else {
+		b, err = readCapped(path, envFileMax)
+	}
+	if err != nil {
+		return nil, false
+	}
+	return parseEnvLines(bytes.NewReader(b))
+}
+
 func readEnvFile(path string) (map[string]string, bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, false
 	}
 	defer f.Close()
+	return parseEnvLines(f)
+}
+
+func parseEnvLines(r io.Reader) (map[string]string, bool) {
 	env := map[string]string{}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		if k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), "="); ok && !strings.HasPrefix(k, "#") {
 			env[strings.TrimPrefix(k, "export ")] = strings.Trim(v, `"'`)
@@ -109,7 +136,7 @@ func (a *Agent) nodeProbe() *control.NodeProbe {
 	if a.cfg.FleetProbePath == "" {
 		return nil
 	}
-	b, err := os.ReadFile(a.cfg.FleetProbePath)
+	b, err := a.readFileFor(a.cfg.FleetProbePath, false, smallFileMax)
 	if err != nil {
 		return nil
 	}
@@ -162,12 +189,12 @@ func (a *Agent) probeDue(now time.Time, script string) bool {
 	if err != nil || now.Sub(st.ModTime()) >= probeEvery {
 		return true
 	}
-	return probeSrc(a.cfg.FleetProbePath) != scriptSum(script)
+	return a.probeSrc(a.cfg.FleetProbePath) != a.scriptSum(script)
 }
 
 // probeSrc is the "src" a probe file says it was written by ("" for none).
-func probeSrc(path string) string {
-	b, err := os.ReadFile(path)
+func (a *Agent) probeSrc(path string) string {
+	b, err := a.readFileFor(path, false, smallFileMax)
 	if err != nil {
 		return ""
 	}
@@ -182,14 +209,17 @@ func probeSrc(path string) string {
 
 // scriptSum is the sha256 of a script's bytes, "-" when it cannot be read
 // (never equal to a probe file's src, so the run is attempted).
-func scriptSum(path string) string {
-	b, err := os.ReadFile(path)
+func (a *Agent) scriptSum(path string) string {
+	b, err := a.readFileFor(path, false, scriptMax)
 	if err != nil {
 		return "-"
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
+
+// scriptMax bounds the probe script read for its digest.
+const scriptMax = 4 << 20
 
 func (a *Agent) runProbe(ctx context.Context) {
 	t := time.NewTicker(probeCheck)

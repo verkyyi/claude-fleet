@@ -45,6 +45,17 @@ type Scanner struct {
 	// machine, and the cost it removes is the reason a fast scan interval is
 	// affordable at all.
 	skipped int
+
+	// Open, when set, is how a transcript is opened for reading instead of
+	// os.Open: a machine agent reading a login's home hands in one that goes
+	// through no link and opens only the login's own regular files.
+	Open func(path string) (*os.File, error)
+
+	// refused is, with Open set, each transcript Open refused, by its
+	// modification time: one is reported once, not every pass, until it
+	// changes.
+	refused map[string]int64
+	mtimes  map[string]int64 // this pass's walk: path → modification time
 }
 
 // Skipped reports how many transcripts the last Scan skipped untouched.
@@ -73,6 +84,7 @@ func (s *Scanner) Scan() ([]model.UsageEvent, error) {
 		s.pending[path] = st
 	}
 
+	s.mtimes = map[string]int64{}
 	files, err := s.transcripts()
 	if err != nil {
 		return nil, err
@@ -87,6 +99,12 @@ func (s *Scanner) Scan() ([]model.UsageEvent, error) {
 	for _, path := range files {
 		evs, err := s.scanFile(path, seen)
 		if err != nil {
+			if s.Open != nil && errors.Is(err, errOpen) {
+				if s.refused == nil {
+					s.refused = map[string]int64{}
+				}
+				s.refused[path] = s.mtimes[path]
+			}
 			s.Errs = append(s.Errs, err)
 			continue
 		}
@@ -139,6 +157,22 @@ func (s *Scanner) transcripts() ([]string, error) {
 			if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 				return nil
 			}
+			if s.Open != nil {
+				if !d.Type().IsRegular() {
+					// a confined reader opens regular files only: a link or a
+					// device here is passed over, not reported every pass
+					return nil
+				}
+				var mt int64
+				if fi, err := d.Info(); err == nil {
+					mt = fi.ModTime().UnixNano()
+				}
+				if was, ok := s.refused[path]; ok && was == mt {
+					return nil // refused before, unchanged since
+				}
+				delete(s.refused, path)
+				s.mtimes[path] = mt
+			}
 			// Skip a file that provably cannot have new content. The walk already
 			// stats each entry, so size and mtime are free here; opening and
 			// hashing 25,164 files to re-verify unchanged cursors is not.
@@ -164,10 +198,17 @@ func (s *Scanner) transcripts() ([]string, error) {
 	return out, nil
 }
 
+// errOpen marks a transcript that could not be opened.
+var errOpen = errors.New("skipped")
+
 func (s *Scanner) scanFile(path string, seen map[string]struct{}) ([]model.UsageEvent, error) {
-	f, err := os.Open(path)
+	open := s.Open
+	if open == nil {
+		open = os.Open
+	}
+	f, err := open(path)
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
+		return nil, fmt.Errorf("open %s: %w: %w", path, errOpen, err)
 	}
 	defer f.Close()
 

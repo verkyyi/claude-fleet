@@ -525,9 +525,15 @@ def in_home(path, base):
 def rootlogs(a):
     """The doctor's `rootlog` row (issue #2296): every service the machine starts
     as root whose stdout/stderr file lies in a home — a symlink planted there
-    turns root's open() onto any file. exit 0 OK, 1 WARN."""
+    turns root's open() onto any file. On macOS also a LaunchDaemon WITH a
+    UserName: launchd opens its StandardOutPath / StandardErrorPath before it
+    switches to that user. The fleet's own per-login units
+    (com.claude-fleet.<login>.<unit>, UserName <login>) are named whenever either
+    key is set to anything but /dev/null — their system shape names /dev/null
+    and the job's wrapper opens the log as the login; another UserName daemon
+    when its log lies in a home. exit 0 OK, 1 WARN."""
     base = E("FLEET_CREDSEP_HOMES", "/Users" if MAC else "/home")
-    n, bad = 0, []
+    n, nu, bad, units, users = 0, 0, [], [], []
     for name in sorted(os.listdir(DAEMON_DIR)) if os.path.isdir(DAEMON_DIR) else []:
         p = os.path.join(DAEMON_DIR, name)
         if MAC:
@@ -538,11 +544,21 @@ def rootlogs(a):
                     pl = plistlib.load(f)
             except (OSError, ValueError, plistlib.InvalidFileException):
                 continue
-            if not isinstance(pl, dict) or pl.get("UserName") not in (None, "root"):
+            if not isinstance(pl, dict):
                 continue
-            n += 1
             label = pl.get("Label") or name[:-6]
             outs = {pl.get(k) for k in ("StandardOutPath", "StandardErrorPath")}
+            user = pl.get("UserName")
+            if user not in (None, "root"):
+                nu += 1
+                user = str(user)
+                if str(label).startswith("com.claude-fleet.%s." % user):
+                    if any(x and x != "/dev/null" for x in outs):
+                        units.append((label, user))
+                elif any(x and x != "/dev/null" and in_home(str(x), base) for x in outs):
+                    users.append(str(label))
+                continue
+            n += 1
         else:
             if not name.endswith(".service"):
                 continue
@@ -565,16 +581,31 @@ def rootlogs(a):
         if any(x and in_home(x, base) for x in outs):
             m = re.match(r"(?:com\.ccquota\.agent\.|ccquota-agent-)([A-Za-z0-9_.-]+?)(?:\.service)?$", label)
             bad.append((label, m.group(1) if m else None))
-    if bad:
-        ours = [l for _, l in bad if l]
-        other = [n for n, l in bad if not l]
-        print("rootlog: WARN — %d root service(s) write a log in a home, where a symlink turns root's write onto "
-              "any file: %s%s%s" % (len(bad), ", ".join(n for n, _ in bad),
-              " — fix: sudo bash %s check --fix --login <login> for %s" % (os.path.join(HERE, "fleet-credsep.sh"),
-                                                                          ", ".join(ours)) if ours else "",
-              "; not the fleet's, move its log under /var/log by hand: %s" % ", ".join(other) if other else ""))
+    if bad or units or users:
+        parts = []
+        if bad:
+            ours = [l for _, l in bad if l]
+            other = [n for n, l in bad if not l]
+            parts.append("%d root service(s) write a log in a home, where a symlink turns root's write onto "
+                         "any file: %s%s%s" % (len(bad), ", ".join(n for n, _ in bad),
+                         " — fix: sudo bash %s check --fix --login <login> for %s" % (
+                             os.path.join(HERE, "fleet-credsep.sh"), ", ".join(ours)) if ours else "",
+                         "; not the fleet's, move its log under /var/log by hand: %s" % ", ".join(other) if other else ""))
+        if units:
+            logins = sorted({u for _, u in units})
+            parts.append("%d fleet service(s) run as a login still have launchd open their log (StandardOutPath / "
+                         "StandardErrorPath not /dev/null): %s — fix, as an admin, per login: %s" % (
+                             len(units), ", ".join(l for l, _ in units),
+                             "; ".join("~/.claude/fleet/bin/fleet-login-new.sh %s --daemons-only --apply" % u
+                                       for u in logins)))
+        if users:
+            parts.append("%d service(s) run as a user have launchd open a log in a home, not the fleet's — "
+                         "point its StandardOutPath / StandardErrorPath at /dev/null or a root-owned dir by hand: %s"
+                         % (len(users), ", ".join(users)))
+        print("rootlog: WARN — " + " · ".join(parts))
         return 1
-    print("rootlog: OK — %d root service(s) in %s, none writes a log in a home" % (n, DAEMON_DIR))
+    print("rootlog: OK — %d root service(s)%s in %s, none writes a log in a home" % (
+        n, " and %d run as a login" % nu if nu else "", DAEMON_DIR))
     return 0
 
 

@@ -50,6 +50,14 @@
 #                       the same paths git diff names; logs/ tools/ .release not
 #                       counted; --tree-to must be the install; no --sync-logins;
 #                       a skill lands as bytes, an install left as links heals (#3988)
+#   W. log keys         the system shape names /dev/null for StandardOutPath /
+#                       StandardErrorPath and its /bin/sh wrapper opens the
+#                       template's log (a log it cannot open: the job still
+#                       runs); an installed unit naming its log in the plist,
+#                       no root → left as installed, no admin command queued,
+#                       ONE `daemons: WARN` naming fleet-login-new.sh
+#                       --daemons-only --apply (also on a range that moves no
+#                       template); with root → re-rendered, line gone
 #   U. pure client      (issue #3534) 承载 off: only install-sync is added, a
 #                       session daemon never; the installed ones are set aside
 #                       in daemons-attic and come back once the computer hosts
@@ -814,5 +822,80 @@ st_eq 'U restored = what was set aside, plus install-sync' "$(printf '%s\n' $U_a
 ok 'U restored ones loaded' "grep -q 'launchctl bootstrap gui/$(id -u) $UA/com.claude-fleet.collect.plist' '$LOG'"
 FLEET_INSTALL_HOST=1 run_ap --from "$U1" --to "$U2"
 not_contains 'U a hosting computer is untouched' "$OUT" 'set aside'
+
+# --- W. system units that name their log in the plist ------------------------------
+# The system shape: StandardOutPath / StandardErrorPath /dev/null, the wrapper
+# opens the template's log as the login (a log it cannot open never stops the
+# job). An installed unit from before (a log key not /dev/null) is left running
+# as installed by a login without root — no admin command queued for it, ONE
+# WARN line for all of them naming the operator's command — and re-rendered by
+# one with root, even when its template did not move.
+if command -v plutil >/dev/null 2>&1; then
+  wtmpl() { # $1 unit $2 interval — a template that logs like the real ones
+    cat > "$R/launchd/com.claude-fleet.$1.plist.tmpl" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.claude-fleet.$1</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>__HOME__/.claude/fleet/bin/$1.sh</string></array>
+  <key>StartInterval</key><integer>$2</integer>
+  <key>StandardErrorPath</key><string>__HOME__/.config/claude-fleet/logs/$1.launchd.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+</dict></plist>
+EOF
+  }
+  wtmpl wlog 30; wtmpl wlog2 30
+  W1=$(commit 'two units that log')
+  WD="$WORK/LaunchDaemons-w"; mkdir -p "$WD"
+  : > "$LOG"
+  OUT=$(FLEET_INSTALL_HOME="$H" bash "$AP" --render-system wlog --root "$R" 2>&1); RC=$?
+  st_eq 'W render exit' 0 "$RC"
+  printf '%s\n' "$OUT" > "$WORK/w.plist"
+  st_eq 'W render StandardOutPath' /dev/null "$(plutil -extract StandardOutPath raw -o - "$WORK/w.plist")"
+  st_eq 'W render StandardErrorPath' /dev/null "$(plutil -extract StandardErrorPath raw -o - "$WORK/w.plist")"
+  WARGV=$(plutil -extract ProgramArguments.2 raw -o - "$WORK/w.plist")
+  st_eq 'W wrapper' "mkdir -p '$H/.config/claude-fleet/logs' 2>/dev/null; command exec 2>>'$H/.config/claude-fleet/logs/wlog.launchd.log'; TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec '/bin/bash' '$H/.claude/fleet/bin/wlog.sh'" "$WARGV"
+  # the wrapper as /bin/sh runs it: the log lands; an unopenable log still runs the job
+  WS=$(printf '%s' "$WARGV" | sed 's/TMPDIR=.*/echo ran-out; echo ran-err >\&2/')
+  WH="$WORK/wh"; WS2=$(printf '%s' "$WS" | sed "s#$H#$WH#g")
+  /bin/sh -c "$WS2" >/dev/null 2>&1
+  st_eq 'W wrapper: stderr into the log, dir made' ran-err "$(cat "$WH/.config/claude-fleet/logs/wlog.launchd.log" 2>/dev/null)"
+  rm -f "$WH/.config/claude-fleet/logs/wlog.launchd.log"; chmod 500 "$WH/.config/claude-fleet/logs"
+  st_eq 'W wrapper: no log → the job still runs' ran-out "$(/bin/sh -c "$WS2" 2>/dev/null)"
+  chmod 700 "$WH/.config/claude-fleet/logs"
+  # installed before /dev/null: the same render with the log key back in the plist
+  for u in collect wlog wlog2; do
+    FLEET_INSTALL_HOME="$H" bash "$AP" --render-system "$u" --root "$R" > "$WD/com.claude-fleet.tester.$u.plist" || st_fail "W render $u"
+  done
+  for u in wlog wlog2; do
+    plutil -replace StandardErrorPath -string "$H/.config/claude-fleet/logs/$u.launchd.log" "$WD/com.claude-fleet.tester.$u.plist"
+  done
+  wsnap=$(cat "$WD"/*.plist | cksum)
+  wtmpl wlog 45; W2=$(commit 'wlog interval')
+  WHL="2 of tester's background services (system LaunchDaemons) still have launchd open their log in the home; they keep running as installed, and only an admin can replace them — ask the operator to run: ~/.claude/fleet/bin/fleet-login-new.sh tester --daemons-only --apply"
+  FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$WD" run_ap --from "$W1" --to "$W2"
+  st_eq 'W no root -> exit 0' 0 "$RC"
+  st_eq 'W no root -> ONE line for both' "daemons: WARN — $WHL" "$(printf '%s\n' "$OUT" | grep '^daemons: WARN')"
+  not_contains 'W no root -> no admin command queued' "$OUT" 'run as an admin'
+  not_contains 'W no root -> no PARTIAL' "$OUT" 'PARTIAL'
+  st_eq 'W no root -> plists untouched' "$wsnap" "$(cat "$WD"/*.plist | cksum)"
+  ok 'W no root -> no launchctl' "! grep -q '^launchctl' '$LOG'"
+  ok 'W no root -> nothing pending' "[ ! -f '$H/.config/claude-fleet/logs/install-apply-pending/com.claude-fleet.tester.wlog.plist' ]"
+  # a range that moves no template: the line still shows
+  echo 'echo w' > "$R/bin/w.sh"; W3=$(commit 'script only')
+  FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$WD" run_ap --from "$W2" --to "$W3"
+  st_eq 'W no template moved -> the line again' "daemons: WARN — $WHL" "$(printf '%s\n' "$OUT" | grep '^daemons: WARN')"
+  # with root: both re-rendered (wlog2's template never moved), no line
+  FLEET_INSTALL_SUDO='' FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$WD" run_ap --from "$W2" --to "$W3"
+  st_eq 'W root -> exit 0' 0 "$RC"
+  contains 'W root -> wlog reloaded' "$OUT" 'daemons: reloaded wlog'
+  contains 'W root -> wlog2 reloaded' "$OUT" 'daemons: reloaded wlog2'
+  not_contains 'W root -> no WARN' "$OUT" 'daemons: WARN'
+  for u in wlog wlog2; do
+    st_eq "W root -> $u /dev/null" /dev/null "$(plutil -extract StandardErrorPath raw -o - "$WD/com.claude-fleet.tester.$u.plist")"
+  done
+  ok 'W root -> collect untouched' "! grep -q 'tester.collect' '$LOG'"
+  FLEET_INSTALL_SUDO=false FLEET_LAUNCHD_AGENTS_DIR="$WORK/noagents" FLEET_INSTALL_DAEMON_DIR="$WD" run_ap --from "$W2" --to "$W3"
+  not_contains 'W replaced -> no line' "$OUT" 'daemons: WARN'
+fi
 
 printf 'install-apply-selftest: PASS (%d checks)\n' "$CHECKS"

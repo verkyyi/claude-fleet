@@ -27,7 +27,16 @@ var ErrHubManaged = errors.New("Codex home is hub-managed: the hub refreshes it 
 func AcquireProfile(home string) (func(), error)    { return acquireProfile(home, false) }
 func AcquireRunProfile(home string) (func(), error) { return acquireProfile(home, true) }
 func acquireProfile(home string, shared bool) (func(), error) {
-	f, err := os.OpenFile(filepath.Join(home, ".ccquota-auth.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	path := filepath.Join(home, ".ccquota-auth.lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if errors.Is(err, os.ErrPermission) {
+		// a lock file another user made (an older machine agent's, as root)
+		// that this login cannot open: the directory is the login's, so the
+		// file is replaced by one of its own
+		if rmErr := os.Remove(path); rmErr == nil || errors.Is(rmErr, os.ErrNotExist) {
+			f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		}
+	}
 	if err != nil {
 		return nil, errors.New("Codex profile is not writable for credential maintenance")
 	}
@@ -47,9 +56,9 @@ type refreshState struct {
 	Failures    int        `json:"failures,omitempty"`
 }
 
-func readRefreshState(home string) refreshState {
+func readRefreshState(home string, rf ReadFile) refreshState {
 	var s refreshState
-	b, err := os.ReadFile(filepath.Join(home, ".ccquota-auth-state.json"))
+	b, err := rf.read(filepath.Join(home, ".ccquota-auth-state.json"))
 	if err == nil && len(b) < 16384 {
 		_ = json.Unmarshal(b, &s)
 	}
@@ -83,6 +92,11 @@ func atomicJSON(path string, value any) error {
 // LoginHealth is metadata only. No token or credential fingerprint leaves
 // the endpoint. Expiry of an access token alone never means re-login is needed.
 func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
+	return LoginHealthWith(home, auth, enabled, nil)
+}
+
+// LoginHealthWith is LoginHealth reading the home's records through rf.
+func LoginHealthWith(home string, auth *Auth, enabled bool, rf ReadFile) *model.LoginHealth {
 	h := &model.LoginHealth{AutoRefresh: enabled, State: "no_credentials"}
 	if auth == nil {
 		h.Reason = "No readable file login; use ccquota codex login for this profile"
@@ -110,7 +124,7 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 			h.State = "access_expired"
 			h.Reason = "Hub lease expired and the node agent has not renewed it; check ccquota agent (CCQUOTA_FLEET_CREDS=1) on this machine"
 		}
-		applyUpstream(h, home, auth)
+		applyUpstream(h, home, auth, rf)
 		return h
 	}
 	h.Source = "local"
@@ -128,7 +142,7 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 			h.Reason = "Access token expired and no refresh credential is available"
 		}
 	}
-	s := readRefreshState(home)
+	s := readRefreshState(home, rf)
 	if s.Fingerprint == auth.fingerprint {
 		h.RefreshAttemptAt, h.RetryAt = s.AttemptAt, s.RetryAt
 		if s.State != "" && s.State != "valid" {
@@ -138,7 +152,7 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 			}
 		}
 	}
-	applyUpstream(h, home, auth)
+	applyUpstream(h, home, auth, rf)
 	return h
 }
 
@@ -146,11 +160,11 @@ func LoginHealth(home string, auth *Auth, enabled bool) *model.LoginHealth {
 // upstream has refused this exact access token (claude-fleet#1920). An
 // expired, reauth-required or otherwise already-unusable state stays as it is:
 // it is the more specific word.
-func applyUpstream(h *model.LoginHealth, home string, auth *Auth) {
+func applyUpstream(h *model.LoginHealth, home string, auth *Auth, rf ReadFile) {
 	if h.State != "valid" && h.State != "refresh_due" && h.State != "retry_pending" && h.State != "refreshing" {
 		return
 	}
-	v := upstreamRejection(home, auth)
+	v := upstreamRejection(home, auth, rf)
 	if v == nil {
 		return
 	}
@@ -190,7 +204,7 @@ func Maintain(ctx context.Context, binary, home string, force bool) (*Auth, erro
 	if !due && !force {
 		return a, nil
 	}
-	s := readRefreshState(home)
+	s := readRefreshState(home, nil)
 	if s.Fingerprint != a.fingerprint {
 		s = refreshState{Fingerprint: a.fingerprint}
 	}

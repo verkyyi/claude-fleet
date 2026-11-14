@@ -297,10 +297,25 @@ type Index struct {
 // Missing or unreadable stamps are not an error: the hook is optional, and the
 // caller degrades to the machine-wide login.
 func Load(stateDir string, maxAge time.Duration) (*Index, error) {
+	return LoadWith(stateDir, maxAge, nil, nil)
+}
+
+// LoadWith is Load listing the stamp directory through list (nil: every
+// entry, os.ReadDir) and reading each stamp through read (nil: os.ReadFile).
+// A machine agent reading a login's stamps hands in a lister that opens the
+// directory without following a link and stops at a cap, and a reader that
+// follows no link and reads a small regular file of the login's own.
+func LoadWith(stateDir string, maxAge time.Duration, read func(string) ([]byte, error), list func(dir string) ([]string, error)) (*Index, error) {
 	idx := &Index{BySession: map[string]Stamp{}, ByTranscript: map[string]Stamp{}}
 	dir := Dir(stateDir)
+	if read == nil {
+		read = os.ReadFile
+	}
+	if list == nil {
+		list = stampNames
+	}
 
-	entries, err := os.ReadDir(dir)
+	names, err := list(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return idx, nil
@@ -313,11 +328,11 @@ func Load(stateDir string, maxAge time.Duration) (*Index, error) {
 		cutoff = time.Now().Add(-maxAge)
 	}
 
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+	for _, name := range names {
+		if !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		b, err := read(filepath.Join(dir, name))
 		if err != nil {
 			continue
 		}
@@ -386,4 +401,19 @@ func (i *Index) Accounts() map[string]string {
 		}
 	}
 	return out
+}
+
+// stampNames is every name in dir (a directory is then refused by read).
+func stampNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	return names, nil
 }

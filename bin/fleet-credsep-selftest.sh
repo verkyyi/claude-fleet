@@ -42,7 +42,10 @@
 #      StandardOutput) at $LOG_BASE/<login>/agent.log (0700); `rootlogs` is OK;
 #      a definition from before #2296 (log back in the home) is WARN naming
 #      `check --fix --login <login>`, which moves it; a root service that is
-#      not the fleet's is named as such; a service with a UserName is not counted
+#      not the fleet's is named as such; on macOS a LaunchDaemon with a
+#      UserName is named apart when its log lies in a home, and the fleet's
+#      per-login units (com.claude-fleet.<login>.<unit>) whenever a log key is
+#      not /dev/null, with `fleet-login-new.sh <login> --daemons-only --apply`
 #   N  --fresh (issue #2294, fleet-login-new.sh's step 7b): a login something
 #      runs as is refused (exit 6, nothing made); --pool-src without --fresh is
 #      exit 2 (fleet-login-new-selftest.sh drives the whole fresh install)
@@ -263,8 +266,30 @@ else
   junk="$SB/daemons/x.other.service $SB/daemons/x.mine.service"
 fi
 out=$(rootlogs); rc=$?
-case "$rc:$out" in 1:"rootlog: WARN — 1 root service(s)"*"not the fleet's"*x.other*) st_ok_all "M a foreign root service logging in a home is named; a UserName one is not" ;;
+case "$rc:$out" in 1:"rootlog: WARN — 1 root service(s)"*"not the fleet's"*x.other*) st_ok_all "M a foreign root service logging in a home is named" ;;
   *) st_miss "M foreign rc=$rc: $out" ;; esac
+if [ "$(uname)" = Darwin ]; then
+  case "$out" in *"1 service(s) run as a user have launchd open a log in a home"*x.mine*) st_ok_all "M a UserName daemon (not the fleet's) logging in a home is named apart" ;;
+    *) st_miss "M UserName foreign: $out" ;; esac
+  rm -f "$SB/daemons/x.other.plist"
+  # the fleet's per-login units (com.claude-fleet.<login>.<unit>, UserName <login>):
+  # a log key not /dev/null is named with the operator's command; /dev/null is not
+  mkplist() { python3 -c 'import plistlib,sys; d={"Label":sys.argv[2],"UserName":sys.argv[3],"ProgramArguments":["/bin/sh","-c","true"],"StandardOutPath":"/dev/null","StandardErrorPath":sys.argv[4]}; plistlib.dump(d, open(sys.argv[1],"wb"))' "$SB/daemons/$1.plist" "$1" "$2" "$3"; }
+  mkplist com.claude-fleet.alice.collect alice "$SB/home/alice/.config/claude-fleet/logs/collect.launchd.log"
+  mkplist com.claude-fleet.alice.spinner alice /dev/null
+  mkplist com.claude-fleet.bob.cleanup bob /var/tmp/cleanup.launchd.log
+  junk="$junk $SB/daemons/com.claude-fleet.alice.collect.plist $SB/daemons/com.claude-fleet.alice.spinner.plist $SB/daemons/com.claude-fleet.bob.cleanup.plist"
+  out=$(rootlogs); rc=$?
+  case "$rc:$out" in 1:*"2 fleet service(s) run as a login still have launchd open their log"*) st_ok_all "M the fleet's per-login units naming a log are WARN" ;;
+    *) st_miss "M per-login rc=$rc: $out" ;; esac
+  case "$out" in *com.claude-fleet.alice.collect*com.claude-fleet.bob.cleanup*) st_ok_all "M …each named (a log outside a home too)" ;; *) st_miss "M per-login names: $out" ;; esac
+  case "$out" in *com.claude-fleet.alice.spinner*) st_miss "M a /dev/null unit named: $out" ;; *) st_ok_all "M …not one whose keys are /dev/null" ;; esac
+  case "$out" in *"fleet-login-new.sh alice --daemons-only --apply; ~/.claude/fleet/bin/fleet-login-new.sh bob --daemons-only --apply"*) st_ok_all "M …with the operator's command per login" ;;
+    *) st_miss "M per-login fix: $out" ;; esac
+  rm -f "$SB/daemons/com.claude-fleet.alice.collect.plist" "$SB/daemons/com.claude-fleet.bob.cleanup.plist" "$SB/daemons/x.mine.plist"
+  out=$(rootlogs); rc=$?
+  case "$rc:$out" in "0:rootlog: OK — "*"run as a login"*) st_ok_all "M only /dev/null keys left: OK ($out)" ;; *) st_miss "M /dev/null only rc=$rc: $out" ;; esac
+fi
 # shellcheck disable=SC2086
 rm -f $junk
 

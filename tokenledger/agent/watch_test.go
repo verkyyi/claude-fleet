@@ -18,7 +18,7 @@ func TestWatchTranscripts_FiresOnAWrite(t *testing.T) {
 	var fired atomic.Int64
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go a.watchTranscripts(ctx, root, func() { fired.Add(1) })
+	go a.watchTranscripts(ctx, []string{root}, func() { fired.Add(1) })
 	time.Sleep(150 * time.Millisecond) // let the watch establish
 
 	if err := os.WriteFile(filepath.Join(root, "s.jsonl"), []byte("{}\n"), 0o644); err != nil {
@@ -44,7 +44,7 @@ func TestWatchTranscripts_DebouncesABurst(t *testing.T) {
 	var fired atomic.Int64
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go a.watchTranscripts(ctx, root, func() { fired.Add(1) })
+	go a.watchTranscripts(ctx, []string{root}, func() { fired.Add(1) })
 	time.Sleep(150 * time.Millisecond)
 
 	path := filepath.Join(root, "s.jsonl")
@@ -78,7 +78,7 @@ func TestWatchTranscripts_PicksUpANewProjectDirectory(t *testing.T) {
 	var fired atomic.Int64
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go a.watchTranscripts(ctx, root, func() { fired.Add(1) })
+	go a.watchTranscripts(ctx, []string{root}, func() { fired.Add(1) })
 	time.Sleep(150 * time.Millisecond)
 
 	sub := filepath.Join(root, "-new-project")
@@ -110,7 +110,7 @@ func TestWatchTranscripts_SurvivesAMissingRoot(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		a.watchTranscripts(ctx, filepath.Join(t.TempDir(), "does-not-exist"), func() {})
+		a.watchTranscripts(ctx, []string{filepath.Join(t.TempDir(), "does-not-exist")}, func() {})
 		close(done)
 	}()
 	select {

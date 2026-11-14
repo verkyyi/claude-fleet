@@ -2,7 +2,6 @@ package codex
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -24,11 +23,14 @@ func RecordLogin(home string) error {
 	return atomicJSON(filepath.Join(home, ".ccquota-login-observation.json"), loginObservation{Account: a.Identity.AccountUUID, Fingerprint: a.fingerprint, At: time.Now().UTC()})
 }
 
-func LoginObservedAt(home string, auth *Auth) time.Time {
+func LoginObservedAt(home string, auth *Auth) time.Time { return LoginObservedAtWith(home, auth, nil) }
+
+// LoginObservedAtWith is LoginObservedAt reading through rf.
+func LoginObservedAtWith(home string, auth *Auth, rf ReadFile) time.Time {
 	if auth == nil {
 		return time.Time{}
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".ccquota-login-observation.json"))
+	b, err := rf.read(filepath.Join(home, ".ccquota-login-observation.json"))
 	if err != nil || len(b) > 16384 {
 		return time.Time{}
 	}

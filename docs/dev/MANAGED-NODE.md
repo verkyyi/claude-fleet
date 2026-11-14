@@ -209,6 +209,32 @@ agent 跑的又是 `<sha>/bin/ccquota`，路径也每次变——所以人手给
 标记）交还这个账号；订阅凭据只交给共享凭据代理（以 `as=<账号>` 说明是谁的），没有代理
 就不领——root 不往账号目录写凭据。
 
+**Codex 用量也以账号身份读**：每个 Codex 档案的续期与账号额度读取（`codex app-server`）不在 root
+进程里跑，而是由节点程序以账号身份起自己的 `ccquota codex machine-op`（`agent/codex_machine.go`；
+环境是干净的：账号的 `HOME`，`PATH` 只有发行版的 `tools/bin`、账号的 `~/.local/bin` 与系统目录）。
+root 只指定 Codex 的路径——机器配置的 `CCQUOTA_CODEX_BINARY`，否则发行版自带的 `tools/bin/codex`；
+两者都没有时由账号身份的那条命令自己找，root 从不在账号家目录或账号的 `PATH` 里找可执行文件。
+档案登记 `~/.ccquota/codex-profiles.json` 里的目录必须在账号自己的家里、不能是 fleet 自己的目录
+（`~/.config/claude-fleet`、`~/.ccquota`、`~/.claude` 及其下，不分大小写），一个账号最多 16 个档案；
+登记坏了只关掉这个账号的 Codex 采集（入口上的采集状态写明原因，修好后下一轮自动恢复），不挡整台机器的节点程序。
+
+**旧版本留在 Codex 目录里的 root 文件**（`agent/codex_handback.go`）：每个档案在第一次 machine-op 之前
+整理一次，只看目录顶层，不跟随链接，**从不把普通文件交给账号**：节点程序自己的三份记录
+（`.ccquota-auth.lock`、`.ccquota-auth-state.json`、`.ccquota-upstream.json`）按名字删掉、由账号身份的
+machine-op 重建；root 的 `auth.json`（只一个链接）读出来，严格是 Codex 订阅登录、且正是这个档案上次看到的
+账号，才以账号身份写一份新的替换它，否则原样不动，入口上这个档案标 degraded 并写明「重新登录这个档案」；
+Codex CLI 自己建的目录（`sessions`、`archived_sessions`、`tmp`、`log`）与档案目录本身（`~/.codex`、
+`~/.codex-accounts/<名字>`）用目录自己的描述符交还。
+
+**对话记录的文件监视**：一个账号一个监视器。macOS / BSD（kqueue 每个文件占一个描述符）上机器模式的账号
+不监视，靠扫描间隔采集；Linux（inotify 按目录计）每个账号最多监视 1024 个目录，其余也靠扫描间隔。
+
+**读账号家里的文件**：身份（`~/.claude.json`）、凭据文件、对话记录、Codex 登录与记录、`node.env`、
+探测结果和账号目录都只在账号家里读，经 `homeDir`（`agent/homefs.go`、`agent/login_files.go`）：
+不跟随链接、只读普通文件、有大小上限，账号自己写的文件还要求属于账号。唯一允许的链接是凭据分离后的
+`node.env`——它必须正好指向这个账号自己的凭据库 `/var/db/fleet-cred/<账号>/node.env`，且那个目录不归账号。
+root 的钥匙串不是任何账号的，机器模式下不读。
+
 **名册**：机器自己那条线标 `machine_link`（永不放会话），它带着的账号标 `via`；
 `machines[].links` 是这台机器开着的连接数。入口「机器」页每台卡片一行「1 条连接 · 账号：…」，
 `fleet hub machines` 多一列「连接」。

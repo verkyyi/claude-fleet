@@ -34,12 +34,14 @@
 #   B3. daemons   (#1192) the clone at stable as the login (~<login>/.claude/fleet
 #                 + logs/); every launchd template rendered in system shape —
 #                 Label com.claude-fleet.<login>.<unit>, UserName <login>, __HOME__
-#                 = its home — installed 644 under FLEET_INSTALL_DAEMON_DIR and
+#                 = its home, StandardOutPath / StandardErrorPath /dev/null with
+#                 the /bin/sh wrapper opening the unit's log — installed 644 under FLEET_INSTALL_DAEMON_DIR and
 #                 `launchctl bootstrap system`'d, 14 of them from the real repo
-#                 — read AS THE LOGIN out of its 700 home (#1213), `installed
-#                 N/N` printed, the home still unreadable to the admin at the
-#                 end; --no-daemons skips that step and prints the GUI sign-in
-#                 step
+#                 — rendered from THIS install's templates + apply script,
+#                 nothing read out of the login's clone (only `test -d` of it,
+#                 as the login: its home is 700, #1213), `installed N/N`
+#                 printed, the home still unreadable to the admin at the end;
+#                 --no-daemons skips that step and prints the GUI sign-in step
 #   C. exists     a known login → exit 3 in both modes, nothing run; an existing
 #                 home dir alone → exit 3
 #   D. no group   no com.apple.access_ssh → step skipped, dseditgroup never run
@@ -53,11 +55,10 @@
 #                 (#1210 ④) — with a RELATIVE --pubkey / --pool-src /
 #                 --password-file: --apply goes through, every relative path is
 #                 found, the transcript shows them absolute; a dry run likewise
-#   I. 0 units    (#1213) a stable with no launchd/*.plist.tmpl → --apply fails
-#                 at step 8 (exit 1) naming the dir + the login it read as,
-#                 nothing installed, nothing bootstrapped — never "nothing to
-#                 install" + exit 0; a dry run from an install without launchd/
-#                 warns and exits 0
+#   I. 0 units    (#1213) an install with no launchd/*.plist.tmpl beside its bin/
+#                 → --apply fails at step 8 (exit 1) naming that dir, nothing
+#                 installed, nothing bootstrapped — never "nothing to install"
+#                 + exit 0; a dry run from such an install warns and exits 0
 #   J. welcome    (#1195) no --pubkey → a temporary ed25519 pair in the admin's
 #                 ~/<login>-onboard/ (700; key 600), its public half installed,
 #                 its private half in welcome.txt (600) with the ssh line + config
@@ -71,8 +72,23 @@
 #   K. daemons-only (#1223) an existing login + its clone, no daemons → `--daemons-only
 #                 --apply` = N install + N bootstrap system calls, steps 1–7 zero,
 #                 `installed N/N`; a rerun leaves every unit alone; one missing
-#                 unit → only it; no clone → exit 1 naming it; no such login / no
-#                 home → exit 4, nothing run; another step's option → exit 2
+#                 unit → only it; one in place that names its log in the plist
+#                 (not /dev/null) → bootout + install + bootstrap of it alone; no clone → exit 1 naming it; no such login / no
+#                 home → exit 4, nothing run; another step's option → exit 2.
+#                 The login's clone carries a marked template, an extra unit and
+#                 an apply script + lib of its own: none of them is read or run
+#                 (no marker in any installed plist, no extra unit, the clone's
+#                 script never ran, no `sudo cat` / `sudo ls` of the clone)
+#   V. check      the rendered plist is checked before any install — a render
+#                 (a stub apply script in a copy of this install) with UserName
+#                 root / none, another login's Label, GroupName wheel, a program
+#                 in the login's home or a relative one, a RootDirectory,
+#                 Program, StandardInPath, Sockets, WatchPaths, QueueDirectories,
+#                 SessionCreate or MachServices key, a StandardOutPath /
+#                 StandardErrorPath that is not /dev/null → exit 1 naming the mismatch, nothing installed,
+#                 nothing bootstrapped; the right shape installs. With plutil and
+#                 with the python3 fallback (FLEET_LOGIN_PLUTIL=<none>), so it
+#                 runs on Linux too
 #   L. cache      (#2297) FLEET_BOOTSTRAP_CACHE on: --apply refreshes the cache
 #                 as root with the admin's claude only — no `--from`, no
 #                 claude-fleet mirror (retired, #2775) — exit 0, the install at
@@ -399,13 +415,19 @@ if [ -z "$DAEMONS" ]; then
     st_eq "B3 $u UserName" frank "$(plutil -extract UserName raw -o - "$f")"
     st_eq "B3 $u mode" 644 "$(mode "$f")"
     contains "B3 $u runs the login's clone" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "$H/.claude/fleet/"
+    # launchd opens the Standard*Path files before it switches to UserName: both
+    # /dev/null, and the wrapper (run as the login) opens the template's log
+    st_eq "B3 $u StandardOutPath" /dev/null "$(plutil -extract StandardOutPath raw -o - "$f")"
+    st_eq "B3 $u StandardErrorPath" /dev/null "$(plutil -extract StandardErrorPath raw -o - "$f")"
+    contains "B3 $u wrapper makes the log dir" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "mkdir -p '$H/.config/claude-fleet/logs' 2>/dev/null; "
+    contains "B3 $u wrapper opens its log as the login" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "command exec 2>>'$H/.config/claude-fleet/logs/$u.launchd.log'; "
     ok_bs=$(grep -c "^launchctl bootstrap system $f$" "$LOG"); st_eq "B3 $u bootstrapped once" 1 "$ok_bs"
   done
   # #1213: the templates were listed + read AS THE LOGIN (the admin cannot read a
   # 700 home), rendered here, and the count printed matches what was installed
-  contains "B3 templates listed as the login" "$OUT" "sudo -u frank -H ls -1 $H/.claude/fleet/launchd"
-  contains "B3 read as the login" "$OUT" "read as frank"
-  st_eq "B3 $NTMPL templates + the apply script + its fleet-daemon-lib.sh read as the login (#1495)" "$((NTMPL + 2))" "$(grep -c '^sudo cat$' "$LOG")"
+  contains "B3 the clone only checked to exist, as the login" "$OUT" "sudo -u frank -H test -d $H/.claude/fleet/bin"
+  contains "B3 from this install" "$OUT" "from this install, $BIN/../launchd — nothing read from frank's clone"
+  st_eq "B3 nothing read out of the login's clone" 0 "$(grep -c '^sudo cat$' "$LOG")"
   contains "B3 installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
   not_contains "B3 never 'nothing to install'" "$OUT" "nothing to install"
   # the login's own first-login apply must find them current: same render, from its clone
@@ -628,26 +650,23 @@ hrun jo --full-name J --pubkey nope.pub
 st_eq "H missing relative key → 2" 2 "$RC"
 not_contains "H bash32" "$OUT" "unbound variable"
 # --- I. 0 templates (#1213) -----------------------------------------------------
-# a stable whose clone carries no launchd/*.plist.tmpl: --apply FAILS at step 8,
-# names the dir it read (as the login) — never "nothing to install" + exit 0
-FX2="$WORK/fx2"; mkdir -p "$FX2/bin"; cp "$BIN/fleet-install-apply.sh" "$BIN/fleet-daemon-lib.sh" "$FX2/bin/"
-git init -q -b master "$FX2" && git -C "$FX2" add -A && git -C "$FX2" commit -qm stable && git -C "$FX2" tag stable
-GB2="$WORK/gh2"; mkdir -p "$GB2/erin"; git clone -q --bare "$FX2" "$GB2/verkyyi/claude-fleet.git"
+# an install with no launchd/*.plist.tmpl beside its bin/ (the templates come
+# from this install, never the login's clone): --apply FAILS at step 8, names
+# the dir — never "nothing to install" + exit 0
+NL="$WORK/nolaunchd/bin"; mkdir -p "$NL"; ln -s "$BIN"/* "$NL/"
 if [ -z "$DAEMONS" ]; then
-  : > "$LOG"; OUT=$(FLEET_BOOTSTRAP_GIT_BASE="$GB2" "$BASH_BIN" "$S" kim --full-name K --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply 2>&1); RC=$?
+  : > "$LOG"; OUT=$("$BASH_BIN" "$NL/fleet-login-new.sh" kim --full-name K --pubkey "$KEY" --share-pool --pool-src "$POOL" --apply 2>&1); RC=$?
   CALLS=$(cat "$LOG"); unlock_homes
   st_eq "I 0 templates → exit 1" 1 "$RC"
   contains "I fails at step 8" "$OUT" "FAILED at step 8"
-  contains "I names the dir + who read it" "$OUT" "no launchd/com.claude-fleet.*.plist.tmpl in $FLEET_LOGIN_HOMES/kim/.claude/fleet/launchd (read as kim)"
+  contains "I names the dir" "$OUT" "no launchd/com.claude-fleet.*.plist.tmpl in $NL/../launchd (this install's own, beside $NL)"
   contains "I says 0" "$OUT" "0 background services"
   not_contains "I never 'nothing to install'" "$OUT" "nothing to install"
   for f in "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kim.*; do [ -e "$f" ] && st_fail "I installed $f with 0 templates"; done
   not_contains "I nothing bootstrapped" "$CALLS" "launchctl bootstrap"
-  st_eq "I clone happened first" "$(git -C "$FX2" rev-parse stable)" "$(git -C "$FLEET_LOGIN_HOMES/kim/.claude/fleet" rev-parse HEAD 2>/dev/null)"
+  st_eq "I clone happened first" "$(git -C "$FX" rev-parse stable)" "$(git -C "$FLEET_LOGIN_HOMES/kim/.claude/fleet" rev-parse HEAD 2>/dev/null)"
 fi
-# a dry run has no clone: it previews from THIS install's launchd/ — none there
-# is a WARN, not a failure (--apply reads the clone's)
-NL="$WORK/nolaunchd/bin"; mkdir -p "$NL"; ln -s "$BIN"/* "$NL/"
+# a dry run from that install: a WARN, not a failure
 : > "$LOG"; OUT=$("$BASH_BIN" "$NL/fleet-login-new.sh" lou --full-name L --pubkey "$KEY" 2>&1); RC=$?
 CALLS=$(cat "$LOG")
 st_eq "I dry run without launchd/ exits 0" 0 "$RC"
@@ -789,6 +808,16 @@ not_contains "J6 bash32" "$OUT" "unbound variable"
 # but nothing under the daemons dir: step 8 alone, nothing else
 KH="$FLEET_LOGIN_HOMES/kai"; mkdir -p "$KH/.claude"
 git clone -q -b stable "$GB/verkyyi/claude-fleet.git" "$KH/.claude/fleet"
+# the login's clone is the login's to change: a marked template, a unit only it
+# has, and an apply script + lib of its own — none of it may reach the install
+KMARK=LOGINCLONE-MARK-7f3a; KRAN="$WORK/login-clone-apply-ran"
+KT="$KH/.claude/fleet/launchd/com.claude-fleet.spinner.plist.tmpl"
+sed "s|<string>0.12</string>|<string>$KMARK</string>|" "$KT" > "$KT.new" && mv "$KT.new" "$KT"
+grep -q "$KMARK" "$KT" || st_fail "K could not plant the marker in the login's template"
+cp "$KT" "$KH/.claude/fleet/launchd/com.claude-fleet.login-only.plist.tmpl"
+for f in fleet-install-apply.sh fleet-daemon-lib.sh; do
+  printf '#!/bin/bash\ntouch %q\necho "--render-system"\nexit 1\n' "$KRAN" > "$KH/.claude/fleet/bin/$f"
+done
 chmod 000 "$KH"
 konly() { : > "$LOG"; OUT=$(FAKE_EXISTING='kai nohome' "$BASH_BIN" "$S" "$@" 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
 steps_1to7() { printf '%s\n' "$CALLS" | grep -Ec '^(sysadminctl|createhomedir|dseditgroup|chown|sudo (tee|mkdir|cp|chmod|git|ssh-keygen))( |$)'; }
@@ -808,7 +837,12 @@ if [ -z "$DAEMONS" ]; then
   st_eq "K $NTMPL bootstraps" "$NTMPL" "$(grep -c '^launchctl bootstrap system ' "$LOG")"
   st_eq "K steps 1–7: zero calls" 0 "$(steps_1to7)"
   contains "K installed N/N" "$OUT" "installed $NTMPL/$NTMPL"
-  contains "K read as the login" "$OUT" "sudo -u kai -H ls -1 $KH/.claude/fleet/launchd"
+  contains "K the clone checked as the login" "$OUT" "sudo -u kai -H test -d $KH/.claude/fleet/bin"
+  st_eq "K nothing read out of the clone" 0 "$(grep -Ec '^sudo (cat|ls)$' "$LOG")"
+  [ ! -e "$KRAN" ] || st_fail "K the login clone's apply script / lib ran"
+  st_eq "K the login's marker reached no plist" "" "$(grep -l "$KMARK" "$FLEET_INSTALL_DAEMON_DIR"/* 2>/dev/null)"
+  [ ! -e "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.login-only.plist" ] || st_fail "K a unit only the login's clone has was installed"
+  st_eq "K spinner rendered from this install" 0.12 "$(plutil -extract EnvironmentVariables.SPIN_INTERVAL raw -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist")"
   st_eq "K $NTMPL plists" "$NTMPL" "$(ls "$FLEET_INSTALL_DAEMON_DIR"/com.claude-fleet.kai.*.plist | wc -l | tr -d ' ')"
   st_eq "K Label" com.claude-fleet.kai.spinner "$(plutil -extract Label raw -o - "$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist")"
   [ -e "$HOME/kai-onboard" ] && st_fail "K wrote an onboard dir"
@@ -822,6 +856,18 @@ if [ -z "$DAEMONS" ]; then
   konly kai --daemons-only --apply
   st_eq "K fill one: exit" 0 "$RC"
   st_eq "K fill one: one bootstrap" "launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist" "$(grep '^launchctl ' "$LOG")"
+  # one in place that still names its log in the plist (installed before the
+  # system shape wrote /dev/null there): booted out, re-rendered, bootstrapped
+  KD="$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.collect.plist"
+  plutil -replace StandardErrorPath -string "$KH/.config/claude-fleet/logs/collect.launchd.log" "$KD"
+  konly kai --daemons-only --apply
+  st_eq "K older shape: exit" 0 "$RC"
+  contains "K older shape: says replaced" "$OUT" "names its log in the plist: $KD — replaced"
+  st_eq "K older shape: bootout + bootstrap, it alone" "launchctl bootout system/com.claude-fleet.kai.collect
+launchctl bootstrap system $KD" "$(grep '^launchctl ' "$LOG")"
+  st_eq "K older shape: one install" 1 "$(grep -c '^sudo install$' "$LOG")"
+  st_eq "K older shape: /dev/null now" /dev/null "$(plutil -extract StandardErrorPath raw -o - "$KD")"
+  contains "K older shape: installed N/N" "$OUT" "installed $NTMPL/$NTMPL ($((NTMPL - 1)) already in place)"
   # a login with no clone yet: fails at step 8 naming what is missing
   LH="$FLEET_LOGIN_HOMES/nohome"; mkdir -p "$LH"; chmod 000 "$LH"
   konly nohome --daemons-only --apply
@@ -850,6 +896,87 @@ for args in "kai --daemons-only --no-daemons" "kai --daemons-only --share-pool -
   st_eq "K usage nothing run ($args)" 0 "$(mutations)"
 done
 not_contains "K bash32" "$OUT" "unbound variable"
+# --- V. the rendered plist is checked before any install ---------------------
+# a copy of this install whose apply script is a stub printing the plist
+# FAKE_RENDER names; one template (vunit). No plutil needed to render, so this
+# leg runs on Linux too (the check falls back to python3's plistlib there).
+VB="$WORK/vinstall/bin"; mkdir -p "$VB" "$WORK/vinstall/launchd"; ln -s "$BIN"/* "$VB/"
+rm -f "$VB/fleet-install-apply.sh"
+cp "$BIN/../launchd/com.claude-fleet.spinner.plist.tmpl" "$WORK/vinstall/launchd/com.claude-fleet.vunit.plist.tmpl"
+cat > "$VB/fleet-install-apply.sh" <<'VA'
+#!/bin/bash
+# stub --render-system: the system shape for $FLEET_INSTALL_LOGIN, bent by FAKE_RENDER
+l=$FLEET_INSTALL_LOGIN u=$2
+lab="com.claude-fleet.$l.$u" usr="<key>UserName</key><string>$l</string>"
+grp='<key>GroupName</key><string>staff</string>' p0=/bin/sh extra=''
+case "${FAKE_RENDER:-good}" in
+  user)    usr='<key>UserName</key><string>root</string>' ;;
+  nouser)  usr='' ;;
+  label)   lab="com.claude-fleet.other.$u" ;;
+  group)   grp='<key>GroupName</key><string>wheel</string>' ;;
+  home)    p0="$FLEET_INSTALL_HOME/.claude/fleet/bin/x.sh" ;;
+  rel)     p0=sh ;;
+  dots)    p0=/bin/../tmp/x ;;
+  rootdir) extra='<key>RootDirectory</key><string>/</string>' ;;
+  program) extra='<key>Program</key><string>/tmp/x</string>' ;;
+  stdin)   extra='<key>StandardInPath</key><string>/tmp/x</string>' ;;
+  sockets) extra='<key>Sockets</key><dict><key>L</key><dict><key>SockPathName</key><string>/tmp/x.sock</string></dict></dict>' ;;
+  watch)   extra='<key>WatchPaths</key><array><string>/tmp/x</string></array>' ;;
+  queue)   extra='<key>QueueDirectories</key><array><string>/tmp/x</string></array>' ;;
+  session) extra='<key>SessionCreate</key><false/>' ;;
+  mach)    extra='<key>MachServices</key><dict><key>x.y</key><true/></dict>' ;;
+  stdout)  extra="<key>StandardOutPath</key><string>$FLEET_INSTALL_HOME/.config/claude-fleet/logs/x.log</string>" ;;
+  stderr)  extra="<key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>$FLEET_INSTALL_HOME/x.log</string>" ;;
+  good)    extra='<key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string>' ;;
+  garbage) echo 'not a plist'; exit 0 ;;
+esac
+cat <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$lab</string>
+  $usr $grp $extra
+  <key>ProgramArguments</key><array><string>$p0</string><string>-c</string><string>exec '$FLEET_INSTALL_HOME/.claude/fleet/bin/tmux-spinner.sh'</string></array>
+</dict></plist>
+PL
+VA
+chmod +x "$VB/fleet-install-apply.sh"
+VDST="$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.vunit.plist"
+vonly() { : > "$LOG"; OUT=$(FAKE_EXISTING=kai "$BASH_BIN" "$VB/fleet-login-new.sh" kai --daemons-only --apply 2>&1); RC=$?; CALLS=$(cat "$LOG"); unlock_homes; }
+for pl in "" /nonexistent/plutil; do
+  vt="V${pl:+ (python3)}"
+  if [ -z "$pl" ] && ! command -v plutil >/dev/null 2>&1; then continue; fi
+  if [ -n "$pl" ] && ! command -v python3 >/dev/null 2>&1; then continue; fi
+  for bad in user:"UserName is 'root', not 'kai'" nouser:"no UserName" \
+             label:"Label is 'com.claude-fleet.other.vunit', not 'com.claude-fleet.kai.vunit'" \
+             group:"GroupName is 'wheel', not 'staff'" \
+             home:"is not under /bin, /usr/bin, /sbin or /usr/sbin" rel:"is not under /bin" \
+             dots:"is not a plain path" rootdir:"carries a RootDirectory key" \
+             program:"carries a Program key" garbage:"no Label (or not a plist)" \
+             stdin:"carries a StandardInPath key" sockets:"carries a Sockets key" \
+             watch:"carries a WatchPaths key" queue:"carries a QueueDirectories key" \
+             session:"carries a SessionCreate key" mach:"carries a MachServices key" \
+             stdout:"StandardOutPath is '$FLEET_LOGIN_HOMES/kai/.config/claude-fleet/logs/x.log', not /dev/null" \
+             stderr:"StandardErrorPath is '$FLEET_LOGIN_HOMES/kai/x.log', not /dev/null"; do
+    k=${bad%%:*} msg=${bad#*:}
+    rm -f "$VDST"
+    FAKE_RENDER=$k FLEET_LOGIN_PLUTIL=${pl:-plutil} vonly
+    st_eq "$vt $k refused → 1" 1 "$RC"
+    contains "$vt $k refused before install" "$OUT" "the rendered com.claude-fleet.kai.vunit.plist is not the system shape for kai — "
+    contains "$vt $k says why" "$OUT" "$msg"
+    [ ! -e "$VDST" ] || st_fail "$vt $k: installed anyway"
+    st_eq "$vt $k nothing installed" 0 "$(grep -c '^sudo install$' "$LOG")"
+    st_eq "$vt $k nothing bootstrapped" 0 "$(grep -c '^launchctl ' "$LOG")"
+  done
+  rm -f "$VDST"
+  FAKE_RENDER=good FLEET_LOGIN_PLUTIL=${pl:-plutil} vonly
+  st_eq "$vt the right shape installs" 0 "$RC"
+  [ -e "$VDST" ] || st_fail "$vt the right shape was not installed:
+$OUT"
+  st_eq "$vt one bootstrap" "launchctl bootstrap system $VDST" "$(grep '^launchctl ' "$LOG")"
+  rm -f "$VDST"
+done
+not_contains "V bash32" "$OUT" "unbound variable"
 # --- L. the machine's Claude Code cache (#2297); no claude-fleet mirror (#2775) --
 CC="$WORK/cache"; mkdir -p "$WORK/l-bin"
 printf '#!/bin/sh\necho "9.9.9 (Claude Code)"\n' > "$WORK/l-bin/claude"; chmod +x "$WORK/l-bin/claude"

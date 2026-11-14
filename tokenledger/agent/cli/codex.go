@@ -14,12 +14,18 @@ import (
 	"syscall"
 	"text/tabwriter"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/agent"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
 )
 
 func runCodex(args []string) error {
+	if len(args) > 0 && args[0] == agent.CodexOpAction {
+		// a machine agent's Codex work for one login, run as that login
+		// (not in the usage: nothing but the agent starts it)
+		return agent.RunCodexOp(os.Stdin, os.Stdout)
+	}
 	fs := flag.NewFlagSet("codex", flag.ContinueOnError)
 	home := fs.String("home", "", "OS user home")
 	binary := fs.String("codex-bin", os.Getenv("CCQUOTA_CODEX_BINARY"), "Codex executable")

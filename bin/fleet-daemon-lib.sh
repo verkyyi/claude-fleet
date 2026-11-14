@@ -271,6 +271,49 @@ fleet_daemon_plist() {
   esac
 }
 
+# --- system-shape units that name a log file in their plist ----------------------
+# launchd opens StandardOutPath / StandardErrorPath before it switches to the
+# job's UserName, so the system shape names /dev/null there and the job's own
+# /bin/sh wrapper opens its log as the login (fleet-install-apply.sh
+# render_system). A unit installed before that still names its log in the plist.
+# Replacing a system plist takes an admin; the login's own apply leaves such a
+# unit running as installed and prints fleet_daemon_homelog_line once.
+# fleet_daemon_plist_logs <plist> — 0 iff the plist sets StandardOutPath or
+# StandardErrorPath to anything but /dev/null (plutil, else python3 plistlib).
+fleet_daemon_plist_logs() {
+  for _fpl_k in StandardOutPath StandardErrorPath; do
+    if command -v plutil >/dev/null 2>&1; then
+      _fpl_v=$(plutil -extract "$_fpl_k" raw -o - "$1" 2>/dev/null) || continue
+    else
+      _fpl_v=$(python3 -I -c 'import plistlib, sys
+try:
+    v = plistlib.load(open(sys.argv[1], "rb"))[sys.argv[2]]
+except Exception:
+    sys.exit(1)
+print(v)' "$1" "$_fpl_k" 2>/dev/null) || continue
+    fi
+    [ -n "$_fpl_v" ] && [ "$_fpl_v" != /dev/null ] && return 0
+  done
+  return 1
+}
+# fleet_daemon_homelog_units [login] → the units (one per line) of that login's
+# installed system plists (com.claude-fleet.<login>.<unit>.plist) that name a
+# log file — nothing for a gui-shape login or one with no system plists.
+fleet_daemon_homelog_units() {
+  _fhu_l="${1:-$(fleet_daemon_login)}"
+  for _fhu_f in "$(fleet_daemon_daemons_dir)/com.claude-fleet.$_fhu_l".*.plist; do
+    [ -f "$_fhu_f" ] || continue
+    fleet_daemon_plist_logs "$_fhu_f" || continue
+    _fhu_u=${_fhu_f##*/com.claude-fleet."$_fhu_l".}; printf '%s\n' "${_fhu_u%.plist}"
+  done
+}
+# fleet_daemon_homelog_line <login> <count> → the one line a login, its apply
+# and its doctor show for those units (the same words everywhere).
+fleet_daemon_homelog_line() {
+  printf '%s of %s'"'"'s background services (system LaunchDaemons) still have launchd open their log in the home; they keep running as installed, and only an admin can replace them — ask the operator to run: ~/.claude/fleet/bin/fleet-login-new.sh %s --daemons-only --apply' \
+    "$2" "$1" "$1"
+}
+
 # fleet_now — epoch seconds. `date +%s` unless the calling script PINNED its clock
 # with fleet_now_pin: then the pin plus the shell's own $SECONDS since pinning, so
 # every age this lib (and usage-lib.sh, which delegates here) computes shares ONE
