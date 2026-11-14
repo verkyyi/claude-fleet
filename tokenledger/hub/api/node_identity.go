@@ -4,6 +4,8 @@ import (
 	"errors"
 	"log"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/store"
@@ -110,7 +112,8 @@ func sameEnrolledName(enrolled, reported string) bool {
 // heartbeat and the registry write it feeds ask twice, and nothing it reads
 // moves between them.
 func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
-	if id, ok := s.identCached(ep.ID, host, user); ok {
+	repUser := user // the cache is keyed by the report as asked
+	if id, ok := s.identCached(ep.ID, host, repUser); ok {
 		return id
 	}
 	gen := s.Store.IdentityGen()
@@ -157,7 +160,7 @@ func (s *Server) nodeSelfFrom(ep *store.Endpoint, host, user string) nodeIdent {
 			id.User, id.UserDrift = id.EnrolledUser, true
 		}
 	}
-	s.identStore(ep.ID, host, user, gen, id)
+	s.identStore(ep.ID, host, repUser, gen, id)
 	return id
 }
 
@@ -226,22 +229,26 @@ type enrollRec struct {
 	Member bool
 }
 
-// enrollment is endpointID's enrollment record, cached until the identity
-// generation moves (or identTTL passes — another replica's write). An
+// enrollment is endpointID's enrollment record: the join-code facts cached
+// until the identity generation moves (or identTTL passes — another
+// replica's write), the device person's standing read through. An
 // unreadable record reads as the most held one: a member's device, pinned, a
 // pod — never the operator's own; it is not cached.
 func (s *Server) enrollment(endpointID string) enrollRec {
 	gen := s.Store.IdentityGen()
-	if v, ok := s.enrollCache.Load(endpointID); ok {
-		if e := v.(enrollEntry); e.gen == gen && time.Since(e.at) < identTTL {
-			return e.rec
+	var e store.EndpointEnrollment
+	if v, ok := s.enrollCache.Load(endpointID); ok && v.(enrollEntry).gen == gen && time.Since(v.(enrollEntry).at) < identTTL {
+		e = v.(enrollEntry).rec
+	} else {
+		var err error
+		if e, err = s.Store.EnrollmentOf(endpointID); err != nil {
+			log.Printf("node %s: read how it enrolled: %v", endpointID, err)
+			return enrollRec{EndpointEnrollment: store.EndpointEnrollment{ByDevice: true, Pinned: true, Pod: true}, Member: true}
 		}
+		s.cacheStore(&s.enrollCache, &s.enrollCount, endpointID, enrollEntry{gen: gen, at: time.Now(), rec: e})
 	}
-	e, err := s.Store.EnrollmentOf(endpointID)
-	if err != nil {
-		log.Printf("node %s: read how it enrolled: %v", endpointID, err)
-		return enrollRec{EndpointEnrollment: store.EndpointEnrollment{ByDevice: true, Pinned: true, Pod: true}, Member: true}
-	}
+	// Whether a device's person is an admin is read every time, never
+	// cached (task MPCX): a demotion or a revoked device counts at once.
 	rec := enrollRec{EndpointEnrollment: e, Member: e.ByDevice}
 	for _, p := range e.DevicePeople {
 		if s.isOperator(p) {
@@ -249,14 +256,13 @@ func (s *Server) enrollment(endpointID string) enrollRec {
 			break
 		}
 	}
-	s.enrollCache.Store(endpointID, enrollEntry{gen: gen, at: time.Now(), rec: rec})
 	return rec
 }
 
 type enrollEntry struct {
 	gen uint64
 	at  time.Time
-	rec enrollRec
+	rec store.EndpointEnrollment
 }
 
 // deviceEnrolled is who enrolled endpointID by a device's road, or tied it to
@@ -412,8 +418,10 @@ func (s *Server) routeSelf(ep *store.Endpoint, id nodeIdent) (host, user string)
 }
 
 // identTTL bounds how long a cached identity answer stands without a write on
-// this replica moving IdentityGen — another replica's enrollment or trust
-// word reaches this one within it.
+// this replica moving IdentityGen (store.identityChanged): another replica's
+// enrollment, trust word, account change or role change reaches this one
+// within it — the multi-replica bound. A device's answer stands
+// identDeviceTTL at most, and its person's admin standing is read through.
 const identTTL = 30 * time.Second
 
 // identEntry is one endpoint's cached answer: nodeSelfFrom's for one report,
@@ -434,14 +442,55 @@ func (s *Server) identCached(endpointID, host, user string) (nodeIdent, bool) {
 		return nodeIdent{}, false
 	}
 	e := v.(identEntry)
-	if e.host != host || e.user != user || e.gen != s.Store.IdentityGen() || time.Since(e.at) >= identTTL {
+	if e.host != host || e.user != user || e.gen != s.Store.IdentityGen() || time.Since(e.at) >= identTTLFor(e.id) {
 		return nodeIdent{}, false
 	}
 	return e.id, true
 }
 
+// identTTLFor is how long one answer stands: identTTL, but a device's only
+// identDeviceTTL — its standing rests on its person's role, which no write
+// on this replica's generation need announce.
+func identTTLFor(id nodeIdent) time.Duration {
+	if id.ByDevice {
+		return identDeviceTTL
+	}
+	return identTTL
+}
+
+// identDeviceTTL bounds a device endpoint's cached identity.
+const identDeviceTTL = 3 * time.Second
+
+// identCacheMax bounds each identity cache; past it the cache starts over.
+const identCacheMax = 8192
+
+// cacheStore puts v under key in m, counting new keys in n; a cache that
+// grows past identCacheMax is emptied first.
+func (s *Server) cacheStore(m *sync.Map, n *atomic.Int64, key string, v any) {
+	if _, loaded := m.Swap(key, v); loaded {
+		return
+	}
+	if n.Add(1) > identCacheMax {
+		m.Range(func(k, _ any) bool { m.Delete(k); return true })
+		n.Store(0)
+		m.Store(key, v)
+		n.Store(1)
+	}
+}
+
+// forgetIdentity drops endpointID's cached answers (its link closed, it was
+// retired): the cache holds live nodes, not every endpoint ever seen.
+func (s *Server) forgetIdentity(endpointID string) {
+	if _, ok := s.identCache.LoadAndDelete(endpointID); ok {
+		s.identCount.Add(-1)
+	}
+	if _, ok := s.enrollCache.LoadAndDelete(endpointID); ok {
+		s.enrollCount.Add(-1)
+	}
+}
+
 func (s *Server) identStore(endpointID, host, user string, gen uint64, id nodeIdent) {
-	s.identCache.Store(endpointID, identEntry{host: host, user: user, gen: gen, at: time.Now(), id: id})
+	s.cacheStore(&s.identCache, &s.identCount, endpointID, identEntry{host: host, user: user, gen: gen, at: time.Now(), id: id})
 }
 
 func (s *Server) routeCached(endpointID string, id nodeIdent) (string, string, bool) {
@@ -450,7 +499,7 @@ func (s *Server) routeCached(endpointID string, id nodeIdent) (string, string, b
 		return "", "", false
 	}
 	e := v.(identEntry)
-	if !e.routed || e.id != id || e.gen != s.Store.IdentityGen() || time.Since(e.at) >= identTTL {
+	if !e.routed || e.id != id || e.gen != s.Store.IdentityGen() || time.Since(e.at) >= identTTLFor(e.id) {
 		return "", "", false
 	}
 	return e.rHost, e.rUser, true
@@ -466,7 +515,7 @@ func (s *Server) routeStore(endpointID string, id nodeIdent, gen uint64, host, u
 		return
 	}
 	e.routed, e.rHost, e.rUser = true, host, user
-	s.identCache.Store(endpointID, e)
+	s.cacheStore(&s.identCache, &s.identCount, endpointID, e)
 }
 
 // hostClaimed: host names a machine the hub knows apart from endpointID — a

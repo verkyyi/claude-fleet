@@ -616,7 +616,7 @@ func (s *Store) FleetSettings() (map[string]string, error) {
 // SetFleetSetting stores one setting; an empty value deletes it, so the
 // default applies again.
 func (s *Store) SetFleetSetting(key, value string, at time.Time) error {
-	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
+	defer s.identityChanged()
 	if value == "" {
 		_, err := s.write.Exec(`DELETE FROM fleet_settings WHERE key = ?`, key)
 		return err

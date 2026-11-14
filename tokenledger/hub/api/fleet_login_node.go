@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,8 +87,29 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 			"the signed timestamp is too far from the hub's clock — check this computer's time")
 		return
 	}
+	// The source's budget first (task MPCX): a flood never reaches the
+	// signature check unbounded.
+	if !s.loginNodeBudgets().source.allow(r, now) {
+		w.Header().Set("Retry-After", "60")
+		refuseJSON(w, http.StatusTooManyRequests, "rate_limited", "too many node passes asked — try again in a minute")
+		return
+	}
 	if err := verifySSHSig(key, []byte(req.Sig), []byte(control.LoginNodeSigMessage(req.TS)), control.LoginNodeSigNamespace); err != nil {
 		refuseJSON(w, http.StatusUnauthorized, "bad_signature", "node pass signature refused: "+err.Error())
+		return
+	}
+	// Then the device key's own budget — after its signature, so nobody
+	// holding only its public key can spend it.
+	if !s.loginNodeBudgets().device.allowFrom(fpAddr(fp), now) {
+		w.Header().Set("Retry-After", "60")
+		refuseJSON(w, http.StatusTooManyRequests, "rate_limited", "too many node passes asked for this computer — try again in a minute")
+		return
+	}
+	// One signed timestamp buys one node pass (task MPCX): the same signature
+	// sent again inside the clock window is refused, not answered with a
+	// fresh token. Kept per replica.
+	if !s.loginNodeOnce(fp, req.TS, now) {
+		refuseJSON(w, http.StatusUnauthorized, "bad_signature", "this signed request was already used — sign a new one")
 		return
 	}
 	dev, ok := s.usableDevice(w, fp, store.DeviceNodePassRefused, now)
@@ -112,7 +135,6 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	var tn *trustedNameErr
 	var mm *machineManagedErr
 	var rl *reservedLoginErr
-	var la *loginAccountErr
 	switch {
 	case errors.As(err, &tn):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
@@ -121,10 +143,6 @@ func (s *Server) handleLoginNode(w http.ResponseWriter, r *http.Request) {
 	case errors.As(err, &rl):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
 		refuseJSON(w, http.StatusConflict, "reserved_login", err.Error())
-		return
-	case errors.As(err, &la):
-		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
-		refuseJSON(w, http.StatusConflict, la.code, err.Error())
 		return
 	case errors.As(err, &mm):
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, err.Error(), now)
@@ -157,14 +175,6 @@ type reservedLoginErr struct{ login string }
 func (e *reservedLoginErr) Error() string {
 	return fmt.Sprintf("%s is the machine's admin role account; its node token comes only from that machine's own install (fleet node install), never from a login", e.login)
 }
-
-// loginAccountErr: a device road's login could not be recorded as the
-// person's own (task MPCX) — no login named, one the hub does not record, or
-// a login on that machine that is somebody else's. A device's node is that
-// person's terminal or it is nothing: no node token is handed out for it.
-type loginAccountErr struct{ code, why string }
-
-func (e *loginAccountErr) Error() string { return e.why }
 
 // ReissueTokenGrace is how long a reissued node token's predecessor still
 // resolves (claude-fleet#2501): a second holder of the endpoint — the
@@ -215,9 +225,6 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 		// its node turned off (claude-fleet#3710).
 		if ep, _ := s.nodeAuthOpt(r); ep != nil &&
 			(ep.OSUser == "" || ep.OSUser == sanitizeJoinLogin(osUser) || ep.OSUser == deviceRoadLogin(pid, fp, osUser)) {
-			if err := s.deviceLoginAccount(pid, fp, ep.ID, osUser, now); err != nil {
-				return nil, "", err
-			}
 			if id, err := s.Store.DeviceNodeEndpoint(fp); err != nil || id != ep.ID {
 				code, err := MintJoinCode()
 				if err != nil {
@@ -230,7 +237,9 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 					log.Printf("join audit: %v", err)
 				}
 			}
-			return s.joinResponse(r, ep.ID, ep.Label, tok, ep.OSUser), "linked", nil
+			out := s.joinResponse(r, ep.ID, ep.Label, tok, ep.OSUser)
+			s.noteDeviceLogin(out, pid, fp, ep.ID, osUser, now)
+			return out, "linked", nil
 		}
 	}
 	if id, err := s.Store.DeviceNodeEndpoint(fp); err == nil {
@@ -238,9 +247,6 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 			// The login runs on its machine's node program, which holds
 			// the token this would replace (claude-fleet#2501).
 			return nil, "", &machineManagedErr{osUser: sanitizeJoinLogin(osUser), host: mach}
-		}
-		if err := s.deviceLoginAccount(pid, fp, id, osUser, now); err != nil {
-			return nil, "", err
 		}
 		tok, err := MintToken()
 		if err != nil {
@@ -256,7 +262,9 @@ func (s *Server) deviceNode(r *http.Request, pid, fp, hostname, osUser string, n
 		if err := s.Store.FleetAudit("device:"+fp, "node_join", "endpoint:"+id, "REISSUED "+ep.Label+" 随登录登记", "", now); err != nil {
 			log.Printf("join audit: %v", err)
 		}
-		return s.joinResponse(r, id, ep.Label, tok, ep.OSUser), "reissued", nil
+		out := s.joinResponse(r, id, ep.Label, tok, ep.OSUser)
+		s.noteDeviceLogin(out, pid, fp, id, osUser, now)
+		return out, "reissued", nil
 	} else if !errors.Is(err, store.ErrNoSuchEndpoint) {
 		return nil, "", err
 	}
@@ -310,19 +318,12 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 	if err := s.Store.CreateJoinCodeForDevice(HashToken(code), fp, s.joinNow(), JoinCodeTTL); err != nil {
 		return nil, err
 	}
-	out, err := s.redeemJoin(r, code, hostname, login)
+	out, err := s.redeemJoin(r, code, s.deviceHost(pid, fp, hostname), login)
 	if err != nil {
 		return nil, err
 	}
-	// The login must be the person's own (登录即认人) or there is no node: a
-	// node nobody owns would act for no one in particular (task MPCX).
 	now := time.Now()
-	if err := s.deviceLoginAccount(pid, fp, out.EndpointID, osUser, now); err != nil {
-		if _, rerr := s.Store.RetireEndpointAs(out.EndpointID, "device:"+fp, err.Error(), now); rerr != nil {
-			log.Printf("device %s: retire %s after its login was refused: %v", fp, out.EndpointID, rerr)
-		}
-		return nil, err
-	}
+	s.noteDeviceLogin(out, pid, fp, out.EndpointID, osUser, now)
 	if s.isFleetAdmin(login) && !s.isOperator(pid) {
 		_ = s.Store.FleetAudit("device:"+fp, "node_identity", "endpoint:"+out.EndpointID,
 			"ENROLLED AS AN ORDINARY NODE — "+login+" by a member's device: never an admin node", "", now)
@@ -330,14 +331,50 @@ func (s *Server) enrollDeviceNode(r *http.Request, pid, fp, hostname, osUser str
 	return out, nil
 }
 
-// deviceLoginAccount records the device's login (deviceRoadLogin) on endpointID's
-// machine as pid's (recordLoginAccount) and answers a loginAccountErr when it
-// is not theirs afterwards.
-func (s *Server) deviceLoginAccount(pid, fp, endpointID, osUser string, now time.Time) error {
-	if why := s.recordLoginAccount(pid, fp, endpointID, deviceRoadLogin(pid, fp, osUser), now); why != "" {
-		return &loginAccountErr{"login_not_recorded", why + " — no node pass is issued for it"}
+// deviceHost is the machine name a device road enrolls a new node under (task
+// MPCX): the reported name, unless another live endpoint enrolled as it or
+// someone else's login is recorded there — a default name like MacBook-Pro
+// that another person's device, or another of this person's computers,
+// already holds — then the name with four hex of this device's fingerprint
+// (`MacBook-Pro-1a2b`). A machine name stays unique to one enrollment, so
+// every lookup by machine and login (relays, chat, terminals, peer
+// certificates, placement, a person's view) reaches this device's node and
+// no one else's; nobody is refused a node because another device used the
+// same name first. An unreadable answer reads as taken.
+func (s *Server) deviceHost(pid, fp, hostname string) string {
+	host := sanitizeJoinField(hostname)
+	if host == "" {
+		return host
 	}
-	return nil
+	taken, err := s.Store.EnrolledByAnother("", host)
+	if err == nil && !taken {
+		taken, err = s.Store.HostHeldByOthers(host, pid)
+	}
+	if err == nil && !taken {
+		return host
+	}
+	sum := sha256.Sum256([]byte(fp))
+	suffix := "-" + hex.EncodeToString(sum[:2])
+	if len(host)+len(suffix) > 32 {
+		host = host[:32-len(suffix)]
+	}
+	return host + suffix
+}
+
+// noteDeviceLogin records the device's login (deviceRoadLogin) on endpointID's
+// machine as pid's (登录即认人) and says on the node pass what the node lacks:
+// AccountRefused when the row could not be written — the node is still the
+// device's person's (principalOnNode) — and EntryNote when the login is one
+// the door, entry relay and peer certificates do not serve (2–16 lowercase
+// letters and digits, no reserved name): the node runs sessions; nobody
+// reaches it over SSH as that login.
+func (s *Server) noteDeviceLogin(out *NodeJoinResponse, pid, fp, endpointID, osUser string, now time.Time) {
+	login := deviceRoadLogin(pid, fp, osUser)
+	out.AccountRefused = s.recordLoginAccount(pid, fp, endpointID, login, now)
+	if !control.ValidExistingLogin(login) {
+		out.EntryNote = fmt.Sprintf("login %s is a node for sessions only: SSH entry, the door and peer certificates serve logins of 2–16 lowercase letters and digits", login)
+		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, "endpoint "+endpointID+": "+out.EntryNote, now)
+	}
 }
 
 // sanitizeJoinLogin keeps a reported OS login as the login it is (task MPCX):
@@ -409,9 +446,41 @@ func deviceLoginRecordable(login string) bool {
 func (s *Server) principalOnNode(endpointID, host, login string) (string, error) {
 	p, err := s.nodeLoginPrincipal(endpointID, host, login)
 	if errors.Is(err, store.ErrNoPrincipal) {
-		return s.Store.PrincipalForEndpointLogin(endpointID, login)
+		p, err = s.Store.PrincipalForEndpointLogin(endpointID, login)
+	}
+	if errors.Is(err, store.ErrNoPrincipal) {
+		if d := s.devicePerson(endpointID, login); d != "" {
+			return d, nil
+		}
 	}
 	return p, err
+}
+
+// devicePerson is the person a device road's endpoint belongs to when no
+// account row names it (task MPCX): its device's person, for the login it
+// enrolled as — the node is bound to (person, device), not to a machine and
+// login name another device may share. "" for any other endpoint, a login it
+// did not enroll as, or devices of more than one person.
+func (s *Server) devicePerson(endpointID, login string) string {
+	e := s.enrollment(endpointID)
+	if !e.ByDevice || login == "" {
+		return ""
+	}
+	et, err := s.Store.EndpointTrustOf(endpointID)
+	if err != nil || et.EnrolledUser != login {
+		return ""
+	}
+	who := ""
+	for _, p := range e.DevicePeople {
+		switch {
+		case p == "":
+		case who == "":
+			who = p
+		case !strings.EqualFold(who, p):
+			return ""
+		}
+	}
+	return who
 }
 
 // accountOpLeaseWindow bounds the lease an account op's own login is answered
@@ -504,28 +573,90 @@ func (s *Server) recordLoginAccount(pid, fp, endpointID, osUser string, now time
 		return fmt.Sprintf("system login %s is not one the hub records", osUser)
 	}
 	ep, err := s.Store.EndpointByID(endpointID)
-	if err != nil || ep.Hostname == "" {
+	if err != nil {
+		return "this node has no machine name on the hub"
+	}
+	// On the machine it ENROLLED as (task MPCX): unique to this device's
+	// enrollment (deviceHost), never a name a later report gave.
+	host := ep.Hostname
+	if et, err := s.Store.EndpointTrustOf(endpointID); err == nil && enrolledMachine(et) != "" {
+		host = enrolledMachine(et)
+	}
+	if host == "" {
 		return "this node has no machine name on the hub"
 	}
 	p, err := s.Store.Principal(pid)
 	if err != nil {
 		return "account not recorded: " + err.Error()
 	}
-	wrote, err := s.Store.RecordLoginAccount(p, ep.Hostname, osUser, ep.ID, "登录即认人 · device "+fp, now)
+	wrote, err := s.Store.RecordLoginAccount(p, host, osUser, ep.ID, "登录即认人 · device "+fp, now)
 	switch {
 	case err != nil:
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, "account not recorded: "+err.Error(), now)
 		return "account not recorded: " + err.Error()
 	case wrote:
-		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("account %s on %s is %s · 登录即认人", osUser, ep.Hostname, pid), now)
+		s.deviceAudit(store.DeviceNodePass, fp, pid, pid, fmt.Sprintf("account %s on %s is %s · 登录即认人", osUser, host, pid), now)
 	}
-	if who, err := s.principalOnNode(ep.ID, ep.Hostname, osUser); err != nil || who != pid {
-		why := fmt.Sprintf("login %s on %s is not recorded as yours", osUser, ep.Hostname)
+	if who, err := s.principalOnNode(ep.ID, host, osUser); err != nil || who != pid {
+		why := fmt.Sprintf("login %s on %s is not recorded as yours", osUser, host)
 		if who != "" {
-			why = fmt.Sprintf("login %s on %s already belongs to someone else", osUser, ep.Hostname)
+			why = fmt.Sprintf("login %s on %s already belongs to someone else", osUser, host)
 		}
 		s.deviceAudit(store.DeviceNodePassRefused, fp, pid, pid, why, now)
 		return why
 	}
 	return ""
 }
+
+// loginNodeLimits are the node-pass road's budgets (task MPCX): per source
+// address, and per device key (fpAddr). Per replica, like every clientBudget.
+type loginNodeLimits struct{ source, device *clientBudget }
+
+func (s *Server) loginNodeBudgets() *loginNodeLimits {
+	s.loginNodeInit.Do(func() {
+		s.loginNodeLim = &loginNodeLimits{
+			source: &clientBudget{burst: 60, perSec: 60.0 / 60, max: 4096},
+			device: &clientBudget{burst: 12, perSec: 12.0 / 60, max: 4096},
+		}
+	})
+	return s.loginNodeLim
+}
+
+// fpAddr keys a device key's budget in clientBudget's table: an address
+// taken from the fingerprint's hash (never a real source address).
+func fpAddr(fp string) netip.Addr {
+	sum := sha256.Sum256([]byte("device-key:" + fp))
+	var a [16]byte
+	copy(a[:], sum[:16])
+	return netip.AddrFrom16(a)
+}
+
+// loginNodeOnce marks (fp, ts) used and says whether it was fresh: a signed
+// node-pass request is answered once. Entries older than twice the clock
+// window are dropped; the table is bounded.
+func (s *Server) loginNodeOnce(fp string, ts int64, now time.Time) bool {
+	s.loginNodeMu.Lock()
+	defer s.loginNodeMu.Unlock()
+	if s.loginNodeSeen == nil {
+		s.loginNodeSeen = map[string]time.Time{}
+	}
+	key := fp + "|" + strconv.FormatInt(ts, 10)
+	if _, used := s.loginNodeSeen[key]; used {
+		return false
+	}
+	if len(s.loginNodeSeen) >= loginNodeSeenMax {
+		for k, at := range s.loginNodeSeen {
+			if now.Sub(at) > 2*renewClockSkew {
+				delete(s.loginNodeSeen, k)
+			}
+		}
+	}
+	if len(s.loginNodeSeen) >= loginNodeSeenMax {
+		return false // full of live entries: refuse rather than forget one
+	}
+	s.loginNodeSeen[key] = now
+	return true
+}
+
+// loginNodeSeenMax bounds loginNodeOnce's table.
+const loginNodeSeenMax = 1 << 16

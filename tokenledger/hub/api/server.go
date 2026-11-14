@@ -557,6 +557,13 @@ type Server struct {
 	// MPCX, node_identity.go) — keyed on store.IdentityGen, identTTL old at
 	// most.
 	identCache, enrollCache sync.Map
+	identCount, enrollCount atomic.Int64
+	// The node-pass road's budgets and used signatures (task MPCX,
+	// fleet_login_node.go).
+	loginNodeInit sync.Once
+	loginNodeLim  *loginNodeLimits
+	loginNodeMu   sync.Mutex
+	loginNodeSeen map[string]time.Time
 	// machineHeld: endpoint → its roster note while its machine id is
 	// another node's (store.ErrMachineHeld).
 	machineHeld sync.Map

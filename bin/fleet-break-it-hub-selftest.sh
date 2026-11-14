@@ -741,8 +741,8 @@ drill_burst_lands_on_one() {
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
     0) WHAT='入口连续派 4 个 → 两台各 2（go test 七条：分摊、90 秒过期、心跳抵消一次、room 先扣、拒掉即忘）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；八条测试按名核对在' ;;
-    3) WHAT='没有 go：八条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十二条测试按名核对在' ;;
+    3) WHAT='没有 go：十二条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }
@@ -1043,8 +1043,8 @@ drill_spare_stall_silent() {
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
     0) WHAT='备用 0 就绪满 30 分钟记一次 spare_empty、有就绪就清；建坏的备用、洗坏的登录、集群里坏的预备 pod 立刻记 spare_failed、forget 完就清；一天内同地同因不再记；每次一行 spare.alert 审计；备用关着什么都不记（go test 五条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；八条测试按名核对在' ;;
-    3) WHAT='没有 go：八条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十二条测试按名核对在' ;;
+    3) WHAT='没有 go：十二条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }
@@ -1094,8 +1094,8 @@ drill_lease_unseparated_user() {
   go_half "^($(printf '%s %s' "$api" "$agent" | tr ' ' '|'))\$" ./hub/api github.com/verkyyi/claude-fleet/tokenledger/agent; case $? in
     0) WHAT='未隔离 / 不报字段 → 403「拒发：未隔离」、/self 带 credsep_gate（代理走 central），管理员也一样；隔离后 200；节点按 status+check 判定并 5 分钟缓存（go test 五条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；八条测试按名核对在' ;;
-    3) WHAT='没有 go：八条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十二条测试按名核对在' ;;
+    3) WHAT='没有 go：十二条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }
@@ -1119,8 +1119,8 @@ drill_trust_name_borrowed() {
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
     0) WHAT='冒名节点领凭据 / 中继凭据被拒、名册读 name_borrowed、hello 记审计；真机照领；信任在机器上：托管加入码一次、一小时、写机器；入口开的登录随机器；旧的按登录信任迁到机器；期望状态只有操作者能写（go test 七条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；八条测试按名核对在' ;;
-    3) WHAT='没有 go：八条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十二条测试按名核对在' ;;
+    3) WHAT='没有 go：十二条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }
@@ -1143,8 +1143,8 @@ drill_release_tampered() {
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
     0) WHAT='stable 一动入口就打包签名；机器从入口取到全部文件与二进制；GitHub 断了、入口重启也照样取；树 / 二进制 / 清单 / 签名 / 钥匙任一处被改都整个不换、不留半成品（go test 五条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；八条测试按名核对在' ;;
-    3) WHAT='没有 go：八条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十二条测试按名核对在' ;;
+    3) WHAT='没有 go：十二条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }
@@ -1203,7 +1203,7 @@ drill_hub_forwarded_untrusted_peer() {
 # enrollment. A user pod's program is held to its pod.
 drill_node_identity_machine_report() {
   CAP=120; local t0 out tests
-  tests='TestNodeIdentityMachineReportIsHeld TestNodeIdentityPodProgramStaysInItsPod TestNodeIdentityMachineIsTheEnrollments TestMachineLinkCarriesEveryLogin TestMachineLinkSessionLandsOnItsLogin TestNodeIdentityHostHeldWhenBothTrusted TestNodeAdminTokenReusesTheMachinesSeat TestNodeIdentityCacheFollowsTrust'
+  tests='TestNodeIdentityMachineReportIsHeld TestNodeIdentityPodProgramStaysInItsPod TestNodeIdentityMachineIsTheEnrollments TestMachineLinkCarriesEveryLogin TestMachineLinkSessionLandsOnItsLogin TestNodeIdentityHostHeldWhenBothTrusted TestNodeAdminTokenReusesOnlyItsOwnSeat TestNodeIdentityCacheFollowsTrust TestNodeIdentityNamesMatchLiterally TestNodeIdentityCountedCost TestNodeIdentityCacheBounded TestNodeIdentityCacheFollowsAccountsAndRoles'
   t0=$(now)
   for out in $tests; do
     grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
@@ -1213,10 +1213,10 @@ drill_node_identity_machine_report() {
   grep -q 'case id.Machine && !s.machineLoginOpen(id.EnrolledHost, user, pod):' "$ROOT/tokenledger/hub/api/node_identity.go" \
     || { WHY="a machine program's reported login is no longer held to the logins opened on its machine"; return 1; }
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
-    0) WHAT='机器程序报别的机器程序的名字、没入册的可信名、个人 pod 名、那台没开过的登录，都按入册身份算；改名的 Mac、服务座位、那台开过的登录照旧；个人 pod 的程序只代表它自己的 pod：机器名不动、只认 pod 的登录、不领座位、不是运营者、入口名单只是自己的；多登录机器的通道照旧；入册机器与上报机器都可信时照样按入册算，开出来的登录、pod 里的登录机器名永远是入册那台，座位按机器名不分大小写复用（go test 八条）' ;;
+    0) WHAT='机器程序报别的机器程序的名字、没入册的可信名、个人 pod 名、那台没开过的登录，都按入册身份算；改名的 Mac、服务座位、那台开过的登录照旧；个人 pod 的程序只代表它自己的 pod：机器名不动、只认 pod 的登录、不领座位、不是运营者、入口名单只是自己的；多登录机器的通道照旧；入册机器与上报机器都可信时照样按入册算，开出来的登录、pod 里的登录机器名永远是入册那台，座位只复用自己入册那台的（不分大小写），名字里的 % _ 按字面匹配；身份缓存有界、账号与角色变化即时生效，热心跳语句数有上限（go test 十二条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；八条测试按名核对在' ;;
-    3) WHAT='没有 go：八条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十二条测试按名核对在' ;;
+    3) WHAT='没有 go：十二条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }
@@ -1227,7 +1227,7 @@ drill_node_identity_machine_report() {
 # hub holds a node to, never its report.
 drill_node_identity_device_road() {
   CAP=120; local t0 out tests
-  tests='TestNodeIdentityDeviceRoadNeedsALogin TestNodeIdentityRegistryRowIsHeld TestNodeIdentityDeviceIsNeverOperator TestNodeIdentityOwnerlessNodeActsForNoOne TestNodeIdentityDeviceTakesNoMachineTrust TestNodeLeaseForceStaysInTheFamily TestNodeIdentityUsageUnderTheEnrolledLogin TestLoginNodeCannotSelfTrust TestRelayOwnerBoundary TestNodeIdentityLinkedEndpointIsTheDevices TestNodeIdentityWorkerMapIsTheHeldLogins TestNodeIdentitySpareLoginIsNotTheOperators TestNodeIdentityMachineIDTakeover TestNodeIdentityDeviceLoginsAsTheyAre'
+  tests='TestNodeIdentityDeviceRoadNeedsALogin TestNodeIdentityRegistryRowIsHeld TestNodeIdentityDeviceIsNeverOperator TestNodeIdentityOwnerlessNodeActsForNoOne TestNodeIdentityDeviceTakesNoMachineTrust TestNodeLeaseForceStaysInTheFamily TestNodeIdentityUsageUnderTheEnrolledLogin TestLoginNodeCannotSelfTrust TestRelayOwnerBoundary TestNodeIdentityLinkedEndpointIsTheDevices TestNodeIdentityWorkerMapIsTheHeldLogins TestNodeIdentitySpareLoginIsNotTheOperators TestNodeIdentityMachineIDTakeover TestNodeIdentityDeviceLoginsAsTheyAre TestNodeIdentityDevicesSharingANameEachTheirOwn TestNodeIdentityDeviceLoginEntryNote TestNodeIdentityServiceShipperIsQuiet'
   t0=$(now)
   for out in $tests; do
     grep -q "^func $out(" "$ROOT"/tokenledger/hub/api/*_test.go 2>/dev/null || { WHY="the hub half's test $out is gone"; return 1; }
@@ -1237,10 +1237,10 @@ drill_node_identity_device_road() {
   grep -q 'machineHolderOK(tx, machineID, endpointID, at)' "$ROOT/tokenledger/hub/store/fleet.go" \
     || { WHY="a snapshot's machine id is no longer bound to the node that holds it"; return 1; }
   go_half "^($(printf '%s' "$tests" | tr ' ' '|'))\$" ./hub/api; case $? in
-    0) WHAT='设备路按原样记登录（大小写、_ - .、32 位内），root 与无登录记成本人的别名、永不是机器程序，别人的登录不发节点令牌；后来绑到设备的端点也算设备；老的未记登录的设备端点不当机器程序、首报不记成 root；登记行按入册身份写、machine_id 不被活着的别的节点改指（久未出声、同机未记登录可接手，花名册上写明）；设备、开出来还没人认的登录都不是运营者；运营者绑过设备的电脑照旧；名字另有端点入册时设备不继承信任；--force 只收自家租约；用量与 worker 图按入册登录（go test 十四条）' ;;
+    0) WHAT='设备路按原样记登录（大小写、_ - .、32 位内），root 与无登录记成本人的别名、永不是机器程序；同名同登录的两台设备各有自己的节点、绑各自的人，谁也不被拒；签过的请求只答一次、按来源与设备限速；登录不在 SSH 入口范围的节点通行证上写明；只上报用量的服务不动身份缓存；后来绑到设备的端点也算设备；老的未记登录的设备端点不当机器程序、首报不记成 root；登记行按入册身份写、machine_id 不被活着的别的节点改指（久未出声、同机未记登录可接手，花名册上写明）；设备、开出来还没人认的登录都不是运营者；运营者绑过设备的电脑照旧；名字另有端点入册时设备不继承信任；--force 只收自家租约；用量与 worker 图按入册登录（go test 十七条）' ;;
     1) return 1 ;;
-    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十四条测试按名核对在' ;;
-    3) WHAT='没有 go：十四条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
+    2) WHAT='入口的 Go 测试在这台没有模块缓存 / 工具链——Go 门（tokenledger.yml）跑它们；十七条测试按名核对在' ;;
+    3) WHAT='没有 go：十七条测试按名核对在，Go 门（tokenledger.yml）跑它们' ;;
   esac
   SECS=$(since "$t0")
 }

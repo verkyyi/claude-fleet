@@ -27,6 +27,7 @@ var ErrSpareNameHeld = errors.New("the spare's login is still a person's recorde
 // RequestAccountReset queues washing principalID's login on hostname for the
 // next person — RequestAccountRemoval's twin, from the same states.
 func (s *Store) RequestAccountReset(principalID, hostname string, at time.Time) error {
+	defer s.identityChanged()
 	ts := at.UTC().Format(rfc)
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op = 'reset', op_id = '', endpoint_id = '',
 		detail = '', requested_at = ?, updated_at = ?
@@ -45,6 +46,7 @@ func (s *Store) RequestAccountReset(principalID, hostname string, at time.Time) 
 // machine's admin cannot recycle (an older node), so the login is closed the
 // old way. It reports whether the row moved.
 func (s *Store) ResetToRemove(principalID, hostname, detail string, at time.Time) (bool, error) {
+	defer s.identityChanged()
 	res, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, op = 'remove', detail = ?, updated_at = ?
 		WHERE principal_id = ? AND hostname = ? AND state = ?`,
 		AccountRemovePending, detail, at.UTC().Format(rfc), principalID, hostname, AccountResetPending)
@@ -63,6 +65,7 @@ func (s *Store) ResetToRemove(principalID, hostname, detail string, at time.Time
 // person the login was taken from. note (the wash's `timing:` line,
 // claude-fleet#4044) is appended to both when not empty.
 func (s *Store) RecycleAccount(opID, endpointID, actor, note string, at time.Time) (spare *FleetAccount, from string, applied bool, err error) {
+	defer s.identityChanged()
 	if opID == "" {
 		return nil, "", false, nil
 	}

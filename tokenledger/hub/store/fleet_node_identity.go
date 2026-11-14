@@ -173,8 +173,8 @@ func (s *Store) PodEnrolled(endpointID string) (bool, error) {
 
 // MachineEnrolledByOthers: a live endpoint other than endpointID, enrolled by
 // any road but a device's, enrolled as machine (first label, any case)
-// — the name is a machine's, not only a device's (task MPCX). A LIKE wildcard
-// in the name can only over-match, which reads as "another holds it".
+// — the name is a machine's, not only a device's (task MPCX). Names are
+// matched literally (likeDotted).
 func (s *Store) MachineEnrolledByOthers(endpointID, machine string) (bool, error) {
 	if i := strings.IndexByte(machine, '.'); i > 0 {
 		machine = machine[:i]
@@ -186,17 +186,17 @@ func (s *Store) MachineEnrolledByOthers(endpointID, machine string) (bool, error
 	var n int
 	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints e
 		WHERE e.retired_at IS NULL AND e.endpoint_id <> ?
-		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
+		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ? ESCAPE '\')
 		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
 		      AND c.device_fp <> '' AND c.used_at IS NOT NULL)`,
-		endpointID, machine, machine+".%").Scan(&n)
+		endpointID, machine, likeDotted(machine)).Scan(&n)
 	return n > 0, err
 }
 
 // MachineProgramEnrolledAs: a live endpoint other than endpointID enrolled as
 // machine (first label, any case) as root by any road but a device's — that
-// machine's own node program (task MPCX). A LIKE wildcard in the name can only
-// over-match, which reads as "another holds it".
+// machine's own node program (task MPCX). Names are matched
+// literally (likeDotted).
 func (s *Store) MachineProgramEnrolledAs(endpointID, machine string) (bool, error) {
 	machine = lowerFirstLabel(machine)
 	if machine == "" {
@@ -205,10 +205,10 @@ func (s *Store) MachineProgramEnrolledAs(endpointID, machine string) (bool, erro
 	var n int
 	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints e
 		WHERE e.retired_at IS NULL AND e.endpoint_id <> ? AND e.enrolled_user = 'root'
-		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
+		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ? ESCAPE '\')
 		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
 		      AND c.device_fp <> '' AND c.used_at IS NOT NULL)`,
-		endpointID, machine, machine+".%").Scan(&n)
+		endpointID, machine, likeDotted(machine)).Scan(&n)
 	return n > 0, err
 }
 
@@ -223,11 +223,19 @@ func (s *Store) LoginEnrolledOn(machine, login string) (bool, error) {
 	var n int
 	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints e
 		WHERE e.retired_at IS NULL AND e.enrolled_user = ?
-		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ?)
+		  AND (LOWER(e.enrolled_host) = ? OR LOWER(e.enrolled_host) LIKE ? ESCAPE '\')
 		  AND NOT EXISTS (SELECT 1 FROM fleet_join_codes c WHERE c.endpoint_id = e.endpoint_id
 		      AND c.device_fp <> '' AND c.used_at IS NOT NULL)`,
-		login, machine, machine+".%").Scan(&n)
+		login, machine, likeDotted(machine)).Scan(&n)
 	return n > 0, err
+}
+
+// likeDotted is the LIKE pattern for "machine followed by a dot and anything"
+// with machine's own `%`, `_` and `\` escaped (used with ESCAPE '\'): a name
+// never widens the match (task MPCX).
+func likeDotted(machine string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(machine) + ".%"
 }
 
 // lowerFirstLabel is a machine name's first label, lower case.
@@ -245,6 +253,8 @@ type EndpointEnrollment struct {
 	// are those devices' people ("" for a device the hub no longer knows).
 	ByDevice     bool
 	DevicePeople []string
+	// DeviceFPs are those devices' fingerprints.
+	DeviceFPs []string
 	// Pinned: a code minted for one machine enrolled it (an opened login, an
 	// admin seat, a pod or a login inside one) — the machine is the code's.
 	Pinned bool
@@ -279,6 +289,7 @@ func (s *Store) EnrollmentOf(endpointID string) (EndpointEnrollment, error) {
 		if fp != "" {
 			e.ByDevice = true
 			e.DevicePeople = append(e.DevicePeople, person)
+			e.DeviceFPs = append(e.DeviceFPs, fp)
 		}
 		if machine != "" {
 			e.Pinned = true
@@ -295,7 +306,7 @@ func (s *Store) EnrollmentOf(endpointID string) (EndpointEnrollment, error) {
 
 // EnrolledByAnother: a live endpoint other than endpointID enrolled as
 // machine (first label, any case) — the name is that endpoint's machine
-// (task MPCX). A LIKE wildcard in the name can only over-match.
+// (task MPCX). Names are matched literally (likeDotted).
 func (s *Store) EnrolledByAnother(endpointID, machine string) (bool, error) {
 	machine = lowerFirstLabel(machine)
 	if machine == "" {
@@ -303,8 +314,18 @@ func (s *Store) EnrolledByAnother(endpointID, machine string) (bool, error) {
 	}
 	var n int
 	err := s.read.QueryRow(`SELECT COUNT(*) FROM endpoints
-		WHERE retired_at IS NULL AND endpoint_id <> ? AND (LOWER(enrolled_host) = ? OR LOWER(enrolled_host) LIKE ?)`,
-		endpointID, machine, machine+".%").Scan(&n)
+		WHERE retired_at IS NULL AND endpoint_id <> ? AND (LOWER(enrolled_host) = ? OR LOWER(enrolled_host) LIKE ? ESCAPE '\')`,
+		endpointID, machine, likeDotted(machine)).Scan(&n)
+	return n > 0, err
+}
+
+// HostHeldByOthers: an active account row on host (any case, any op) belongs
+// to a principal other than pid — the machine name is someone else's login
+// place already (task MPCX).
+func (s *Store) HostHeldByOthers(host, pid string) (bool, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM fleet_accounts WHERE `+s.d.eqNocase("hostname")+`
+		AND state = ? AND principal_id <> ?`, host, AccountActive, pid).Scan(&n)
 	return n > 0, err
 }
 
@@ -312,6 +333,14 @@ func (s *Store) EnrolledByAnother(endpointID, machine string) (bool, error) {
 // node's identity — an enrollment, a device link, a retire, a fleet setting,
 // a recorded login (task MPCX); the api's identity cache keys on it.
 func (s *Store) IdentityGen() uint64 { return s.identGen.Load() }
+
+// identityChanged bumps IdentityGen: deferred at the top of every store write
+// that can change how the hub reads a node's identity or a person's standing
+// — enrollments, device links and revokes, retires, fleet settings, account
+// rows and their state, spares and their hand-offs, a person's identities,
+// role and pins (task MPCX). One replica's cache follows its own writes at
+// once; another replica's within identTTL (api), the multi-replica bound.
+func (s *Store) identityChanged() { s.identGen.Add(1) }
 
 // TouchIdentity bumps IdentityGen (a write this package does not see: a test
 // editing rows directly, another replica's word).
@@ -322,34 +351,51 @@ func (s *Store) TouchIdentity() { s.identGen.Add(1) }
 // root, and the admin role account comes only from its machine's install.
 var deviceHeldLogins = map[string]bool{"root": true, "_fleetadmin": true, "fleetadmin": true}
 
-// deviceStampHeld: endpointID has no enrolled login yet (unstamped), and —
-// when a device enrolled it or was linked to it — the login a first report
-// would stamp (report, or the os_user an earlier report left) is one of
-// deviceHeldLogins (hold). An unreadable answer (a ledger without the fleet
-// tables) is neither.
-func (s *Store) deviceStampHeld(endpointID, report string) (unstamped, hold bool) {
-	var u int
-	var prev string
-	err := s.read.QueryRow(`SELECT CASE WHEN enrolled_user = '' THEN 1 ELSE 0 END, os_user FROM endpoints WHERE endpoint_id = ?`,
-		endpointID).Scan(&u, &prev)
-	if err != nil || u == 0 {
-		return false, false
+// ServiceNoLogin is the enrolled login of an endpoint whose first report named
+// no login and no machine (task MPCX) — a service that only ships usage
+// (`ccquota enroll` for a shipper). Frozen at first sight, so a later report
+// of root or an admin login never makes it a machine's program or an admin.
+const ServiceNoLogin = "-"
+
+// stampPlan is the enrolled_user a usage report would leave on endpointID
+// (TouchEndpoint) and whether the report stamps anything at all: an enrolled
+// login stays; a row an older replica enrolled keeps its recorded os_user;
+// else the reported login — except root and the admin role account on an
+// endpoint a device enrolled or was linked to, which stays unstamped — and a
+// report that names neither login nor machine on a row that never named either
+// freezes it as ServiceNoLogin. An unreadable row stamps nothing.
+func (s *Store) stampPlan(endpointID, report, reportHost string) (enrolledUser string, changed bool) {
+	var cur, prev, host string
+	err := s.read.QueryRow(`SELECT enrolled_user, os_user, enrolled_host FROM endpoints WHERE endpoint_id = ?`,
+		endpointID).Scan(&cur, &prev, &host)
+	if err != nil {
+		return "", false
 	}
+	if cur != "" {
+		return cur, false
+	}
+	hostStamp := host == "" && reportHost != ""
 	cand := prev
 	if cand == "" {
 		cand = report
 	}
-	if !deviceHeldLogins[cand] {
-		return true, false
+	switch {
+	case cand == "" && host == "" && reportHost == "":
+		return ServiceNoLogin, true
+	case cand == "":
+		return "", hostStamp
+	case deviceHeldLogins[cand]:
+		if _, byDevice, err := s.DeviceEnrollers(endpointID); err != nil || byDevice {
+			return "", hostStamp
+		}
 	}
-	_, byDevice, err := s.DeviceEnrollers(endpointID)
-	return true, err == nil && byDevice
+	return cand, true
 }
 
 // SetEndpointTrust writes an endpoint's own trust ("" clears it, so the
 // machine-name rule decides again).
 func (s *Store) SetEndpointTrust(endpointID, trust, source string) error {
-	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
+	defer s.identityChanged()
 	if trust == "" {
 		source = ""
 	}

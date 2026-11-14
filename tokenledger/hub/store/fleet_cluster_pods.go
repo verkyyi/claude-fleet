@@ -179,6 +179,7 @@ func (s *Store) ClaimClusterPod(pod, principal string, at time.Time) error {
 // row is pending on the pod (sent once the pod's own node is up) and its pod
 // row provisioning — one transaction. The caller sends the create ticket.
 func (s *Store) CreateClusterSpare(cluster string, valid func(string) bool, at time.Time) (*FleetAccount, error) {
+	defer s.identityChanged()
 	cluster = strings.ToLower(strings.TrimSpace(cluster))
 	if cluster == "" {
 		return nil, errors.New("empty cluster")
@@ -250,6 +251,7 @@ func (s *Store) CreateClusterPodFor(cluster string, p *Principal, at time.Time) 
 // split names (claude-fleet#3562: a person's second pod — split non-empty);
 // split "" is their one pod.
 func (s *Store) CreateClusterPodSplit(cluster string, p *Principal, login, split string, at time.Time) (*FleetAccount, error) {
+	defer s.identityChanged()
 	cluster = strings.ToLower(strings.TrimSpace(cluster))
 	if cluster == "" || p == nil || login == "" {
 		return nil, errors.New("empty cluster, principal or login")
@@ -308,6 +310,7 @@ func (s *Store) SetClusterPodSplit(pod, split string, at time.Time) error {
 // FinishClusterPodRemoval closes the login on a destroyed pod: the account
 // row (remove sent as opID) is removed, the pod row gone — one transaction.
 func (s *Store) FinishClusterPodRemoval(pod, opID, detail string, at time.Time) error {
+	defer s.identityChanged()
 	ts := fmtTime(at)
 	tx, err := s.write.Begin()
 	if err != nil {
@@ -330,6 +333,7 @@ func (s *Store) FinishClusterPodRemoval(pod, opID, detail string, at time.Time) 
 // (pending · creating · unknown): a spare pod that never got ready, or whose
 // create ticket was refused.
 func (s *Store) FailClusterPodAccount(pod, detail string, at time.Time) error {
+	defer s.identityChanged()
 	_, err := s.write.Exec(`UPDATE fleet_accounts SET state = ?, detail = ?, updated_at = ?
 		WHERE hostname = ? AND state IN (?, ?, ?)`,
 		AccountFailed, detail, fmtTime(at), strings.ToLower(pod), AccountPending, AccountCreating, AccountUnknown)

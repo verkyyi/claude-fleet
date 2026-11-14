@@ -203,7 +203,7 @@ type RetireResult struct {
 // alone happens, exactly as before. A re-run against a retired endpoint only
 // settles what is still open, and changes and records nothing when nothing is.
 func (s *Store) RetireEndpointAs(endpointID, actor, reason string, at time.Time) (RetireResult, error) {
-	defer s.identGen.Add(1) // task MPCX: identity reads cache on it
+	defer s.identityChanged()
 	var out RetireResult
 	tx, err := s.write.Begin()
 	if err != nil {

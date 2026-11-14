@@ -21,6 +21,7 @@ func policySettings(m map[string]string) map[string]string {
 // ActivateCredPolicy compares the reviewed policy and commits the grants, mode
 // and audit in one transaction. Readers see either the old or the new policy.
 func (s *Store) ActivateCredPolicy(before map[string]string, grants []string, actor string, at time.Time) error {
+	defer s.identityChanged()
 	tx, err := s.write.Begin()
 	if err != nil {
 		return err

@@ -95,7 +95,7 @@ func (s *Server) handleNodeAdminToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.joinNow()
-	out, err := s.issueAdminToken(r, host, login, s.seatOf(ep, self, host, login), now)
+	out, err := s.issueAdminToken(r, host, login, s.seatOf(host, login), now)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -149,26 +149,13 @@ func (s *Server) issueAdminToken(r *http.Request, host, login, seat string, now 
 }
 
 // seatOf is the live admin seat this machine already has, "" for none (task
-// MPCX): one enrolled as the machine the program enrolled as (any case, first
-// label), else — for a seat an older hub issued under the name the program
-// reported (a Mac's HostName) — one enrolled as that name, but only while the
-// name is no other machine's: not trusted, no other machine program enrolled
-// as it, no pod's.
-func (s *Server) seatOf(ep *store.Endpoint, self nodeIdent, host, login string) string {
+// MPCX): only one enrolled as the machine the asking program enrolled as
+// (first label, any case). A seat an older hub issued under a name the program
+// reported is never matched by that name — the program gets a seat under its
+// own enrolled machine instead, and the old one is left for the operator to
+// retire.
+func (s *Server) seatOf(host, login string) string {
 	if id, err := s.Store.LiveSeatOn(host, login); err == nil {
-		return id
-	}
-	rep := self.ReportedHost
-	if rep == "" || sameName(rep, host) || isUserPodName(rep) {
-		return ""
-	}
-	if settings, err := s.Store.FleetSettings(); err != nil || s.machineTrusted(firstLabel(rep), settings) {
-		return ""
-	}
-	if taken, err := s.Store.MachineProgramEnrolledAs(ep.ID, rep); err != nil || taken {
-		return ""
-	}
-	if id, err := s.Store.LiveSeatOn(rep, login); err == nil {
 		return id
 	}
 	return ""

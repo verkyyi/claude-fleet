@@ -36,6 +36,18 @@ type device struct {
 	pub    string // authorized_keys line
 	fp     string
 	cert   string
+	lastTS int64 // nextTS's last answer
+}
+
+// nextTS is a signing timestamp for one node pass: now, and never one this
+// device signed before (the hub answers each signed timestamp once).
+func (d *device) nextTS() int64 {
+	ts := time.Now().Unix()
+	if ts <= d.lastTS {
+		ts = d.lastTS + 1
+	}
+	d.lastTS = ts
+	return ts
 }
 
 func newDevice(t *testing.T) *device {

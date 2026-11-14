@@ -628,6 +628,7 @@ func (s *Store) TrialCounts() (map[string]int, error) {
 // free at once to be handed another login on the same machine. false: nothing
 // of pid's there is being washed.
 func (s *Store) HandOffWash(pid, host string, at time.Time) (bool, error) {
+	defer s.identityChanged()
 	nonce, err := randomLowerAlnum(8)
 	if err != nil {
 		return false, err

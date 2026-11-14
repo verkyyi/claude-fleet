@@ -641,20 +641,31 @@ func TestNodeIdentityDeviceIsNeverOperator(t *testing.T) {
 	}
 }
 
-// A device's node is its person's or nothing: a login that is another
-// person's there gets no node pass; a device endpoint no
+// A device's node is its person's: one naming another person's machine and
+// login gets a node of its own, bound to its own person; a device endpoint no
 // person owns (an older hub's) places nothing and holds no client lease as the
 // operator. The operator's own ownerless node still does both.
 func TestNodeIdentityOwnerlessNodeActsForNoOne(t *testing.T) {
 	h := bobHarness(t)
-	memberDeviceNode(t, h, pAlice, "alice-box", "alice", false)
+	// Bob's device naming Alice's machine and login: its own node, under a
+	// name of its own, bound to Bob — Alice's stays hers.
+	alice := memberDeviceNode(t, h, pAlice, "alice-box", "alice", false)
 	d := newDevice(t)
 	d.scan(t, h, pBob, "alice-box")
-	if code, out := d.loginNode(t, h, "alice-box", "alice"); code != http.StatusConflict || out["code"] != "login_not_recorded" {
-		t.Errorf("bob's device as alice@alice-box: %d %v; want 409 login_not_recorded", code, out)
+	code, out := d.loginNode(t, h, "alice-box", "alice")
+	if code != 200 {
+		t.Fatalf("bob's device as alice@alice-box: %d %v; want his own node", code, out)
 	}
-	if id, err := h.srv.Store.DeviceNodeEndpoint(d.fp); err == nil {
-		t.Errorf("a refused node pass left endpoint %s behind", id)
+	bobEP := out["endpoint_id"].(string)
+	bet, _ := h.srv.Store.EndpointTrustOf(bobEP)
+	if strings.EqualFold(bet.EnrolledHost, "alice-box") {
+		t.Errorf("bob's device enrolled as alice-box itself")
+	}
+	if who, err := h.srv.principalOnNode(bobEP, bet.EnrolledHost, "alice"); err != nil || who != pBob {
+		t.Errorf("bob's device: %q %v; want Bob", who, err)
+	}
+	if who, err := h.srv.principalOnNode(alice.id, "alice-box", "alice"); err != nil || who != pAlice {
+		t.Errorf("alice's device: %q %v; want Alice", who, err)
 	}
 
 	dev := memberDeviceNode(t, h, pBob, "bob-mbp", "bob", false)
@@ -1171,33 +1182,46 @@ func TestNodeIdentityDeviceLoginsAsTheyAre(t *testing.T) {
 	}
 }
 
-// A seat an older hub issued under the name the machine reported (a Mac's
-// HostName) is that machine's seat: the next ask reissues it, not a second.
-func TestNodeAdminTokenReusesTheMachinesSeat(t *testing.T) {
+// A machine's program reuses only the seat enrolled as ITS OWN enrolled
+// machine (first label, any case): the production shape (program and seat
+// both on one machine) is reissued untouched; a seat another machine has, or one an
+// older hub issued under a name the program reported, is never handed over.
+func TestNodeAdminTokenReusesOnlyItsOwnSeat(t *testing.T) {
 	h := bobHarness(t)
 	h.srv.FleetAdmins = []string{"_fleetadmin"}
-	mach := enrollAs(t, h, "mac-a-root", "mac-a", "root")
-	old, err := h.srv.issueAdminToken(httptest.NewRequest(http.MethodPost, "/", nil), "Studio-Mac-a", "_fleetadmin", "", time.Now())
+	trustMachines(t, h, "mac-a", "mac-b")
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+
+	// minix: program and seat on the same enrolled machine.
+	mm := enrollAs(t, h, "minix-root", "minix", "root")
+	seat, err := h.srv.issueAdminToken(req, "minix", "_fleetadmin", "", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	mc := dialAdminCaps(t, h, mach, false, control.CapMachine)
-	beat(t, mc.c, control.Proto, control.Heartbeat{Hostname: "Studio-Mac-a", OSUser: "root"})
-	waitFor(t, 3*time.Second, "the HostName beat", func() bool {
-		r := h.srv.nodeRow("ep_mac-a-root")
-		return r != nil && r.Hostname == "Studio-Mac-a"
-	})
-	st, out, raw := adminTokenCall(t, h, mach, http.MethodPost, map[string]string{"login": "_fleetadmin"})
-	if st != 200 || out.EndpointID != old.EndpointID || out.Outcome != "reissued" {
-		t.Fatalf("admin-token: %d %+v %s; want %s reissued", st, out, raw, old.EndpointID)
+	if st, out, raw := adminTokenCall(t, h, mm, http.MethodPost, map[string]string{"login": "_fleetadmin"}); st != 200 || out.EndpointID != seat.EndpointID || out.Outcome != "reissued" {
+		t.Fatalf("minix's seat: %d %+v %s; want %s reissued", st, out, raw, seat.EndpointID)
 	}
-	// A seat enrolled as MAC-A (another spelling) is mac-a's too.
-	h2 := bobHarness(t)
-	h2.srv.FleetAdmins = []string{"_fleetadmin"}
-	m2 := enrollAs(t, h2, "mac-a-root", "mac-a", "root")
-	o2, _ := h2.srv.issueAdminToken(httptest.NewRequest(http.MethodPost, "/", nil), "MAC-A", "_fleetadmin", "", time.Now())
-	if st, out, raw := adminTokenCall(t, h2, m2, http.MethodPost, map[string]string{"login": "_fleetadmin"}); st != 200 || out.EndpointID != o2.EndpointID {
-		t.Fatalf("admin-token on MAC-A's seat: %d %+v %s; want %s", st, out, raw, o2.EndpointID)
+	// Another spelling of the machine's own name is the same machine.
+	upper, _ := h.srv.issueAdminToken(req, "MAC-A", "_fleetadmin", "", time.Now())
+	ma := enrollAs(t, h, "mac-a-root", "mac-a", "root")
+	if st, out, raw := adminTokenCall(t, h, ma, http.MethodPost, map[string]string{"login": "_fleetadmin"}); st != 200 || out.EndpointID != upper.EndpointID {
+		t.Fatalf("mac-a's seat (enrolled MAC-A): %d %+v %s; want %s", st, out, raw, upper.EndpointID)
+	}
+	// mac-a's old seat under a name mac-a once reported; mac-b's program
+	// reports that name, then "%": it gets a seat of its own, never mac-a's.
+	studio, _ := h.srv.issueAdminToken(req, "Studio-Mac-a", "_fleetadmin", "", time.Now())
+	mb := enrollAs(t, h, "mac-b-root", "mac-b", "root")
+	bc := dialAdminCaps(t, h, mb, false, control.CapMachine)
+	for _, name := range []string{"Studio-Mac-a", "%"} {
+		beat(t, bc.c, control.Proto, control.Heartbeat{Hostname: name, OSUser: "root"})
+		waitFor(t, 3*time.Second, "mac-b reports "+name, func() bool {
+			r := h.srv.nodeRow("ep_mac-b-root")
+			return r != nil && r.Hostname == name
+		})
+		st, out, raw := adminTokenCall(t, h, mb, http.MethodPost, map[string]string{"login": "_fleetadmin"})
+		if st != 200 || out.EndpointID == studio.EndpointID || out.EndpointID == upper.EndpointID || out.EndpointID == seat.EndpointID || out.Machine != "mac-b" {
+			t.Fatalf("mac-b reporting %s: %d %+v %s; want a seat of mac-b's own", name, st, out, raw)
+		}
 	}
 }
 

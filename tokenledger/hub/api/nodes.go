@@ -739,6 +739,7 @@ func (s *Server) serveNode(ctx context.Context, wire nodeWire, ep *store.Endpoin
 		go s.redeliverTaskStops(ep)
 	}
 	defer s.nodes.drop(ep.ID, nc)
+	defer s.forgetIdentity(ep.ID) // the identity caches hold live links (task MPCX)
 	// Where this link ends, for the other replicas (claude-fleet#2124) —
 	// the refresh relay listed only when the hub granted it here (task MPCX),
 	// so another replica never offers it a refresh this one would refuse.
