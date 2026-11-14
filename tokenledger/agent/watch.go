@@ -40,7 +40,15 @@ func (a *Agent) watchTranscripts(ctx context.Context, root string, trigger func(
 	}
 	defer w.Close()
 
-	added := watchTree(w, root)
+	// A machine tenant's watches are capped (claude-fleet#2333): every one is
+	// a descriptor of the one root program, and the login decides how many
+	// directories it has. Past the cap the scan interval covers the rest.
+	limit := 0
+	if a.cfg.RunAs != nil {
+		limit = machineWatchMax
+	}
+	wt := &watchSet{w: w, limit: limit, who: a.osLogin(), every: a.cfg.ScanInterval}
+	added := wt.tree(root)
 	log.Printf("watching %d transcript directories; scanning within %s of a write",
 		added, watchDebounce)
 
@@ -59,7 +67,7 @@ func (a *Agent) watchTranscripts(ctx context.Context, root string, trigger func(
 			// caused it may already exist inside.
 			if ev.Op&fsnotify.Create != 0 {
 				if fi, err := os.Stat(ev.Name); err == nil && fi.IsDir() {
-					watchTree(w, ev.Name)
+					wt.tree(ev.Name)
 				}
 			}
 			if filepath.Ext(ev.Name) != ".jsonl" && ev.Op&fsnotify.Create == 0 {
@@ -95,18 +103,39 @@ func (a *Agent) watchTranscripts(ctx context.Context, root string, trigger func(
 	}
 }
 
-// watchTree adds root and its subdirectories to the watcher, returning how many
+// machineWatchMax is the most directories one machine tenant watches.
+const machineWatchMax = 1024
+
+// watchSet is one watcher's directories, at most limit of them (0: no cap).
+type watchSet struct {
+	w     *fsnotify.Watcher
+	limit int
+	n     int
+	full  bool
+	who   string
+	every time.Duration
+}
+
+// tree adds root and its subdirectories to the watcher, returning how many
 // were added. Per-directory, because that is what the kernel interfaces take.
-func watchTree(w *fsnotify.Watcher, root string) int {
-	n := 0
+func (s *watchSet) tree(root string) int {
+	added := 0
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || !d.IsDir() {
 			return nil //nolint:nilerr // an unreadable subtree is the timer's problem
 		}
-		if w.Add(path) == nil {
-			n++
+		if s.limit > 0 && s.n >= s.limit {
+			if !s.full {
+				s.full = true
+				log.Printf("transcript watch for %s stops at %d directories; the rest are scanned every %s", s.who, s.limit, s.every)
+			}
+			return filepath.SkipAll
+		}
+		if s.w.Add(path) == nil {
+			s.n++
+			added++
 		}
 		return nil
 	})
-	return n
+	return added
 }

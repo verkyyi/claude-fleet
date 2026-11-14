@@ -78,8 +78,12 @@ func ReadAuthWith(home string, rf ReadFile) (*Auth, error) {
 		src = io.LimitReader(f, authFileMax)
 	} else {
 		b, err := rf(filepath.Join(home, "auth.json"))
-		if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, errors.New("no readable Codex file credentials (log collection remains available)")
+		}
+		if err != nil {
+			// the reader's own reason (a linked path, not a regular file, …)
+			return nil, fmt.Errorf("Codex file credentials skipped: %v (log collection remains available)", err)
 		}
 		src = bytes.NewReader(b)
 	}

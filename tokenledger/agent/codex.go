@@ -45,6 +45,7 @@ type codexCollector struct {
 	// account up to another (claude-fleet#2169).
 	failStreak int
 	live       []liveSession // snapshots guarded by mu; scanner itself has one owner
+	handedBack bool          // a machine tenant's home: the agent's own leftovers handed to the login
 }
 
 func (a *Agent) codexProfileSnapshot() []*codexCollector {
@@ -209,6 +210,21 @@ func (a *Agent) cycleCodex(ctx context.Context) error {
 	} else {
 		a.codexInitErr = ""
 	}
+	if a.codexInitErr != "" && len(a.codexProfileSnapshot()) == 0 && time.Since(a.codexInitSent) >= time.Minute {
+		// no profile to carry it: the registry's own status, so the hub shows
+		// why this login's Codex is not collected
+		now := time.Now().UTC()
+		st := model.CollectorStatus{Source: model.SourceCodex, ProfileID: "default", ObservedAt: now, State: "degraded",
+			Reason: clipLine("Codex collection off: "+a.codexInitErr, reasonMax), Capabilities: []string{}}
+		if err := a.enqueueCodex(ctx, model.Batch{AgentVersion: a.cfg.Version, Identity: *identity.Codex(), AccountOrigin: model.OriginSession, Collector: &st}); err != nil {
+			errs = append(errs, err)
+		} else {
+			a.codexInitSent = now
+			if err := a.drain(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
 	for _, p := range a.codexProfileSnapshot() {
 		if err := a.cycleCodexProfile(ctx, p); err != nil {
 			errs = append(errs, err)
@@ -230,6 +246,15 @@ func (a *Agent) enqueueCodex(ctx context.Context, b model.Batch) error {
 
 func (a *Agent) cycleCodexProfile(ctx context.Context, p *codexCollector) error {
 	now := time.Now().UTC()
+	if ra := a.cfg.RunAs; ra != nil && !p.handedBack {
+		// once, before the login's first machine-op and the reads below
+		if n, err := handBackCodexHome(ra, p.home); err != nil && !os.IsNotExist(err) {
+			log.Printf("machine agent: %s: Codex home %s: hand back: %v", ra.Login, p.home, err)
+		} else if n > 0 {
+			log.Printf("machine agent: %s: Codex home %s: %d of the agent's own files handed back to the login", ra.Login, p.home, n)
+		}
+		p.handedBack = true
+	}
 	rf := a.loginReader(smallFileMax)
 	auth, authErr := codex.ReadAuthWith(p.home, rf)
 	current := *identity.Codex()
@@ -261,7 +286,15 @@ func (a *Agent) cycleCodexProfile(ctx context.Context, p *codexCollector) error 
 	p.poll(ctx, a.codexAcct, auth, a.codexBinary(), jitter(interval), a.cfg.Once, !a.cfg.CodexDisableRefresh, func(failures int) bool {
 		return a.codexQuotaLease(ctx, current.AccountUUID, p.id, interval, failures)
 	})
-	events, err := p.scanner.Scan()
+	// a machine tenant's linked Codex home or session dir is not followed
+	skipped := a.linkedHomePath(p.home, filepath.Join(p.home, "sessions"), filepath.Join(p.home, "archived_sessions"))
+	var events []model.UsageEvent
+	var err error
+	if skipped == "" {
+		events, err = p.scanner.Scan()
+	} else {
+		p.scanner.Errs = nil
+	}
 	if err != nil {
 		return fmt.Errorf("scan Codex transcripts: %w", err)
 	}
@@ -332,6 +365,12 @@ func (a *Agent) cycleCodexProfile(ctx context.Context, p *codexCollector) error 
 	if len(p.scanner.Errs) > 0 {
 		status.State = "degraded"
 		status.Reason = fmt.Sprintf("%d transcript read/parse warning(s); see agent log", len(p.scanner.Errs))
+	}
+	if skipped != "" {
+		status.State, status.Reason = "degraded", skipped
+	}
+	if a.codexInitErr != "" && status.Reason == "" {
+		status.State, status.Reason = "degraded", clipLine("Codex profiles not reread: "+a.codexInitErr, reasonMax)
 	}
 	groups := map[string][]model.UsageEvent{}
 	ids := map[string]model.Identity{current.AccountUUID: current, "codex:local": *identity.Codex()}

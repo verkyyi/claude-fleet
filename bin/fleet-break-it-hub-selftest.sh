@@ -1828,7 +1828,7 @@ drill_usage_unattributed() {
   local agent_tests='TestAgent_NoLoginFilesClaudeUsageUnderThePool TestAgent_NoLoginNoTranscriptsFilesNothing'
   local hub_tests='TestUsageSilentRaisedWhenWorkingLoginSendsNothing TestUsageSilentQuietWhenUsageFlowsOrNothingWorks TestUsageSilentAfterFromEnv'
   t0=$(now)
-  grep -q 'id, err = identity.ClaudePool(a.cfg.Home), nil' "$ROOT/tokenledger/agent/agent.go" 2>/dev/null \
+  grep -q 'id, err = identity.ClaudePoolWith(a.cfg.Home, a.loginReader(claudeConfigMax)), nil' "$ROOT/tokenledger/agent/agent.go" 2>/dev/null \
     || { WHY="the agent no longer files a login with no oauthAccount under the claude:local pool"; return 1; }
   grep -q 's.UsageSilentTick(now, false)' "$ROOT/tokenledger/hub/api/fleet_alerts.go" \
     || { WHY="the alerts sweep no longer runs the usage_silent check"; return 1; }

@@ -80,6 +80,9 @@ func (d *homeDir) readFileMax(name string, own bool, max int64) ([]byte, os.File
 
 // openLoginDir off unix: plain path rules, dir still required inside ra's home.
 func openLoginDir(ra *RunAs, dir string) (*homeDir, error) {
+	if ra == nil || ra.Home == "" || !filepath.IsAbs(ra.Home) || !filepath.IsAbs(dir) {
+		return nil, &os.PathError{Op: "open", Path: dir, Err: errOutsideHome}
+	}
 	if !underLogin(ra, dir) && filepath.Clean(dir) != filepath.Clean(ra.Home) {
 		return nil, &os.PathError{Op: "open", Path: dir, Err: errOutsideHome}
 	}

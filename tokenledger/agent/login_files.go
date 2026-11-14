@@ -3,10 +3,14 @@ package agent
 import (
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sessions"
 )
 
 // A machine tenant's reads of its login's own files (claude-fleet#2333): the
@@ -146,4 +150,64 @@ func (a *Agent) loadClaudeCredentials() (*identity.Credentials, error) {
 		return identity.LoadCredentials(a.cfg.Home)
 	}
 	return identity.LoadCredentialsWith(a.cfg.Home, a.loginReader(smallFileMax), false)
+}
+
+// Session stamps (the statusLine hook's) a machine tenant reads in its login's
+// home: each at most stampFileMax, the login's own, no link followed, and at
+// most stampEntriesMax entries a pass.
+const (
+	stampFileMax    = 64 << 10
+	stampEntriesMax = 4096
+)
+
+func (a *Agent) loadStamps(maxAge time.Duration) (*sessions.Index, error) {
+	if a.cfg.RunAs == nil {
+		return sessions.Load(a.cfg.SessionsDir, maxAge)
+	}
+	return sessions.LoadWith(a.cfg.SessionsDir, maxAge, func(p string) ([]byte, error) {
+		return a.readFileFor(p, true, stampFileMax)
+	}, stampEntriesMax)
+}
+
+// linkedHomePath is "skipped: linked home path (…)" naming every one of paths
+// (in a machine tenant's home) that the agent does not follow because a
+// component of it is a link; "" when none is, or for a plain agent. Each one
+// is logged once.
+func (a *Agent) linkedHomePath(paths ...string) string {
+	ra := a.cfg.RunAs
+	if ra == nil {
+		return ""
+	}
+	var linked []string
+	for _, p := range paths {
+		if !underLogin(ra, p) || !homePathLinked(ra, p) {
+			continue
+		}
+		rel, _ := filepath.Rel(ra.Home, p)
+		rel = "~/" + rel
+		linked = append(linked, rel)
+		if a.linkSaid == nil {
+			a.linkSaid = map[string]bool{}
+		}
+		if !a.linkSaid[p] {
+			a.linkSaid[p] = true
+			log.Printf("machine agent: %s: %s is a link (or under one); not followed — nothing there is collected until it is a plain path", ra.Login, rel)
+		}
+	}
+	if len(linked) == 0 {
+		return ""
+	}
+	return "skipped: linked home path (" + strings.Join(linked, ", ") + ")"
+}
+
+// homePathLinked says p, or a directory on the way to it below ra's home, is
+// a link. A missing path is not.
+func homePathLinked(ra *RunAs, p string) bool {
+	d, err := openLoginDir(ra, filepath.Dir(p))
+	if err != nil {
+		return linkedPath(err)
+	}
+	defer d.Close()
+	_, isLink := d.readlink(filepath.Base(p))
+	return isLink
 }

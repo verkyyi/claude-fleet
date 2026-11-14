@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -300,5 +301,26 @@ func TestProfileEnvironmentCannotOverrideNamedAuthentication(t *testing.T) {
 	}
 	if !NeedsRefresh(Result{}, classifyRPC(-32000, "rate limits failed: status code: 401")) {
 		t.Fatal("authorization failure cannot trigger renewal")
+	}
+}
+
+// A lock file this login cannot open (another user's, left by an older run)
+// is replaced by the login's own: renewal keeps working.
+func TestAcquireProfileReplacesAnUnopenableLock(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs unix permission checks")
+	}
+	home := t.TempDir()
+	lock := filepath.Join(home, ".ccquota-auth.lock")
+	if err := os.WriteFile(lock, nil, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := AcquireProfile(home)
+	if err != nil {
+		t.Fatalf("unopenable lock: %v", err)
+	}
+	unlock()
+	if fi, err := os.Stat(lock); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("lock after: %v %v", fi, err)
 	}
 }

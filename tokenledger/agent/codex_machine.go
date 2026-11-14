@@ -10,10 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
 // A Codex profile's credential work — renewal (codex.Maintain) and the account
@@ -159,6 +162,10 @@ type codexOpRequest struct {
 	Force   bool   `json:"force,omitempty"`
 	Refresh bool   `json:"refresh,omitempty"`
 	Account string `json:"account,omitempty"` // query: the account the caller read in Home
+	// Env is the agent's own proxy / CA / locale variables (codexOpPassEnv
+	// only): the seat's core builds the job's environment itself, so they
+	// travel here and the machine-op sets them for the Codex it starts.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // codexOpAnswer carries what codex's own functions return. Their errors are
@@ -221,12 +228,22 @@ func codexOpEnv(ra *RunAs) []string {
 	}
 	path = append(path, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 	env := []string{"PATH=" + strings.Join(path, string(os.PathListSeparator))}
+	for k, v := range passedEnv() {
+		env = append(env, k+"="+v)
+	}
+	sort.Strings(env[1:])
+	return env
+}
+
+// passedEnv is the agent's own codexOpPassEnv variables that are set.
+func passedEnv() map[string]string {
+	out := map[string]string{}
 	for _, k := range codexOpPassEnv {
 		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
+			out[k] = v
 		}
 	}
-	return env
+	return out
 }
 
 // runCodexOp runs req as ra and reads its answer (a seam for the tests).
@@ -238,6 +255,7 @@ var runCodexOp = func(ctx context.Context, ra *RunAs, req codexOpRequest) (codex
 	if err != nil {
 		return ans, err
 	}
+	req.Env = passedEnv()
 	in, err := json.Marshal(req)
 	if err != nil {
 		return ans, err
@@ -245,16 +263,111 @@ var runCodexOp = func(ctx context.Context, ra *RunAs, req codexOpRequest) (codex
 	cmd.Stdin = bytes.NewReader(in)
 	var stdout bytes.Buffer
 	var stderr strings.Builder
-	cmd.Stdout = &limitedWriter{w: &stdout, n: 4 << 20}
+	// the answer is the login's process's: bounded here, and checked below
+	// before any of it reaches the hub (sanitize)
+	cmd.Stdout = &limitedWriter{w: &stdout, n: codexOpAnswerMax + 1}
 	cmd.Stderr = &limitedWriter{w: &stderr, n: 512}
 	runErr := startWhy(ctx, cmd, cmd.Run())
+	if stdout.Len() > codexOpAnswerMax {
+		return codexOpAnswer{}, fmt.Errorf("Codex account work as %s: answer larger than %d bytes", ra.Login, codexOpAnswerMax)
+	}
 	if json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &ans) != nil {
 		if runErr == nil {
 			runErr = errors.New("no answer")
 		}
-		return codexOpAnswer{}, fmt.Errorf("Codex account work as %s: %v %s", ra.Login, runErr, oneLine(stderr.String()))
+		return codexOpAnswer{}, fmt.Errorf("Codex account work as %s: %v %s", ra.Login, runErr, clipLine(stderr.String(), reasonMax))
 	}
+	ans.sanitize(time.Now().UTC())
 	return ans, nil
+}
+
+// Bounds on a machine-op's answer.
+const (
+	codexOpAnswerMax = 1 << 20
+	reasonMax        = 300 // an error or reason: one line
+	versionMax       = 64
+	dailyMax         = 400
+	windowsMax       = 32
+	labelMax         = 120
+)
+
+// clipLine is s on one line, at most n bytes (on a rune boundary).
+func clipLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
+// sanitize holds an answer to what codex.Query itself produces: one-line
+// reasons, a short version, daily buckets with a date and no negative count,
+// percentages in range, bounded lists — the process that wrote it is the
+// login's.
+func (a *codexOpAnswer) sanitize(now time.Time) {
+	a.Error = clipLine(a.Error, reasonMax)
+	if a.Auth != nil {
+		a.Auth.Mode = clipLine(a.Auth.Mode, 32)
+	}
+	r := a.Result
+	if r == nil {
+		return
+	}
+	r.LimitsError, r.UsageError = clipLine(r.LimitsError, reasonMax), clipLine(r.UsageError, reasonMax)
+	if len(r.Version) > versionMax || strings.IndexFunc(r.Version, func(c rune) bool {
+		return !(c == '.' || c == '-' || c == '+' || c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+	}) >= 0 {
+		r.Version = ""
+	}
+	if u := r.Usage; u != nil {
+		u.Source, u.ObservedAt, u.AccountUUID, u.EndpointID = model.SourceCodex, now, "", ""
+		if u.LifetimeTokens != nil && *u.LifetimeTokens < 0 {
+			u.LifetimeTokens = nil
+		}
+		if u.PeakDailyTokens != nil && *u.PeakDailyTokens < 0 {
+			u.PeakDailyTokens = nil
+		}
+		var daily []model.DailyUsage
+		for _, d := range u.Daily {
+			if _, err := time.Parse("2006-01-02", d.Date); err == nil && d.Tokens >= 0 && len(daily) < dailyMax {
+				daily = append(daily, d)
+			}
+		}
+		u.Daily = daily
+	}
+	if q := r.Quota; q != nil {
+		q.Source, q.Observation, q.ObservedAt, q.AccountUUID, q.EndpointID, q.ProfileID = model.SourceCodex, "app_server", now, "", "", ""
+		q.Plan, q.Reason = clipLine(q.Plan, labelMax), clipLine(q.Reason, reasonMax)
+		var wins []model.QuotaWindow
+		for _, w := range q.Windows {
+			if w.UsedPercent >= 0 && w.UsedPercent <= 100 && w.Minutes >= 0 && len(wins) < windowsMax {
+				w.ID, w.Label, w.LimitID = clipLine(w.ID, labelMax), clipLine(w.Label, labelMax), clipLine(w.LimitID, labelMax)
+				wins = append(wins, w)
+			}
+		}
+		q.Windows = wins
+		if len(q.Credits) > windowsMax {
+			q.Credits = q.Credits[:windowsMax]
+		}
+		for i := range q.Credits {
+			c := &q.Credits[i]
+			c.LimitID = clipLine(c.LimitID, labelMax)
+			if c.Balance != nil {
+				b := clipLine(*c.Balance, 32)
+				c.Balance = &b
+			}
+		}
+		if len(q.Pools) > windowsMax {
+			q.Pools = q.Pools[:windowsMax]
+		}
+		for i := range q.Pools {
+			q.Pools[i].LimitID, q.Pools[i].Reason = clipLine(q.Pools[i].LimitID, labelMax), clipLine(q.Pools[i].Reason, reasonMax)
+		}
+	}
 }
 
 // RunCodexOp is `ccquota codex machine-op`: one Codex profile's renewal or
@@ -270,6 +383,11 @@ func RunCodexOp(in io.Reader, out io.Writer) error {
 	}
 	if !filepath.IsAbs(req.Home) {
 		return errors.New("machine-op: the profile home must be an absolute path")
+	}
+	for _, k := range codexOpPassEnv {
+		if v, ok := req.Env[k]; ok {
+			os.Setenv(k, v)
+		}
 	}
 	binary := req.Binary
 	if binary == "" {

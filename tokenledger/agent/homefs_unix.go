@@ -52,6 +52,10 @@ func openHomeDir(dir string, create bool, mode os.FileMode) (*homeDir, error) {
 // needs no registered tenant (New reads a login's files before RunMachine
 // registers it). A dir outside ra's home is refused.
 func openLoginDir(ra *RunAs, dir string) (*homeDir, error) {
+	if ra == nil || ra.Home == "" || !filepath.IsAbs(ra.Home) || !filepath.IsAbs(dir) {
+		// never a relative path: an empty home must not become the cwd
+		return nil, &os.PathError{Op: "open", Path: dir, Err: errOutsideHome}
+	}
 	dir = filepath.Clean(dir)
 	home := filepath.Clean(ra.Home)
 	var rel []string
@@ -112,7 +116,7 @@ func (d *homeDir) open(name string, own bool) (*os.File, *unix.Stat_t, error) {
 	}
 	fd, err := unix.Openat(d.fd, name, flags, 0)
 	if err == unix.ELOOP {
-		err = errHomeNotRegular
+		err = errHomeLinked
 	}
 	if err != nil {
 		return nil, nil, d.err("open", name, err)

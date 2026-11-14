@@ -368,6 +368,7 @@ type Agent struct {
 	codex           *scan.Scanner
 	codexOn         bool         // the Codex source is collected here
 	codexInitErr    string       // a machine tenant's last Codex registry error (logged once)
+	codexInitSent   time.Time    // when that error last went to the hub as a status
 	codexAcct       codexAccount // how a profile's credential is maintained and queried
 	codexProfiles   []*codexCollector
 	codexProfilesMu sync.RWMutex
@@ -411,6 +412,8 @@ type Agent struct {
 	// claudePoolSaid: the "no Claude login, using the pool" line was logged
 	// once (claude-fleet#3204) — a cycle every minute must not repeat it.
 	claudePoolSaid bool
+	// linkSaid: each linked home path of a machine tenant, logged once
+	linkSaid map[string]bool
 
 	// serverInterval is the poll interval the hub asked for, if any. It lets a
 	// noisy fleet be backed off centrally without editing every machine.
@@ -745,7 +748,7 @@ func (a *Agent) pushLive(ctx context.Context) error {
 	defer a.liveMu.Unlock()
 	out := make([]liveSession, 0)
 	if a.claudeEnabled {
-		idx, err := sessions.Load(a.cfg.SessionsDir, liveStaleAfter)
+		idx, err := a.loadStamps(liveStaleAfter)
 		if err != nil {
 			return err
 		}
@@ -885,7 +888,7 @@ func (a *Agent) cycle(ctx context.Context) error {
 		// A Codex-only installation has no Claude login. It must still work
 		// with the default source selection.
 		id, err := identity.DetectWith(a.cfg.Home, a.loginReader(claudeConfigMax))
-		if err != nil && (errors.Is(err, os.ErrNotExist) || errors.Is(err, identity.ErrNoAccount)) && a.hasClaudeTranscripts() {
+		if err != nil && (errors.Is(err, os.ErrNotExist) || errors.Is(err, identity.ErrNoAccount) || linkedPath(err)) && a.hasClaudeTranscripts() {
 			// No /login, but Claude Code runs here (claude-fleet#3204): its
 			// turns go to the unassigned pool instead of nowhere.
 			if !a.claudePoolSaid {
@@ -910,13 +913,25 @@ func (a *Agent) cycle(ctx context.Context) error {
 func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 	// Reloaded every cycle: sessions start, stop and change subscription while
 	// the agent runs.
-	if idx, err := sessions.Load(a.cfg.SessionsDir, stampMaxAge); err != nil {
+	if idx, err := a.loadStamps(stampMaxAge); err != nil {
 		log.Printf("read session stamps: %v", err)
 	} else {
 		a.stamps = idx
 	}
 
-	evs, err := a.scanner.Scan()
+	// A machine tenant's linked ~/.claude or ~/.claude.json is not followed:
+	// said once in the log, and on every collector status the hub shows.
+	skipped := a.linkedHomePath(identity.ProjectsDir(a.cfg.Home))
+	var evs []model.UsageEvent
+	var err error
+	if skipped == "" {
+		evs, err = a.scanner.Scan()
+	} else {
+		a.scanner.Errs = nil
+	}
+	if s := a.linkedHomePath(filepath.Join(a.cfg.Home, ".claude.json")); s != "" && skipped == "" {
+		skipped = s
+	}
 	if err != nil {
 		return fmt.Errorf("scan transcripts: %w", err)
 	}
@@ -1012,6 +1027,9 @@ func (a *Agent) cycleClaude(ctx context.Context, id *model.Identity) error {
 	if len(a.scanner.Errs) > 0 {
 		status.State = "degraded"
 		status.Reason = fmt.Sprintf("%d transcript warning(s); see agent log", len(a.scanner.Errs))
+	}
+	if skipped != "" {
+		status.State, status.Reason = "degraded", skipped
 	}
 	status.QueueBytes, _ = a.spool.Bytes()
 

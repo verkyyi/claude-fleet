@@ -23,7 +23,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,10 +299,21 @@ type Index struct {
 // Missing or unreadable stamps are not an error: the hook is optional, and the
 // caller degrades to the machine-wide login.
 func Load(stateDir string, maxAge time.Duration) (*Index, error) {
+	return LoadWith(stateDir, maxAge, nil, 0)
+}
+
+// LoadWith is Load reading each stamp through read (nil: os.ReadFile) and
+// looking at no more than maxEntries directory entries (0: all). A machine
+// agent reading a login's stamps hands in a reader that follows no link and
+// reads a small regular file of the login's own.
+func LoadWith(stateDir string, maxAge time.Duration, read func(string) ([]byte, error), maxEntries int) (*Index, error) {
 	idx := &Index{BySession: map[string]Stamp{}, ByTranscript: map[string]Stamp{}}
 	dir := Dir(stateDir)
+	if read == nil {
+		read = os.ReadFile
+	}
 
-	entries, err := os.ReadDir(dir)
+	entries, err := readDirN(dir, maxEntries)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return idx, nil
@@ -317,7 +330,7 @@ func Load(stateDir string, maxAge time.Duration) (*Index, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		b, err := read(filepath.Join(dir, e.Name()))
 		if err != nil {
 			continue
 		}
@@ -386,4 +399,21 @@ func (i *Index) Accounts() map[string]string {
 		}
 	}
 	return out
+}
+
+// readDirN is os.ReadDir, at most n entries when n > 0.
+func readDirN(dir string, n int) ([]os.DirEntry, error) {
+	if n <= 0 {
+		return os.ReadDir(dir)
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	entries, err := f.ReadDir(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return entries, nil
 }

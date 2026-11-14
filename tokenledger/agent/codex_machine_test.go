@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/model"
 )
 
@@ -59,6 +60,14 @@ func plantCodex(t *testing.T, home string) (marker string) {
 }
 
 func codexHub(t *testing.T) *httptest.Server {
+	srv, _ := codexHubRec(t)
+	return srv
+}
+
+// codexHubRec is codexHub, keeping every collector status it is sent.
+func codexHubRec(t *testing.T) (*httptest.Server, func() []model.CollectorStatus) {
+	var mu sync.Mutex
+	var got []model.CollectorStatus
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/collectors/quota-lease" {
 			http.NotFound(w, r)
@@ -66,10 +75,19 @@ func codexHub(t *testing.T) *httptest.Server {
 		}
 		var batch model.Batch
 		_ = json.NewDecoder(r.Body).Decode(&batch)
+		if batch.Collector != nil {
+			mu.Lock()
+			got = append(got, *batch.Collector)
+			mu.Unlock()
+		}
 		json.NewEncoder(w).Encode(model.IngestResponse{Accepted: len(batch.Events), EndpointID: "ep"})
 	}))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, func() []model.CollectorStatus {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]model.CollectorStatus(nil), got...)
+	}
 }
 
 // A machine tenant's Codex account work never runs in the root program: it is
@@ -196,7 +214,7 @@ func TestRunCodexOpRefusesBadRequests(t *testing.T) {
 // Codex collection, never the machine program: New succeeds, and the cycle
 // keeps the rest of the login's collection going.
 func TestMachineTenantBadCodexRegistry(t *testing.T) {
-	srv := codexHub(t)
+	srv, statuses := codexHubRec(t)
 	for name, body := range map[string]string{
 		"invalid":     `{"profiles":[`,
 		"outside":     `{"profiles":[{"name":"other","home":"/Users/someone-else/.codex"}]}`,
@@ -215,8 +233,16 @@ func TestMachineTenantBadCodexRegistry(t *testing.T) {
 		if !a.codexOn || len(a.codexProfileSnapshot()) != 0 {
 			t.Fatalf("%s: codexOn %v, %d profiles", name, a.codexOn, len(a.codexProfileSnapshot()))
 		}
+		before := len(statuses())
 		if err := a.cycle(withRunAs(context.Background(), ra)); err != nil {
 			t.Fatalf("%s: cycle: %v", name, err)
+		}
+		shown := false
+		for _, st := range statuses()[before:] {
+			shown = shown || (st.Source == model.SourceCodex && st.State == "degraded" && strings.HasPrefix(st.Reason, "Codex collection off: "))
+		}
+		if !shown {
+			t.Fatalf("%s: the hub was not told why Codex is off: %+v", name, statuses()[before:])
 		}
 		// fixed: collected from the next cycle on
 		os.Remove(filepath.Join(home, ".ccquota", "codex-profiles.json"))
@@ -228,5 +254,59 @@ func TestMachineTenantBadCodexRegistry(t *testing.T) {
 		if _, err := New(Config{HubURL: srv.URL, Token: "t", Home: home, StateDir: t.TempDir(), SessionsDir: t.TempDir(), Sources: "codex"}); err == nil {
 			t.Fatalf("%s: plain agent started on an invalid registry", name)
 		}
+	}
+}
+
+// What comes back from the login's machine-op is held to codex.Query's own
+// shape before it reaches the hub.
+func TestCodexOpAnswerSanitized(t *testing.T) {
+	neg, big := int64(-5), strings.Repeat("x", 5000)
+	ans := codexOpAnswer{Error: "line one\nline two " + big, Result: &codex.Result{
+		LimitsError: big, UsageError: "a\nb", Version: "0.1.0; rm -rf",
+		Usage: &model.AccountUsage{LifetimeTokens: &neg, Daily: []model.DailyUsage{
+			{Date: "2026-11-01", Tokens: 10}, {Date: "nope", Tokens: 1}, {Date: "2026-11-02", Tokens: -1}}},
+		Quota: &model.QuotaSnapshot{Plan: big, Windows: []model.QuotaWindow{{ID: "a", UsedPercent: 50}, {ID: "b", UsedPercent: 400}}},
+	}}
+	ans.sanitize(time.Now())
+	r := ans.Result
+	if len(ans.Error) > reasonMax+3 || strings.Contains(ans.Error, "\n") || len(r.LimitsError) > reasonMax+3 || r.UsageError != "a b" {
+		t.Fatalf("errors %q / %d / %q", ans.Error[:40], len(r.LimitsError), r.UsageError)
+	}
+	if r.Version != "" {
+		t.Fatalf("version %q", r.Version)
+	}
+	if r.Usage.LifetimeTokens != nil || len(r.Usage.Daily) != 1 || r.Usage.Daily[0].Date != "2026-11-01" {
+		t.Fatalf("usage %+v", r.Usage)
+	}
+	if len(r.Quota.Plan) > labelMax+3 || len(r.Quota.Windows) != 1 || r.Quota.Observation != "app_server" {
+		t.Fatalf("quota %+v", r.Quota)
+	}
+	ok := codexOpAnswer{Result: &codex.Result{Version: "0.162.0-alpha.1"}}
+	ok.sanitize(time.Now())
+	if ok.Result.Version != "0.162.0-alpha.1" {
+		t.Fatalf("a real version dropped: %q", ok.Result.Version)
+	}
+}
+
+// The agent's proxy / CA / locale variables travel in the request (the
+// seat's core builds the job's environment itself); the machine-op takes those
+// names only.
+func TestCodexOpEnvTravelsInTheRequest(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://proxy.example:3128")
+	t.Setenv("CCQUOTA_SECRET_THING", "x")
+	env := passedEnv()
+	if env["HTTPS_PROXY"] != "http://proxy.example:3128" || env["CCQUOTA_SECRET_THING"] != "" {
+		t.Fatalf("passed %v", env)
+	}
+	t.Setenv("HTTPS_PROXY", "")
+	t.Setenv("ODD_VAR", "")
+	os.Unsetenv("ODD_VAR")
+	in := `{"op":"query","home":"/nonexistent-home","account":"a","env":{"HTTPS_PROXY":"http://p.example:1","ODD_VAR":"y"}}`
+	var out bytes.Buffer
+	if err := RunCodexOp(strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("HTTPS_PROXY") != "http://p.example:1" || os.Getenv("ODD_VAR") != "" {
+		t.Fatalf("machine-op env: HTTPS_PROXY=%q ODD_VAR=%q", os.Getenv("HTTPS_PROXY"), os.Getenv("ODD_VAR"))
 	}
 }

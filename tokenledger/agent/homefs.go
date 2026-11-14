@@ -29,6 +29,7 @@ var (
 	errHomeNotRegular = errors.New("not a regular file")
 	errHomeTooLarge   = errors.New("larger than the agent reads")
 	errOutsideHome    = errors.New("not inside the login's home")
+	errHomeLinked     = errors.New("a link (not followed)")
 )
 
 // loginRootOf is the tenant whose home holds path, that home, and path's
@@ -50,6 +51,12 @@ func loginRootOf(path string) (*RunAs, string, []string) {
 		}
 	}
 	return nil, "", nil
+}
+
+// linkedPath says err is a path in a login's home refused for being a link
+// (or a file where a directory belongs).
+func linkedPath(err error) bool {
+	return errors.Is(err, errHomeLink) || errors.Is(err, errHomeLinked)
 }
 
 // underLogin says path is inside ra's home (not the home itself).

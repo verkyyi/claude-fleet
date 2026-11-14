@@ -30,9 +30,12 @@ func acquireProfile(home string, shared bool) (func(), error) {
 	path := filepath.Join(home, ".ccquota-auth.lock")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if errors.Is(err, os.ErrPermission) {
-		// a lock file another user made (an older machine agent's, as root):
-		// a lock needs no write access to the file itself
-		f, err = os.Open(path)
+		// a lock file another user made (an older machine agent's, as root)
+		// that this login cannot open: the directory is the login's, so the
+		// file is replaced by one of its own
+		if rmErr := os.Remove(path); rmErr == nil || errors.Is(rmErr, os.ErrNotExist) {
+			f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		}
 	}
 	if err != nil {
 		return nil, errors.New("Codex profile is not writable for credential maintenance")

@@ -8,10 +8,12 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/codex"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/identity"
 	"github.com/verkyyi/claude-fleet/tokenledger/shared/scan"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/sessions"
 )
 
 // A machine tenant reads its login's files inside the login's home only: a
@@ -162,5 +164,66 @@ func TestMachineTenantNodeEnvLink(t *testing.T) {
 	}
 	if !strings.HasPrefix(credStoreBase(), base) {
 		t.Fatal("FLEET_CREDSEP_ROOT_BASE not honored")
+	}
+}
+
+// Session stamps are read as the login's own small regular files: a link (to
+// /dev/zero, or another login's stamp) is not read, and the directory is read
+// a bounded number of entries at a time.
+func TestMachineTenantSessionStamps(t *testing.T) {
+	home, other := t.TempDir(), t.TempDir()
+	dir := filepath.Join(home, ".ccquota", "sessions")
+	os.MkdirAll(dir, 0o700)
+	stamp := `{"session_id":"s1","transcript_path":"/t","stamped_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}`
+	os.WriteFile(filepath.Join(dir, "s1.json"), []byte(stamp), 0o600)
+	os.WriteFile(filepath.Join(other, "s2.json"), []byte(strings.Replace(stamp, "s1", "s2", 1)), 0o600)
+	os.Symlink(filepath.Join(other, "s2.json"), filepath.Join(dir, "s2.json"))
+	os.Symlink("/dev/zero", filepath.Join(dir, "zero.json"))
+	ra := &RunAs{Login: "grace", UID: uint32(os.Getuid()), Home: home}
+	a := &Agent{cfg: Config{Home: home, RunAs: ra, SessionsDir: filepath.Join(home, ".ccquota")}}
+	done := make(chan struct{})
+	var idx *sessions.Index
+	var err error
+	go func() { idx, err = a.loadStamps(time.Hour); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("still reading")
+	}
+	if err != nil || len(idx.BySession) != 1 || idx.BySession["s1"].SessionID != "s1" {
+		t.Fatalf("stamps %v %v; want s1 only", idx, err)
+	}
+}
+
+// A linked ~/.claude, ~/.claude.json or ~/.codex is named once, as a status
+// reason the hub shows; a linked ~/.claude.json still lets the login's Claude
+// usage go to the pool.
+func TestMachineTenantLinkedHomePaths(t *testing.T) {
+	home, other := t.TempDir(), t.TempDir()
+	ra := &RunAs{Login: "grace", UID: uint32(os.Getuid()), Home: home}
+	a := &Agent{cfg: Config{Home: home, RunAs: ra}}
+	if why := a.linkedHomePath(filepath.Join(home, ".claude", "projects"), filepath.Join(home, ".claude.json")); why != "" {
+		t.Fatalf("nothing linked: %q", why)
+	}
+	os.MkdirAll(filepath.Join(other, "projects"), 0o700)
+	os.Symlink(other, filepath.Join(home, ".claude"))
+	os.WriteFile(filepath.Join(other, "c.json"), []byte(`{}`), 0o600)
+	os.Symlink(filepath.Join(other, "c.json"), filepath.Join(home, ".claude.json"))
+	why := a.linkedHomePath(filepath.Join(home, ".claude", "projects"), filepath.Join(home, ".claude.json"))
+	if !strings.HasPrefix(why, "skipped: linked home path") || !strings.Contains(why, "~/.claude/projects") || !strings.Contains(why, "~/.claude.json") {
+		t.Fatalf("reason %q", why)
+	}
+	if len(a.linkSaid) != 2 {
+		t.Fatalf("logged %v", a.linkSaid)
+	}
+	_, err := identity.DetectWith(home, a.loginReader(claudeConfigMax))
+	if !linkedPath(err) {
+		t.Fatalf("a linked ~/.claude.json reads as %v; want a linked-path error (the pool fallback)", err)
+	}
+	if _, err := codex.ReadAuthWith(filepath.Join(home, ".claude"), a.loginReader(smallFileMax)); err == nil || !strings.Contains(err.Error(), "link") {
+		t.Fatalf("Codex auth under a link: %v; want it named a link", err)
+	}
+	if (&Agent{cfg: Config{Home: home}}).linkedHomePath(filepath.Join(home, ".claude.json")) != "" {
+		t.Fatal("a plain agent reports its own links")
 	}
 }
