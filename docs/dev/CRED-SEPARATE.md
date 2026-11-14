@@ -81,7 +81,17 @@ an admin at once: `sudo bash ~/.claude/fleet/bin/fleet-credsep.sh check --fix
 --login <login>`. The doctor's `rootlog` row (`fleet-credsep.sh rootlogs`) scans
 `/Library/LaunchDaemons` (Linux `/etc/systemd/system`) and WARNs on any service
 run as root whose log lies in a home — the fleet's own with that fix line, any
-other as "not the fleet's".
+other as "not the fleet's". launchd opens those files before it switches to a
+job's `UserName` as well, so on macOS the row also reads LaunchDaemons that
+carry a `UserName`: the fleet's per-login units (`com.claude-fleet.<login>.<unit>`)
+whenever `StandardOutPath` / `StandardErrorPath` is set to anything but
+`/dev/null`, with the fix `~/.claude/fleet/bin/fleet-login-new.sh <login>
+--daemons-only --apply` per login (their system shape names `/dev/null` and the
+unit's wrapper opens its log as the login — docs/dev/SHARED-MACHINE.md «Units
+installed with their log in the plist»), and any other when its log lies in a
+home. The node agent's definition `fleet-login-new.sh` writes for a login the
+hub opened (step 7a, not loaded until 7b rewrites it with the log above) names
+`/dev/null` for both keys.
 
 `/var/db/fleet-cred/<login>/` is `0700 _fleetcred`. A session doing
 `ls /var/db/fleet-cred/<login>` or `cat ~/.config/claude-fleet/node.env` gets

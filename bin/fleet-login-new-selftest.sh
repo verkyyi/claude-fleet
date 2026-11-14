@@ -34,7 +34,8 @@
 #   B3. daemons   (#1192) the clone at stable as the login (~<login>/.claude/fleet
 #                 + logs/); every launchd template rendered in system shape —
 #                 Label com.claude-fleet.<login>.<unit>, UserName <login>, __HOME__
-#                 = its home — installed 644 under FLEET_INSTALL_DAEMON_DIR and
+#                 = its home, StandardOutPath / StandardErrorPath /dev/null with
+#                 the /bin/sh wrapper opening the unit's log — installed 644 under FLEET_INSTALL_DAEMON_DIR and
 #                 `launchctl bootstrap system`'d, 14 of them from the real repo
 #                 — rendered from THIS install's templates + apply script,
 #                 nothing read out of the login's clone (only `test -d` of it,
@@ -71,7 +72,8 @@
 #   K. daemons-only (#1223) an existing login + its clone, no daemons → `--daemons-only
 #                 --apply` = N install + N bootstrap system calls, steps 1–7 zero,
 #                 `installed N/N`; a rerun leaves every unit alone; one missing
-#                 unit → only it; no clone → exit 1 naming it; no such login / no
+#                 unit → only it; one in place that names its log in the plist
+#                 (not /dev/null) → bootout + install + bootstrap of it alone; no clone → exit 1 naming it; no such login / no
 #                 home → exit 4, nothing run; another step's option → exit 2.
 #                 The login's clone carries a marked template, an extra unit and
 #                 an apply script + lib of its own: none of them is read or run
@@ -80,8 +82,10 @@
 #   V. check      the rendered plist is checked before any install — a render
 #                 (a stub apply script in a copy of this install) with UserName
 #                 root / none, another login's Label, GroupName wheel, a program
-#                 in the login's home or a relative one, a RootDirectory or
-#                 Program key → exit 1 naming the mismatch, nothing installed,
+#                 in the login's home or a relative one, a RootDirectory,
+#                 Program, StandardInPath, Sockets, WatchPaths, QueueDirectories,
+#                 SessionCreate or MachServices key, a StandardOutPath /
+#                 StandardErrorPath that is not /dev/null → exit 1 naming the mismatch, nothing installed,
 #                 nothing bootstrapped; the right shape installs. With plutil and
 #                 with the python3 fallback (FLEET_LOGIN_PLUTIL=<none>), so it
 #                 runs on Linux too
@@ -411,6 +415,12 @@ if [ -z "$DAEMONS" ]; then
     st_eq "B3 $u UserName" frank "$(plutil -extract UserName raw -o - "$f")"
     st_eq "B3 $u mode" 644 "$(mode "$f")"
     contains "B3 $u runs the login's clone" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "$H/.claude/fleet/"
+    # launchd opens the Standard*Path files before it switches to UserName: both
+    # /dev/null, and the wrapper (run as the login) opens the template's log
+    st_eq "B3 $u StandardOutPath" /dev/null "$(plutil -extract StandardOutPath raw -o - "$f")"
+    st_eq "B3 $u StandardErrorPath" /dev/null "$(plutil -extract StandardErrorPath raw -o - "$f")"
+    contains "B3 $u wrapper makes the log dir" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "mkdir -p '$H/.config/claude-fleet/logs' 2>/dev/null; "
+    contains "B3 $u wrapper opens its log as the login" "$(plutil -extract ProgramArguments.2 raw -o - "$f")" "command exec 2>>'$H/.config/claude-fleet/logs/$u.launchd.log'; "
     ok_bs=$(grep -c "^launchctl bootstrap system $f$" "$LOG"); st_eq "B3 $u bootstrapped once" 1 "$ok_bs"
   done
   # #1213: the templates were listed + read AS THE LOGIN (the admin cannot read a
@@ -846,6 +856,18 @@ if [ -z "$DAEMONS" ]; then
   konly kai --daemons-only --apply
   st_eq "K fill one: exit" 0 "$RC"
   st_eq "K fill one: one bootstrap" "launchctl bootstrap system $FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.spinner.plist" "$(grep '^launchctl ' "$LOG")"
+  # one in place that still names its log in the plist (installed before the
+  # system shape wrote /dev/null there): booted out, re-rendered, bootstrapped
+  KD="$FLEET_INSTALL_DAEMON_DIR/com.claude-fleet.kai.collect.plist"
+  plutil -replace StandardErrorPath -string "$KH/.config/claude-fleet/logs/collect.launchd.log" "$KD"
+  konly kai --daemons-only --apply
+  st_eq "K older shape: exit" 0 "$RC"
+  contains "K older shape: says replaced" "$OUT" "names its log in the plist: $KD — replaced"
+  st_eq "K older shape: bootout + bootstrap, it alone" "launchctl bootout system/com.claude-fleet.kai.collect
+launchctl bootstrap system $KD" "$(grep '^launchctl ' "$LOG")"
+  st_eq "K older shape: one install" 1 "$(grep -c '^sudo install$' "$LOG")"
+  st_eq "K older shape: /dev/null now" /dev/null "$(plutil -extract StandardErrorPath raw -o - "$KD")"
+  contains "K older shape: installed N/N" "$OUT" "installed $NTMPL/$NTMPL ($((NTMPL - 1)) already in place)"
   # a login with no clone yet: fails at step 8 naming what is missing
   LH="$FLEET_LOGIN_HOMES/nohome"; mkdir -p "$LH"; chmod 000 "$LH"
   konly nohome --daemons-only --apply
@@ -897,6 +919,15 @@ case "${FAKE_RENDER:-good}" in
   dots)    p0=/bin/../tmp/x ;;
   rootdir) extra='<key>RootDirectory</key><string>/</string>' ;;
   program) extra='<key>Program</key><string>/tmp/x</string>' ;;
+  stdin)   extra='<key>StandardInPath</key><string>/tmp/x</string>' ;;
+  sockets) extra='<key>Sockets</key><dict><key>L</key><dict><key>SockPathName</key><string>/tmp/x.sock</string></dict></dict>' ;;
+  watch)   extra='<key>WatchPaths</key><array><string>/tmp/x</string></array>' ;;
+  queue)   extra='<key>QueueDirectories</key><array><string>/tmp/x</string></array>' ;;
+  session) extra='<key>SessionCreate</key><false/>' ;;
+  mach)    extra='<key>MachServices</key><dict><key>x.y</key><true/></dict>' ;;
+  stdout)  extra="<key>StandardOutPath</key><string>$FLEET_INSTALL_HOME/.config/claude-fleet/logs/x.log</string>" ;;
+  stderr)  extra="<key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>$FLEET_INSTALL_HOME/x.log</string>" ;;
+  good)    extra='<key>StandardOutPath</key><string>/dev/null</string><key>StandardErrorPath</key><string>/dev/null</string>' ;;
   garbage) echo 'not a plist'; exit 0 ;;
 esac
 cat <<PL
@@ -921,7 +952,12 @@ for pl in "" /nonexistent/plutil; do
              group:"GroupName is 'wheel', not 'staff'" \
              home:"is not under /bin, /usr/bin, /sbin or /usr/sbin" rel:"is not under /bin" \
              dots:"is not a plain path" rootdir:"carries a RootDirectory key" \
-             program:"carries a Program key" garbage:"no Label (or not a plist)"; do
+             program:"carries a Program key" garbage:"no Label (or not a plist)" \
+             stdin:"carries a StandardInPath key" sockets:"carries a Sockets key" \
+             watch:"carries a WatchPaths key" queue:"carries a QueueDirectories key" \
+             session:"carries a SessionCreate key" mach:"carries a MachServices key" \
+             stdout:"StandardOutPath is '$FLEET_LOGIN_HOMES/kai/.config/claude-fleet/logs/x.log', not /dev/null" \
+             stderr:"StandardErrorPath is '$FLEET_LOGIN_HOMES/kai/x.log', not /dev/null"; do
     k=${bad%%:*} msg=${bad#*:}
     rm -f "$VDST"
     FAKE_RENDER=$k FLEET_LOGIN_PLUTIL=${pl:-plutil} vonly

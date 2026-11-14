@@ -15,6 +15,11 @@
 #             A login whose daemons are system LaunchDaemons (`UserName`, label
 #             com.claude-fleet.<login>.<x>) keeps that shape; it needs root, and
 #             without passwordless sudo the exact commands are printed instead.
+#             A system unit installed with its log named in the plist (before
+#             the system shape wrote /dev/null there) is re-rendered with root;
+#             without it, it keeps running as installed, no command is queued
+#             for it, and one `daemons: WARN` line names the operator's
+#             `fleet-login-new.sh <login> --daemons-only --apply`.
 #             `--no-daemons` skips this step whole (issue #1214): nothing is
 #             rendered, loaded or removed, and its one line says so — for a
 #             caller that has already found this login's daemons have nowhere
@@ -232,22 +237,40 @@ render_tmpl() { # $1 template -> stdout, the gui-shape plist / user unit
 # system shape: the gui plist + Label com.claude-fleet.<login>.<x>, UserName /
 # GroupName, and argv wrapped so the job gets the user's own TMPDIR (a
 # LaunchDaemon does not inherit one) — the shape the installed ones carry.
+# StandardOutPath / StandardErrorPath are both /dev/null in it: launchd opens
+# those files before it switches to UserName. The template's log (a file in the
+# login's home) is opened by the wrapper instead, which runs as the login: it
+# makes the log's dir when missing (`mkdir -p`, errors dropped) and redirects
+# with `command exec`, so a log it cannot open leaves that stream at /dev/null
+# and the job still starts (a plain `exec` with a failed redirection ends a
+# POSIX shell). A unit installed before this names its log in the plist; see
+# fleet_daemon_homelog_units (fleet-daemon-lib.sh) and daemons_launchd.
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 render_system() { # $1 template $2 unit $3 out
-  local tmp n i a cmdline=''
+  local tmp n i a cmdline='' logs='' dirs=' ' k fd v
   tmp="$3"
   render_tmpl "$1" > "$tmp" || return 1
   n=$(plutil -extract ProgramArguments raw -o - "$tmp" 2>/dev/null) || return 1
   i=0
   while [ "$i" -lt "$n" ]; do
     a=$(plutil -extract "ProgramArguments.$i" raw -o - "$tmp") || return 1
-    cmdline="$cmdline '$(printf '%s' "$a" | sed "s/'/'\\\\''/g")'"
+    cmdline="$cmdline $(shq "$a")"
     i=$((i + 1))
+  done
+  for k in StandardOutPath:1 StandardErrorPath:2; do
+    fd=${k#*:} k=${k%:*}
+    if v=$(plutil -extract "$k" raw -o - "$tmp" 2>/dev/null) && [ -n "$v" ] && [ "$v" != /dev/null ]; then
+      case "$v" in /*) ;; *) return 1 ;; esac
+      case "$dirs" in *" ${v%/*} "*) ;; *) logs="${logs}mkdir -p $(shq "${v%/*}") 2>/dev/null; "; dirs="$dirs${v%/*} " ;; esac
+      logs="${logs}command exec $fd>>$(shq "$v"); "
+    fi
+    plutil -replace "$k" -string /dev/null "$tmp" || return 1
   done
   plutil -replace Label -string "$(fleet_daemon_label "$2" system "$LOGIN")" "$tmp" \
     && plutil -replace UserName -string "$LOGIN" "$tmp" \
     && plutil -replace GroupName -string staff "$tmp" \
     && plutil -replace ProgramArguments -json '["/bin/sh","-c"]' "$tmp" \
-    && plutil -insert ProgramArguments.2 -string "TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec$cmdline" "$tmp"
+    && plutil -insert ProgramArguments.2 -string "${logs}TMPDIR=\"\$(getconf DARWIN_USER_TEMP_DIR)\"; export TMPDIR; exec$cmdline" "$tmp"
 }
 
 FROM='' TO='' DRY=0 ROOT="${FLEET_INSTALL_ROOT:-$HOME/.claude/fleet}" SYNCL=0 SYNCL_ONLY='' RENDER='' NODAEMONS=0 BUNDLE=0
@@ -678,9 +701,22 @@ daemons_launchd() {
   if [ "$shape" = system ]; then
     { [ -z "$SUDO" ] || $SUDO true >/dev/null 2>&1; } || sudo_ok=0
   fi
+  # Installed system units that still name their log in the plist (rendered
+  # before render_system wrote /dev/null there; fleet_daemon_homelog_units).
+  # With root they are re-rendered on this apply even when their template did
+  # not move. Without it the login cannot replace them: each is left running as
+  # installed, never queued for an admin command here, and ONE line names the
+  # operator's command for all of them (the doctor prints the same line).
+  local homelog=''
+  [ "$shape" = system ] && homelog=$(fleet_daemon_homelog_units "$LOGIN" | tr '\n' ' ')
+  if [ -n "$homelog" ] && [ "$sudo_ok" = 1 ]; then
+    units=$(printf '%s\n%s\n' "$units" "$(printf '%s' "$homelog" | tr ' ' '\n')" | sed '/^$/d' | sort -u)
+  elif [ -n "$homelog" ]; then
+    say "daemons: WARN — $(fleet_daemon_homelog_line "$LOGIN" "$(printf '%s' "$homelog" | wc -w | tr -d ' ')")"
+  fi
   local spin=0
   spinner_changed && [ "$CLIENT_ONLY" = 0 ] && spin=1
-  if [ -z "$units" ] && [ "$spin" = 0 ]; then say 'daemons: ok — no daemon change, no reload needed'; return; fi
+  if [ -z "$units" ] && [ "$spin" = 0 ]; then [ -n "$homelog" ] || say 'daemons: ok — no daemon change, no reload needed'; return; fi
   if [ "$shape" = system ] && ! command -v plutil >/dev/null 2>&1; then
     fail daemons "system LaunchDaemons need plutil to render — not found"; return
   fi
@@ -703,6 +739,10 @@ daemons_launchd() {
     fi
     if [ ! -f "$dst" ] && ! is_new "launchd/com.claude-fleet.$u.plist.tmpl"; then
       say "daemons: skip $u — changed, not installed on this login"; continue
+    fi
+    # an older-shape system unit and no root: left as installed (the WARN above)
+    if [ "$sudo_ok" = 0 ] && [ -n "$homelog" ]; then
+      case " $homelog " in *" $u "*) continue ;; esac
     fi
     tmp=$(mktemp "${TMPDIR:-/tmp}/fleet-apply.XXXXXX")
     if [ "$shape" = gui ]; then render_tmpl "$tmpl" > "$tmp"; else render_system "$tmpl" "$u" "$tmp"; fi \
@@ -750,7 +790,7 @@ daemons_launchd() {
   if [ -n "$need_root" ]; then
     fail daemons "no passwordless sudo for this login's system LaunchDaemons — run as an admin:${need_root#;}"
   fi
-  [ "$acted" = 1 ] || [ -n "$need_root" ] || say 'daemons: ok — nothing to reload on this login'
+  [ "$acted" = 1 ] || [ -n "$need_root" ] || [ -n "$homelog" ] || say 'daemons: ok — nothing to reload on this login'
 }
 
 daemons_systemd() {

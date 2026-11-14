@@ -33,7 +33,11 @@
 #                                           the login's home (issue #2296; sudo once —
 #                                           an admin: sudo bash … check --fix --login X)
 #   fleet-credsep.sh rootlogs               the doctor's `rootlog` row: every root
-#                                           service whose log lies in a home (WARN)
+#                                           service whose log lies in a home (WARN);
+#                                           on macOS also a LaunchDaemon with a
+#                                           UserName — the fleet's per-login units
+#                                           when a log key is not /dev/null, any
+#                                           other when its log lies in a home
 #   fleet-credsep.sh setenv [--check]      node.env's KEY=VALUE lines (stdin — the
 #                                           token never on argv) into the store: root
 #                                           edits its copy in place, node.pub.env

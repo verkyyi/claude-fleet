@@ -619,6 +619,17 @@ if [ -f "$(dirname "$0")/fleet-credsep.py" ] && [ -d "$_rl_dir" ] \
   esac
 fi
 
+# --- daemons: this login's system units that name their log in the plist ---------
+# The system shape names /dev/null there and its wrapper opens the log as the
+# login (fleet-install-apply.sh render_system); a unit installed before that is
+# replaced only by an admin. The same one line fleet-install-apply.sh prints
+# (fleet_daemon_homelog_line), once for all such units.
+if [ "$(uname)" = Darwin ] && command -v fleet_daemon_homelog_units >/dev/null 2>&1 \
+   && [ "$(fleet_daemon_shape)" = system ] && ! fleet_node_manages 2>/dev/null; then
+  _hl_n=$(fleet_daemon_homelog_units | wc -l | tr -d ' ')
+  [ "$_hl_n" = 0 ] || warn daemons "$(fleet_daemon_homelog_line "$(fleet_daemon_login)" "$_hl_n")"
+fi
+
 # --- cred: which road this login's sessions take, and why (issue #1975) -----------
 # FLEET_CRED_PROXY=1 only (off = no row, as before): trust × probe → direct /
 # relay / central per agent, the proxy alive, credsep, session-pass renewal —

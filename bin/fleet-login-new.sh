@@ -106,7 +106,10 @@
 #      login (`sudo -u <login> -H test -d`): the units run its scripts, as the
 #      login. Each rendered plist is checked before anything is installed —
 #      Label com.claude-fleet.<login>.<unit>, UserName <login>, GroupName
-#      staff (or none), no Program / RootDirectory key, ProgramArguments[0] an
+#      staff (or none), no Program / RootDirectory / StandardInPath / Sockets /
+#      WatchPaths / QueueDirectories / SessionCreate / MachServices key,
+#      StandardOutPath / StandardErrorPath absent or /dev/null (the job's
+#      wrapper opens its log as the login), ProgramArguments[0] an
 #      absolute path under /bin, /usr/bin, /sbin or /usr/sbin — and a mismatch
 #      FAILS the run (exit 1) with nothing installed. The step prints
 #      `installed N/N`, and 0 templates is a FAILURE (exit 1) that names the
@@ -166,9 +169,14 @@
 # but has no com.claude-fleet.<login>.* under /Library/LaunchDaemons — the
 # bootstrap's `daemons: WARN` names this command. Steps 1–7 and 9 are skipped
 # (their options are refused), the login AND its home must exist (else exit 4),
-# the templates are read from the login's own clone as the login exactly as in
-# a full run (#1213), a unit whose plist is already in place is left alone, and
-# it still prints `installed N/N`. A dry run previews from this install.
+# the units are rendered from THIS install's templates exactly as in a full run
+# (the login's clone is only checked to exist, as the login — #1213), a unit
+# whose plist is already in place is left alone, and it still prints
+# `installed N/N`. A dry run previews from this install. One in
+# place that still names a log file in its plist (StandardOutPath /
+# StandardErrorPath not /dev/null — installed before the system shape wrote
+# /dev/null there) is booted out, re-rendered and bootstrapped: the login's own
+# apply cannot replace a system plist and names this command for it.
 
 # --recycle (issue #3505, EPIC #3500 C20): the login and its home already exist,
 # just washed by bin/fleet-login-reset.sh (an empty home from the template).
@@ -580,13 +588,15 @@ node_join_step() {
   printf '%s\n' "$out" | sed 's/^/    /'
   if [ "$rc" != 0 ]; then warn_step "fleet-node-join.sh exited $rc as $LOGIN"; N=$N0; return 0; fi
   # the agent's definition, not loaded: 7b turns it into the launcher's and
-  # starts it
+  # starts it, its log under the credsep log dir. Until then its log keys are
+  # /dev/null: a plist under /Library/LaunchDaemons is loaded at boot, and
+  # launchd opens the log files before it switches to UserName.
   { printf '<?xml version="1.0" encoding="UTF-8"?>\n<!-- fleet-login-new.sh (issue #2652) -->\n'
     printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n'
     printf '  <key>Label</key><string>com.ccquota.agent.%s</string>\n  <key>UserName</key><string>%s</string>\n' "$LOGIN" "$LOGIN"
     printf '  <key>ProgramArguments</key>\n  <array><string>%s/.ccquota/run-agent.sh</string></array>\n' "$H"
     printf '  <key>RunAtLoad</key><true/>\n  <key>KeepAlive</key><true/>\n'
-    printf '  <key>StandardErrorPath</key><string>%s/.ccquota/agent.log</string>\n  <key>StandardOutPath</key><string>%s/.ccquota/agent.log</string>\n' "$H" "$H"
+    printf '  <key>StandardErrorPath</key><string>/dev/null</string>\n  <key>StandardOutPath</key><string>/dev/null</string>\n'
     printf '</dict>\n</plist>\n'; } > "$TMPD/agent.plist"
   if ! sudo install -m 644 "$TMPD/agent.plist" "$plist"; then warn_step "cannot write $plist"; N=$N0; return 0; fi
   NODE_LINE="node: joined $JHUB — its agent starts through the credential launcher (next step)"
@@ -896,7 +906,12 @@ else: print(v)' "$1" "$2"
 # login, nothing else — exact Label and UserName, GroupName staff or none, no
 # Program / RootDirectory, and a program from the system's own bin dirs. The
 # job runs as the login (UserName), so the scripts it names in the login's home
-# run as the login. Prints the first mismatch; exit 1 on one.
+# run as the login. launchd itself acts before it switches to UserName on some
+# keys — it opens StandardInPath / StandardOutPath / StandardErrorPath, makes
+# the Sockets and MachServices, watches WatchPaths / QueueDirectories, and
+# SessionCreate sets up a session — so none of those is taken, and the two log
+# keys only as /dev/null (the job's wrapper opens its log as the login).
+# Prints the first mismatch; exit 1 on one.
 plist_check() {
   local f=$1 u=$2 want v k n
   want=$(fleet_daemon_label "$u" system "$LOGIN")
@@ -908,8 +923,13 @@ plist_check() {
   if v=$(plist_val GroupName "$f"); then
     [ "$v" = staff ] || { echo "GroupName is '$v', not 'staff'"; return 1; }
   fi
-  for k in Program RootDirectory; do
+  for k in Program RootDirectory StandardInPath Sockets WatchPaths QueueDirectories SessionCreate MachServices; do
     if plist_val "$k" "$f" >/dev/null; then echo "carries a $k key"; return 1; fi
+  done
+  for k in StandardOutPath StandardErrorPath; do
+    if v=$(plist_val "$k" "$f"); then
+      [ "$v" = /dev/null ] || { echo "$k is '$v', not /dev/null"; return 1; }
+    fi
   done
   n=$(plist_val ProgramArguments "$f") || { echo "no ProgramArguments"; return 1; }
   case "$n" in ''|*[!0-9]*|0) echo "ProgramArguments is not a non-empty array"; return 1 ;; esac
@@ -919,6 +939,16 @@ plist_check() {
     /bin/?*|/usr/bin/?*|/sbin/?*|/usr/sbin/?*) ;;
     *) echo "ProgramArguments[0] '$v' is not under /bin, /usr/bin, /sbin or /usr/sbin"; return 1 ;;
   esac
+}
+# names_log <plist>: 0 iff it sets StandardOutPath or StandardErrorPath to
+# anything but /dev/null
+names_log() {
+  local k v
+  for k in StandardOutPath StandardErrorPath; do
+    v=$(plist_val "$k" "$1") || continue
+    [ "$v" = /dev/null ] || return 0
+  done
+  return 1
 }
 if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
   # Everything the admin runs or installs here comes from THIS install (the
@@ -951,16 +981,25 @@ if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
   elif [ "$NU" = 0 ]; then
     say "  WARN: no launchd/*.plist.tmpl in $TMPL_DIR — nothing to preview here; --apply installs from the same dir and fails on 0"
   fi
-  NI=0 NK=0 TODO=''
+  NI=0 NK=0 TODO='' REPL=''
   # render + check every unit first: a mismatch stops the run with nothing installed
   for u in $UNITS; do
     label=$(fleet_daemon_label "$u" system "$LOGIN"); dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
     # --daemons-only fills what is missing (issue #1223): a unit already in
     # place is left alone — a second `launchctl bootstrap` of a loaded label
-    # fails, and replacing a live one is the login's own apply's job.
+    # fails, and replacing a live one is the login's own apply's job. Except
+    # one whose plist still names a log file (StandardOutPath /
+    # StandardErrorPath not /dev/null, installed before the system shape
+    # wrote /dev/null there): the login cannot replace a system plist, so it
+    # is booted out, re-rendered and bootstrapped here.
     if [ "$DONLY" = 1 ] && [ -e "$dst" ]; then
-      say "  (already in place: $dst — left alone)"
-      NK=$((NK + 1)); continue
+      if names_log "$dst"; then
+        say "  (in place, names its log in the plist: $dst — replaced)"
+        REPL="$REPL $u"
+      else
+        say "  (already in place: $dst — left alone)"
+        NK=$((NK + 1)); continue
+      fi
     fi
     if [ "$APPLY" = 1 ]; then
       FLEET_INSTALL_LOGIN="$LOGIN" FLEET_INSTALL_HOME="$H" bash "$APPLY_SH" --render-system "$u" --root "$TMPL_ROOT" > "$src" \
@@ -972,6 +1011,10 @@ if [ "$DAEMONS" = 1 ] && [ "$ADOPTED" = 0 ]; then
   done
   for u in $TODO; do
     label=$(fleet_daemon_label "$u" system "$LOGIN"); dst="$DDIR/$label.plist"; src="$TMPD/plists/$label.plist"
+    case " $REPL " in
+      *" $u "*) show sudo launchctl bootout "system/$label"
+                [ "$APPLY" = 1 ] && { sudo launchctl bootout "system/$label" >/dev/null 2>&1 || :; } ;;
+    esac
     run_shown "${SU}install -m 644 <$label.plist, rendered from launchd/com.claude-fleet.$u.plist.tmpl> $(printf %q "$dst")" \
       -- sudo install -m 644 "$src" "$dst"
     run sudo launchctl bootstrap system "$dst"

@@ -68,9 +68,18 @@ clone — and `launchctl bootstrap system`'d — the shape every guest login on 
 shared mini runs. Her clone (in her 700 home, issue #1213) is only checked to
 exist, as alice: the units run its scripts, as alice. Each rendered plist is
 checked before anything is installed (Label `com.claude-fleet.alice.<unit>`,
-`UserName alice`, `GroupName staff` or none, no `Program` / `RootDirectory`,
-the program under `/bin`, `/usr/bin`, `/sbin` or `/usr/sbin`); a mismatch fails
-the run with nothing installed. The step ends `installed 14/14`, and an install
+`UserName alice`, `GroupName staff` or none, no `Program` / `RootDirectory` /
+`StandardInPath` / `Sockets` / `WatchPaths` / `QueueDirectories` /
+`SessionCreate` / `MachServices`, `StandardOutPath` / `StandardErrorPath`
+absent or `/dev/null`, the program under `/bin`, `/usr/bin`, `/sbin` or
+`/usr/sbin`); a mismatch fails the run with nothing installed. launchd opens
+the `Standard*Path` files before it switches to `UserName`
+(docs/dev/CRED-SEPARATE.md «The agent's log leaves the home»), so the system
+shape names `/dev/null` there and each unit's `/bin/sh -c` wrapper — running as
+alice — opens its log itself: `mkdir -p ~alice/.config/claude-fleet/logs`, then
+`command exec 2>>…/<unit>.launchd.log` (stdout too for a unit whose template
+logs it). A log the wrapper cannot open leaves that stream at `/dev/null`; the
+unit still starts. The step ends `installed 14/14`, and an install
 with no templates fails the run (exit 1) instead of installing nothing. It stops at the first failed step, refuses (exit 3) when the login or
 `/Users/alice` already exists, never overwrites, and writes nothing in alice's
 home outside `.ssh/`, `.config/claude-fleet/accounts/`, `.zshrc` and
@@ -504,6 +513,24 @@ checked to exist, as her) — so run it from an install at the same version as
 hers and her next apply finds every unit "already current". A unit whose plist
 is already in place is left alone, so a rerun only fills what is missing. No clone yet (she never logged in) is exit 1 naming it: her first
 login installs it, then re-run.
+
+**Units installed with their log in the plist.** A unit installed before the
+system shape named `/dev/null` for `StandardOutPath` / `StandardErrorPath` still
+names `~alice/.config/claude-fleet/logs/<unit>.launchd.log` there. alice cannot
+replace a system plist, so her own apply leaves each such unit running as
+installed, queues no admin command for it, and prints one line for all of
+them; `fleet doctor` prints the same line as a `daemons` WARN:
+
+```text
+daemons: WARN — 11 of alice's background services (system LaunchDaemons) still have launchd open their log in the home; they keep running as installed, and only an admin can replace them — ask the operator to run: ~/.claude/fleet/bin/fleet-login-new.sh alice --daemons-only --apply
+```
+
+The same command as above replaces them: `--daemons-only --apply` boots out,
+re-renders and bootstraps each unit in place that names a log file (`(in place,
+names its log in the plist: … — replaced)`), and leaves the rest alone. A login
+with passwordless sudo re-renders them on its own next apply. The doctor's
+`rootlog` row (`fleet-credsep.sh rootlogs`) names every such unit on the
+machine, with this command per login.
 
 Nothing on her side needs re-running: the units start at bootstrap, and they
 run the scripts of her own `~/.claude/fleet`.
