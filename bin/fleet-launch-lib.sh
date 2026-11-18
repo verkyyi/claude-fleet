@@ -241,6 +241,13 @@ fleet_launch_mcp() {   # [<launch model>] -- <the agent argv>
         python3 "$BIN/fleet-codex-policy.py" -- "$@") || exit 2
       while IFS= read -r v; do [ -z "$v" ] || flags+=(-c "$v"); done <<< "$pol"
     fi
+    # the login's remote connectors (活页 space, …) that Codex's own config lacks, each a
+    # stdio relay on Claude's sign-in, read per request (task S9F7) — never under an
+    # MCP policy (it names the whole list), FLEET_CODEX_REMOTE_MCP=0 adds none
+    if [ -z "$mcp" ] && [ "${FLEET_CODEX_REMOTE_MCP:-1}" != 0 ] && [ -f "$BIN/mcp-remote.py" ]; then
+      pol=$(python3 "$BIN/mcp-remote.py" codex-mounts --codex-home "${CODEX_HOME:-$HOME/.codex}" 2>/dev/null) || pol=''
+      while IFS= read -r v; do [ -z "$v" ] || flags+=(-c "$v"); done <<< "$pol"
+    fi
     [ "${FLEET_MCP:-1}" != 0 ] && [ -f "$mw" ] && [ -f "$BIN/fleet-mcp.py" ] || return 0
     mount=$(python3 "$BIN/fleet-mcp.py" --mount codex 2>/dev/null) && [ -n "$mount" ] || return 0
     export FLEET_MCP_BIN="$BIN"

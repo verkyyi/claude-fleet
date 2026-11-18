@@ -28,7 +28,7 @@ class AdmissionCancelled(Exception):
 
 def http(path,body):
     status,raw=call('POST','/v1/node/schedules/'+path,body)
-    if path=='admit' and status in (400,403,404,409): raise AdmissionCancelled('schedule changed before admission')
+    if path=='admit' and status in (400,403,404,409): raise AdmissionCancelled('hub answered %s: %s'%(status,raw[:200]))
     if status!=200: raise Unreachable('schedule request refused (%s): %s'%(status,raw[:300]))
     return json.loads(raw)
 
@@ -244,7 +244,9 @@ def run():
 
 if __name__=='__main__':
     try:sys.exit(run())
-    except AdmissionCancelled:
+    except AdmissionCancelled as e:
+        # said in the task's log: a 0-byte log hid weeks of refused slots (task S9F7)
+        print('schedule: admission refused — %s (slot %s)'%(e,os.environ.get('FLEET_MANAGED_SLOT','')),file=sys.stderr)
         sys.exit(74)
     except (Unreachable,OSError,ValueError,subprocess.SubprocessError) as e:
         print('schedule: deferred — '+str(e),file=sys.stderr);sys.exit(75)

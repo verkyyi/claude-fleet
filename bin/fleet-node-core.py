@@ -333,15 +333,24 @@ def resolve_job(paths, login, job, ident):
         # an agent task's attempt (#3668): the entry from the register, the slot,
         # attempt and manual time only fill its window and prompt
         if not m:
-            raise Refused(None, "job %r is not task:<name>@<day>#<attempt>[~HHMM]" % job)
+            raise Refused(None, "job %r is not task:<name>@<day>#<attempt>[~<manual>][+<slot>]" % job)
         name, day, attempt, manual = m.group(1), m.group(2), int(m.group(3)), m.group(4)
+        slot_t = int(m.group(5)) if m.group(5) else None
         for lg, nm, path, svc, why in sup.service_files(sp):
             if lg == login and nm == name:
                 if svc is None or svc.get("kind") != "task":
                     raise Refused(None, "%s/%s is not a runnable task: %s" % (login, name, why or "a service"))
-                if svc.get("state", "enabled") != "enabled":
+                ms = svc.get("managed_schedule")
+                if (manual or slot_t) and not ms and (slot_t or not re.match(r"^[0-9]{4}$", manual or "")):
+                    raise Refused(None, "task %s/%s is not a managed schedule — no run id or slot" % (login, name))
+                if ms and not manual and not slot_t:
+                    # a managed attempt with no slot would admit as slot "0" (task S9F7)
+                    raise Refused(None, "managed schedule %s/%s: the job names no slot" % (login, name))
+                # a paused managed schedule still runs a run-now (the supervisor's rule)
+                if svc.get("state", "enabled") != "enabled" and not (
+                        ms and not ms.get("deleted") and (manual or "").startswith("manual-")):
                     raise Refused(None, "task %s/%s is stopped" % (login, name))
-                return sup.task_entry(sp, svc, ident, day, attempt, manual)
+                return sup.task_entry(sp, svc, ident, day, attempt, manual, slot_t)
         raise Refused(None, "no task %s/%s in the register" % (login, name))
     if job.startswith("svc:"):
         name = job[4:]

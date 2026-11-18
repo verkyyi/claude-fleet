@@ -5988,6 +5988,16 @@ drill_schedule_self_service() {
   SECS=$(since "$t0"); WHAT='self-service registry is login-bound and revision-fenced; recurrence is bounded'
 }
 
+drill_schedule_seated_slot() {
+  # a seated node hands each attempt to the root core as a job NAME (S9F7): the
+  # slot and a run-now's id must survive it, a refused admission must be said
+  CAP=30; local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-schedule-selftest.py" SeatedSlotTests 2>&1) \
+    || { WHY="seated schedule slot: $out"; return 1; }
+  SECS=$(since "$t0"); WHAT='the core rebuilds the same slot / run id; exit 74 is a failed run with an alert'
+}
+
 drill_history_rows_forks() {
   # The 看台's 已收起 reader rebuilds `fleet-history.sh rows` every minute. Per row
   # the old loop forked `date`, fleet_win_name's tr/sed or perl and the clip's perl

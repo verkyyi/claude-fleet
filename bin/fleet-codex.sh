@@ -229,9 +229,15 @@ if [ -n "${FLEET_CRED_SID:-}" ] && [ -z "${FLEET_CODEX_PROFILE:-}" ] \
       fleet_launch_refused account; exit 2
     fi
   fi
+  # web search rides the same provider (task S9F7: a custom provider without
+  # supports_standalone_web_search had no search tool at all); the proxy forwards
+  # web_search tools and /alpha/search. The login's own `web_search = …` still wins.
   flags+=(-c 'model_provider="fleet"'
-          -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fl_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\"}"
+          -c "model_providers.fleet={name=\"fleet\",base_url=\"http://127.0.0.1:$_fl_port/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\",wire_api=\"responses\",supports_standalone_web_search=true}"
+          -c 'features.standalone_web_search=true'
           -c 'features.apps=false' -c 'analytics.enabled=false')
+  grep -qE '^[[:space:]]*web_search[[:space:]]*=' "$_fx_real_home/config.toml" 2>/dev/null \
+    || flags+=(-c 'web_search="live"')
   # plugins off whatever agent-overrides says (the proxy's provider has no marketplace)
   case " ${flags[*]} " in *" features.plugins=false "*) ;; *) flags+=(-c 'features.plugins=false') ;; esac # bash32-ok: flags is populated above
   unset _fx_home _fx_out; _fl_port=''

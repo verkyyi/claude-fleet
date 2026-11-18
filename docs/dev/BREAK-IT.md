@@ -813,6 +813,7 @@
 | 自助定时任务跨 login 写入、旧版本重放或密集触发 | 越权登记、复活已删任务或不断开启收费会话 | 固定本人 lane，版本栅栏，持久化每日上限；等待原生结论再判成功 | `schedule-self-service` |
 | 定时任务指定的 Agent 被 fleet 默认值覆盖 | 应由 Claude 执行的任务误用 Codex，依赖的技能无法执行 | 注册表保存 Agent，运行器显式传 `--agent`；旧节点等待升级，不静默忽略 | `schedule-agent-selection` |
 | 定时任务后台刷新遇到 401，跳走正在查看的会话或终端 | 原页与未保存内容被整页导航清掉，终端登录失效状态也被打断 | 后台读取原地清空私人任务、停止刷新并给登录入口；延迟旧响应不能恢复已失效数据 | `schedule-background-auth` |
+| 守护坐到 `_fleetnode`（seated）后，托管定时任务的每次尝试只以作业名 `task:<名>@<日>#<次>[~HHMM]` 交给 root 核心重建（S9F7） | 核心重建时丢了槽位：每个定点都以槽 `0` 去 admit，入口 404 → 退出 74 → 静默 `stopped`，只剩 `last_run` 在走；一把锁、0 字节日志，连续数周没跑。立即运行的请求文件 root 0600，座位读成 `{}`，退回 HHMM，同样 404，入口那次运行永远排队 | 作业名带上槽位 `+<epoch>` 与运行号 `~manual-…`，核心按名重建同一个 `FLEET_MANAGED_SLOT`、托管任务无槽即拒；请求文件一落地就是 root:座位 0640，读不到运行号就记一行不跑；74 记一次运行、置 `failed`、写告警并在日志说入口答了什么。`fleet-schedule-selftest.py` SeatedSlotTests | `schedule-seated-slot` |
 
 | macOS 等待进程抬高 load、Codex 错误回合常驻、测试按整机开 worker、长标题建记录后派发失败（T1327） | 拒接新会话且空闲进程不能释放，并发测试继续放大负载，派发遗留记录 | CPU 优先、人口修正极端负载门；原生终态与身份快速复检；测试 worker 上限；派发前校验标题 | `load-governance` |
 
