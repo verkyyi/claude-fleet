@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# selftest-entry
 """Self-service schedules: registry fencing and recurrence policy (T1121)."""
 import importlib.util
 import pathlib
@@ -112,6 +113,110 @@ class ScheduleTests(unittest.TestCase):
         with patch.object(self.sup,'service_files',return_value=[('alice','schedule-abc','',paused,None)]),patch.object(self.sup,'account_ident',return_value=(1000,1000,self.tmp.name)):
             daemon.tend_agent_tasks()
         self.assertEqual(seen,[svc])
+
+class SeatedSlotTests(unittest.TestCase):
+    """Task S9F7: on a seated machine every attempt is a job NAME the root core
+    rebuilds — the managed slot and a run-now's id must survive that road."""
+    def setUp(self):
+        self.sup = module('fleet-node-supervisor')
+        self.schedule = module('fleet_schedule')
+        self.core = module('fleet-node-core')
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.paths = types.SimpleNamespace(logins=self.tmp.name, state_file=self.tmp.name+'/state.json', log=self.tmp.name)
+        self.doc = {'id':'schedule-108c04449657f9e32bd0a27007b29239', 'revision':1, 'name':'Daily brief',
+                    'prompt':'Summarize', 'at':'07:00', 'timezone':'Asia/Shanghai', 'enabled':True,
+                    'deleted':False, 'delivery':{'wechat':False,'livepage':False}}
+        self.ident = (1000, 1000, self.tmp.name)
+
+    def through_core(self, svc, ent):
+        from unittest.mock import patch
+        job = self.sup.task_job(ent)
+        self.assertIsNotNone(job, ent['task'])
+        with patch.object(self.core.sup, 'service_files', return_value=[('alice', svc['name'], '', svc, None)]), \
+             patch.object(self.core.sup, 'Paths', return_value=self.paths):
+            return job, self.core.resolve_job(self.paths, 'alice', job, self.ident)
+
+    def test_scheduled_slot_survives_the_core(self):
+        svc = self.schedule.apply(self.sup, self.paths, 'alice', self.doc)
+        for slot_t in (1793350800, 1793437200):
+            ent = self.sup.task_entry(self.paths, svc, self.ident, '2026-11-18', 1, None, slot_t)
+            job, back = self.through_core(svc, ent)
+            self.assertTrue(job.endswith('+%d' % slot_t), job)
+            self.assertEqual(back['env']['FLEET_MANAGED_SLOT'], str(slot_t))
+            self.assertEqual(back['window'], ent['window'])
+
+    def test_run_now_id_survives_the_core_even_paused(self):
+        svc = self.schedule.apply(self.sup, self.paths, 'alice', self.doc)
+        run = 'manual-0123456789abcdef0123456789abcdef'
+        for s in (svc, dict(svc, state='stopped')):
+            ent = self.sup.task_entry(self.paths, s, self.ident, '2026-11-18', 1, run, 1793350800)
+            job, back = self.through_core(s, ent)
+            self.assertIn('~' + run, job)
+            self.assertNotIn('+', job)
+            self.assertEqual(back['env']['FLEET_MANAGED_SLOT'], run)
+
+    def test_core_refuses_a_managed_job_without_a_slot(self):
+        from unittest.mock import patch
+        svc = self.schedule.apply(self.sup, self.paths, 'alice', self.doc)
+        with patch.object(self.core.sup, 'service_files', return_value=[('alice', svc['name'], '', svc, None)]), \
+             patch.object(self.core.sup, 'Paths', return_value=self.paths):
+            with self.assertRaises(self.core.Refused):
+                self.core.resolve_job(self.paths, 'alice', 'task:%s@2026-11-18#1' % svc['name'], self.ident)
+            plain = dict(svc, managed_schedule=None)
+            with patch.object(self.core.sup, 'service_files', return_value=[('alice', svc['name'], '', plain, None)]):
+                with self.assertRaises(self.core.Refused):
+                    self.core.resolve_job(self.paths, 'alice', 'task:%s@2026-11-18#1~manual-x' % svc['name'], self.ident)
+                ent = self.core.resolve_job(self.paths, 'alice', 'task:%s@2026-11-18#1~1752' % svc['name'], self.ident)
+                self.assertNotIn('FLEET_MANAGED_SLOT', ent['env'])
+
+    def test_unmanaged_job_name_is_unchanged(self):
+        svc = dict(self.schedule.apply(self.sup, self.paths, 'alice', self.doc), managed_schedule=None)
+        ent = self.sup.task_entry(self.paths, svc, self.ident, '2026-11-18', 2, '1752', 1793350800)
+        self.assertEqual(self.sup.task_job(ent), 'task:%s@2026-11-18#2~1752' % svc['name'])
+
+    def daemon(self, ts):
+        d = self.sup.Supervisor.__new__(self.sup.Supervisor)
+        d.p = self.paths; d.state = {'agent_tasks': {'alice/' + self.doc['id']: ts}}; d.agent_running = {}
+        d.logged = []; d.log = d.logged.append; d.notifies = []; d.notify_agent = lambda *a: None
+        return d
+
+    def test_unreadable_run_now_is_said_not_run_under_hhmm(self):
+        import os
+        from unittest.mock import patch
+        svc = self.schedule.apply(self.sup, self.paths, 'alice', self.doc)
+        os.makedirs(self.tmp.name + '/alice/run', exist_ok=True)
+        open(self.tmp.name + '/alice/run/' + self.doc['id'], 'w').close()   # unreadable ⇒ read as {}
+        ts = {}
+        d = self.daemon(ts); seen = []
+        d.start_agent = lambda *a: seen.append(a)
+        with patch.object(self.sup, 'service_files', return_value=[('alice', svc['name'], '', svc, None)]), \
+             patch.object(self.sup, 'account_ident', return_value=self.ident), \
+             patch.object(self.sup, 'task_slot', return_value=(None, None)):
+            d.tend_agent_tasks()
+        self.assertEqual(seen, [])
+        self.assertIn('no run id', ts.get('last_error', ''))
+
+    def test_refused_admission_is_a_failure_with_an_alert(self):
+        import os
+        svc = self.schedule.apply(self.sup, self.paths, 'alice', self.doc)
+        ts = {'slot': '2026-11-18', 'slot_t': 1793350800, 'attempt': 1, 'last_run': 1}
+        d = self.daemon(ts)
+        d.end_agent('alice/' + self.doc['id'], ts, svc, 74, 2)
+        self.assertEqual(ts['state'], 'failed')
+        self.assertIn('exit 74', ts['last_error'])
+        self.assertIn('1793350800', ts['last_error'])
+        self.assertTrue(os.path.exists(self.sup.task_alert_path(self.paths, 'alice', self.doc['id'])))
+        runs = self.sup.read_json(self.sup.task_runs_path(self.paths, 'alice', self.doc['id']), {})['runs']
+        self.assertEqual(runs[-1]['rc'], 74)
+
+    def test_run_request_is_written_for_the_seat(self):
+        import os, stat
+        p = self.tmp.name + '/req.json'
+        self.sup.write_json(p, {'run_id': 'manual-x'}, 0o640, os.getgid())
+        st = os.stat(p)
+        self.assertEqual((stat.S_IMODE(st.st_mode), st.st_gid), (0o640, os.getgid()))
+
 
 class FinalTests(unittest.TestCase):
     def setUp(self): self.run = module('fleet_schedule_run')

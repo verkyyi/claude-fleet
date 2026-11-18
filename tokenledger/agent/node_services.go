@@ -77,7 +77,7 @@ func readServices(stateFile string) []control.ServiceStatus {
 		case s.NextRun == nil && s.State == "down":
 			s.NextRun = epochTime(r.NextStart)
 		}
-		if s.Why == "" && (s.State == "failed" || s.State == "retrying") {
+		if s.Why == "" && (s.State == "failed" || s.State == "retrying" || s.State == "waiting") {
 			s.Why = r.LastError
 		}
 		s.LastLogLine = serviceLogLine(r.Log, r.Login)

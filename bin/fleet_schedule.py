@@ -117,7 +117,10 @@ def command(sup, paths, rest):
             fcntl.flock(lock,fcntl.LOCK_EX)
             pending=sup.read_json(path,{})
             if pending and pending.get('run_id')!=run: raise ValueError('another manual run is queued')
-            sup.write_json(path,{'at':sup.task_clock(),'run_id':run},0o600)
+            # the seated daemon (_fleetnode) reads it: root:seat 0640 from its first
+            # byte — a root 0600 request read as {} and ran under an HHMM (task S9F7)
+            seat=sup.seat_ident() if os.geteuid()==0 else None
+            sup.write_json(path,{'at':sup.task_clock(),'run_id':run},0o640 if seat else 0o600,seat[1] if seat else None)
         print(json.dumps({'run_id':run,'status':'queued'}))
     else: raise ValueError('unknown schedule action')
     return 0

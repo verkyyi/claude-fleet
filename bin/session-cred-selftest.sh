@@ -243,6 +243,8 @@ check "D: a legacy runtime symlink is replaced" yes "$([ -d "$CH/app-server-cont
 check "D: legacy repair leaves the real runtime intact" original "$(cat "$HOME/.codex-accounts/cx1/app-server-control/sentinel")"
 check "D: model_provider=fleet" 1 "$(grep -c '^model_provider="fleet"$' "$OUT/argv" | tr -d ' ')"
 check "D: the provider is the loopback proxy by env_key" 1 "$(grep -c "base_url=\"http://127.0.0.1:$PORT/codex\",env_key=\"FLEET_CODEX_SESSION_CRED\"" "$OUT/argv" | tr -d ' ')"
+check "D: the provider carries web search (S9F7)" 1 "$(grep -c 'supports_standalone_web_search=true' "$OUT/argv" | tr -d ' ')"
+check "D: standalone web search is on (S9F7)" 1 "$(grep -c '^features.standalone_web_search=true$' "$OUT/argv" | tr -d ' ')"
 for k in features.plugins=false features.apps=false analytics.enabled=false; do
   check "D: $k" 1 "$(grep -cx "$k" "$OUT/argv" | tr -d ' ')"
 done

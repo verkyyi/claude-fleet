@@ -406,7 +406,7 @@ def ago(t):
     return "%dd" % (s // 86400)
 
 
-def write_json(path, obj, mode=0o644):
+def write_json(path, obj, mode=0o644, gid=None):
     # state.json is a link into the seat's own directory on a seated machine
     # (#3668): the write lands where the link points, and the temporary file is
     # created fresh, never through a name someone else planted
@@ -422,6 +422,8 @@ def write_json(path, obj, mode=0o644):
     with os.fdopen(fd, "w") as f:
         json.dump(obj, f, indent=1, sort_keys=True)
         f.write("\n")
+    if gid is not None:
+        os.chown(tmp, -1, gid)       # a group's before the name exists (the seat's: task S9F7)
     os.chmod(tmp, mode)
     os.rename(tmp, path)
 
@@ -2309,7 +2311,8 @@ def task_entry(paths, svc, ident, day, attempt, manual=None, slot_t=None):
     lg = service_log(paths, login, name)
     runner = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fleet-task-run.sh")
     return {"name": "task:%s/%s" % (login, name), "account": login, "service": name, "window": win,
-            "task": {"slot": day, "attempt": attempt, "manual": manual or ""},
+            "task": {"slot": day, "attempt": attempt, "manual": manual or "",
+                     "managed": bool(svc.get("managed_schedule")), "slot_t": int(slot_t or 0)},
             "uid": uid, "gid": gid, "home": home, "env": e, "creds": list(svc.get("creds") or []),
             "script": runner, "logdir": os.path.dirname(lg),
             "cmd": ["/bin/sh", "-c", ACCOUNT_SH, "fleet-task", lg, lg, "/bin/bash", runner]}
@@ -3309,6 +3312,13 @@ class Supervisor(object):
             except ValueError:
                 continue
             catchup = env_num("FLEET_NODE_TASK_CATCHUP", 6 * 3600)
+            if want and svc.get("managed_schedule") and not request.get("run_id"):
+                # a managed run-now is admitted by its run id only: an HHMM in its place
+                # is a 404 at admission and a hub run queued forever (task S9F7)
+                self.log("task %s: run --now ignored — the request names no run id (unreadable?)" % key)
+                ts.update(last_error="run-now request unreadable here — no run id")
+                self.dirty = True
+                continue
             if want:
                 # run --now: a slot of its own, today's date in the task's zone
                 at = datetime.datetime.fromtimestamp(clk, task_tz(svc["schedule"]) or None)
@@ -3404,9 +3414,12 @@ class Supervisor(object):
     def end_agent(self, key, ts, svc, rc, t, why=None):
         login, name = key.split("/", 1)
         if rc == 74 and svc.get("managed_schedule"):
-            ts.update(state="stopped", last_error="schedule changed before admission", next_try=None, pid=None)
-            self.dirty = True
-            return
+            # the hub refused admission: said, never a silent stop (task S9F7 — a seated
+            # machine admitted every slot as "0" for weeks with only last_run moving).
+            # No retry: the same slot is refused again; the next slot starts fresh.
+            ts["attempt"] = max(ts.get("attempt") or 1, svc.get("retries", 2) + 1)
+            why = "admission refused for slot %s (exit 74) — the hub has no such run, or the schedule changed" % (
+                ts.get("manual") or ts.get("slot_t") or ts.get("slot"))
         if rc == 75 and svc.get("managed_schedule"):
             ts.update(state="waiting", last_error="waiting for admission or result acknowledgement", next_try=t + 60, pid=None)
             self.dirty = True
@@ -7950,7 +7963,12 @@ def entry_cli(paths, rest):
 # a credential (creds/ stays root 0700), machine.env or the node program's books.
 SEAT_NAME = "_fleetnode" if MAC else "fleetnode"
 SEAT_HANDOVER = "seat-handover.json"
-TASK_JOB_RE = re.compile(r"^task:([a-z0-9][a-z0-9._-]{0,47})@(\d{4}-\d{2}-\d{2})#([1-9][0-9]?)(?:~([0-9]{4}))?$")
+# task:<name>@<day>#<attempt>[~<manual>][+<slot>] — <manual> a run --now's HHMM or a
+# managed schedule's run id (manual-…), <slot> a managed schedule's slot epoch: the
+# core rebuilds FLEET_MANAGED_SLOT from them (task S9F7 — without them every seated
+# slot was "0", one lock per schedule and an admit 404, and a run-now lost its id)
+TASK_JOB_RE = re.compile(r"^task:([a-z0-9][a-z0-9._-]{0,47})@(\d{4}-\d{2}-\d{2})#([1-9][0-9]?)"
+                         r"(?:~([0-9]{4}|manual-[A-Za-z0-9-]{1,100}))?(?:\+([0-9]{1,12}))?$")
 
 
 def seat_name():
@@ -8030,6 +8048,8 @@ def task_job(ent):
         return None
     job = "task:%s@%s#%d%s" % (ent["service"], t["slot"], int(t.get("attempt") or 1),
                                "~" + t["manual"] if t.get("manual") else "")
+    if t.get("managed") and not t.get("manual") and t.get("slot_t"):
+        job += "+%d" % int(t["slot_t"])
     return job if TASK_JOB_RE.match(job) else None
 
 
