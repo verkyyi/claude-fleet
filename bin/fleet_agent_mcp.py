@@ -496,6 +496,15 @@ def configured_process(pid, config, argv_reader, exe_reader, env_reader=None, pa
     resolved = resolved.resolve()
     if executable == resolved and argv[1:] == args:
         return True
+    # An ABSOLUTE framework Python (Homebrew's …/opt/python@3.x/bin/python3.x, the
+    # remote MCP relay's sys.executable — task S9F7) re-execs its OWN framework's
+    # Python.app too: <Versions/X>/bin/pythonX → <Versions/X>/Resources/Python.app/
+    # Contents/MacOS/Python. Only that framework's app, with the exact argv.
+    if (re.fullmatch(r'python(?:\d+(?:\.\d+)*)?', resolved.name) is not None
+            and executable.parts[-4:] == ('Python.app', 'Contents', 'MacOS', 'Python')
+            and executable.parents[3].name == 'Resources'
+            and executable.parents[4] == resolved.parent.parent and argv[1:] == args):
+        return True
     if (Path(command).name == 'uvx' and executable == resolved.with_name('uv').resolve()
             and argv[1:] == ['tool', 'uvx', *args]):
         return True

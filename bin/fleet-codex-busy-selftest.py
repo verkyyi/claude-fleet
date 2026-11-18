@@ -249,6 +249,24 @@ class CodexBusy(unittest.TestCase):
         self.argv[103].append('--job')
         self.assertEqual(self.busy(), [103])
 
+    def test_absolute_framework_python_relay(self):
+        # S9F7: mcp-remote.py's mount names an absolute Homebrew python, which
+        # re-execs ITS framework's Python.app; another framework's app is work.
+        ver = (self.root / 'Python.framework/Versions/3.14').resolve()
+        (ver / 'bin').mkdir(parents=True)
+        py = ver / 'bin/python3.14'
+        py.touch()
+        app = ver / 'Resources/Python.app/Contents/MacOS/Python'
+        self.config['service'] = dict(command=str(py), args=['-I', '/x/mcp-remote.py', 'serve', 'space'])
+        self.exes[103] = app
+        self.argv[103] = [str(app), '-I', '/x/mcp-remote.py', 'serve', 'space']
+        self.assertEqual(self.busy(), [])
+        self.exes[103] = Path('/other/Versions/3.14/Resources/Python.app/Contents/MacOS/Python')
+        self.assertEqual(self.busy(), [103])
+        self.exes[103] = app
+        self.argv[103].append('--job')
+        self.assertEqual(self.busy(), [103])
+
     def test_bundled_helper_and_its_jobs(self):
         # Linux comm truncates the bundled executable's name to 15 bytes.
         self.rows[104] = (102, 'codex-code-mode')
