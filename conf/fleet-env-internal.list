@@ -940,3 +940,6 @@ FLEET_JOB_KEY                       handoff: name of periodic entrypoint held by
 
 FLEET_PEER_RELAY_RETRY            handoff: hub-node retains this relay for retry; peer-send must not create a second local queue (T1380)
 FLEET_PEER_ROUTE                  seam: Python route resolver used by the cross-machine send selftest (T1380)
+FLEET_CODEX_REMOTE_MCP            knob: 0 hands a Codex session none of the login's remote MCP servers (bin/mcp-remote.py, S9F7)
+FLEET_MCP_REMOTE_SECS             knob: seconds one relayed remote MCP call may take (bin/mcp-remote.py, S9F7)
+FLEET_MCP_REMOTE_TEST             seam: lets mcp-remote-selftest.py relay to a 127.0.0.1 http fake (S9F7)
