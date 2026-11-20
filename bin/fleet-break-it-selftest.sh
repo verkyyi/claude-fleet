@@ -6363,6 +6363,33 @@ drill_rm_empty_var_prompt() {
   WHAT='rm -f $P/* 先被 bash-guard 拒并给出改法；"${P:?}"/* 与 git rm 放行'
 }
 
+# worker-issue-write (T1470): the issue ban is a rail, not a sentence in the
+# worker's SessionStart context — bash-guard refuses a session's issue writes on
+# both roads, keeps the one 24haowan body edit, and leaves a person's shell alone.
+drill_worker_issue_write() {
+  CAP=20; local t0 g out rc c
+  t0=$(now); g="$BIN/../hooks/bash-guard.py"
+  j() { python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"cwd":"/"}))' "$1"; }
+  s() { env FLEET_WORKER_CRED=fwc1.x FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$g"; }
+  for c in 'gh issue create -t x -b y' 'gh issue comment 5 -b hi' 'gh -R a/b issue close 3' 'git push && gh issue edit 9 -R a/b -b x'; do
+    out=$(j "$c" | s 2>&1 >/dev/null); rc=$?
+    [ "$rc" = 2 ] || { WHY="a session's [$c] was not refused (rc=$rc)"; return 1; }
+    case "$out" in *FLEET_ALLOW_ISSUE_WRITE=1*fragments-migrate*|*fragments-migrate*FLEET_ALLOW_ISSUE_WRITE=1*) ;; *) WHY="no way out in the refusal: $out"; return 1 ;; esac
+  done
+  printf '%s' '{"tool_name":"mcp__github__create_issue","tool_input":{"owner":"a","repo":"b"}}' | s >/dev/null 2>&1
+  [ $? = 2 ] || { WHY="the MCP create_issue road was not refused"; return 1; }
+  for c in 'gh issue view 3' 'gh issue list' 'echo "gh issue create"' 'FLEET_ALLOW_ISSUE_WRITE=1 gh issue close 3' \
+           'gh issue edit 9 -R GuangZhouShanyouGame/24haowan-monorepo --body-file f'; do
+    j "$c" | s >/dev/null 2>&1 || { WHY="a session's [$c] was refused"; return 1; }
+  done
+  printf '%s' '{"tool_name":"mcp__github__update_issue","tool_input":{"owner":"GuangZhouShanyouGame","repo":"24haowan-monorepo"}}' | s >/dev/null 2>&1 \
+    || { WHY="the 24haowan body edit over MCP was refused"; return 1; }
+  j 'gh issue create -t x' | env -u FLEET_WORKER_CRED FLEET_HEAVY=0 FLEET_LIB=/nonexistent python3 "$g" >/dev/null 2>&1 \
+    || { WHY="a person's own gh issue create was refused"; return 1; }
+  SECS=$(since "$t0")
+  WHAT='会话的 gh issue 写子命令与 MCP 写 issue 被 bash-guard 拒并给出改法；view/list、24haowan 改正文、人的 shell 照常'
+}
+
 # stuck-worker-unseen (#4702): a worker the stream resume gives up on — or whose
 # launch is refused — tells its parent once, instead of looking finished.
 drill_stuck_worker_unseen() {

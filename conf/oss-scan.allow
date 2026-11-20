@@ -80,9 +80,10 @@ bin/dash-issue-session-prompt-selftest.sh	corp-domain	T1299 发起人指定的�
 bin/dash-issue-session.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
 bin/fleet-brief-selftest.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
 bin/fleet-brief.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
-bin/fleet-worker-start-hook.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
 bin/seed-words-selftest.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
-conf/agent-defaults/claude/agents/fleet-worker.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+hooks/bash-guard.py	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+docs/dev/BREAK-IT.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
+bin/fleet-break-it-selftest.sh	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
 conf/codex-preamble.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
 docs/dev/COMPONENTS.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围
 docs/dev/TERMS.md	corp-domain	T1299 发起人指定的唯一 release-fragment 例外：规则、文档与自测必须写出目标仓库全名以限定授权范围

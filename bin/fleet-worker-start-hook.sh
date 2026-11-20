@@ -1,33 +1,26 @@
 #!/usr/bin/env bash
-# fleet-worker-start-hook.sh — the flow of a session whose first turn is the
-# person's own words (issue #3331, EPIC #3178 ⑧, D2 = ①).
+# fleet-worker-start-hook.sh — the grey line a worker session opens with (issue
+# #3331, EPIC #3178 ⑧; T1470: no injected flow).
 #
 # dash-issue-session.sh seeds a repo session with the person's words (or the
-# issue's title when nobody typed any) and stamps the window `@seed_words` (any
-# non-empty value — an older spawn wrote its claim command) before its agent starts. This SessionStart
-# hook (the ONE hook table, hooks/settings-hooks.json) reads that stamp and prints
-# SessionStart JSON:
+# issue's title when nobody typed any) and stamps the window `@seed_words`; a
+# development task (issue #4897) is stamped `@task T<n>` + `@task_flow 1`. This
+# SessionStart hook (the ONE hook table, hooks/settings-hooks.json) reads those
+# stamps and prints ONE thing — a `systemMessage` for the person:
 #
-#   systemMessage      one grey line for the person —
-#                      「fleet-worker · tokenledger · 单 #3312 · 做完开 PR，门绿了自己合」
-#   additionalContext  the agent's instruction: read the `brief`, then the flow —
-#                      implement, PR, pr_verdict / pr_merge, final response (issue #4898:
-#                      no claim skill; only the release-fragment exception below).
+#      「fleet-worker · tokenledger · 单 #3312」 / 「fleet-worker · tokenledger · 任务 T42」
 #
-# fleet-worker's body is empty on purpose (a body replaces Claude Code's own
-# system prompt), so this is the only road the flow has in; the words and the
-# stamp go together (the spawn writes both or neither), which is what
-# seed-words-selftest.sh pins: words first ⇒ the brief is the next step.
-#
-# A development task with no issue (issue #4897) is stamped `@task T<n>` +
-# `@task_flow 1` instead: its context is the task flow — read the record with the
-# `brief` tool, implement, PR, merge on green, a final response with the PR and validation
-# — and it never names a GitHub issue.
+# It gives the agent NO `additionalContext` (T1470): the first turn is the
+# person's own words and Claude Code's default behaviour, with the repo's own
+# CLAUDE.md, is the whole guidance. What the fleet must hold is held by a rail,
+# not a prompt: the base checkout by hooks/base-readonly-guard.py, the issue
+# ban by hooks/bash-guard.py (BREAK-IT `worker-issue-write`). How a repo lands its
+# work (PR, merge on green) belongs in that repo's CLAUDE.md or the person's words.
 #
 # Only on `startup`: a resume / compact already has the conversation. A window
-# with no @seed_words (and no @task_flow) — a scratch, a no-repo session, a desk ticket, a Codex
-# session, an old window — prints nothing: no flow is put on it. Anything missing
-# → nothing, exit 0: a SessionStart hook never blocks a session.
+# with no @seed_words (and no @task_flow) — a scratch, a no-repo session, a desk
+# ticket, a Codex session, an old window — prints nothing. Anything missing →
+# nothing, exit 0: a SessionStart hook never blocks a session.
 #
 #   fleet-worker-start-hook.sh     (stdin: the hook's JSON)
 set -uo pipefail
@@ -77,41 +70,9 @@ name = repo.rsplit("/", 1)[-1] or repo
 agent = os.environ["SW_AGENT"]
 en = os.environ["SW_LANG"] == "en"
 if os.environ["SW_MODE"] == "task":
-    task = os.environ["SW_TASK"]
-    line = ("%s · %s · task %s · opens a PR when done, merges itself once the gate is green" if en
-            else "%s · %s · 任务 %s · 做完开 PR，门绿了自己合") % (agent, name, task)
-    head = ("# This session is a fleet worker on a hub task\n"
-            "It is bound to the hub task record %s (repo %s) — NOT to a GitHub issue. The first user "
-            "message is the person\x27s own words: the request that record holds.\n") % (task, repo)
-    names = "its body names %s and carries no `Closes #N`" % task
+    line = ("%s · %s · task %s" if en else "%s · %s · 任务 %s") % (agent, name, os.environ["SW_TASK"])
 else:
-    line = ("%s · %s · #%s · opens a PR when done, merges itself once the gate is green" if en
-            else "%s · %s · 单 #%s · 做完开 PR，门绿了自己合") % (agent, name, num)
-    head = ("# This session is a fleet worker\n"
-            "It was opened on issue #%s of %s. The first user message is the person\x27s own words "
-            "(or the issue\x27s title) — the request that issue records.\n") % (num, repo or "this repo")
-    names = "its body carries `Closes #%s`" % num
-ctx = head + (
-    "Before anything else, call the fleet tool `brief` with no arguments (it prints the fleet, repo, "
-    "base, merge method, origin and the request). Then:\n"
-    "1. Implement in this worktree (never the base checkout), and verify per the repo\x27s rules.\n"
-    "2. Commit, push this branch, open the PR (`gh pr create --fill`); %s.\n"  # no-gh-ok: a message
-    "3. Land it: the fleet tool `pr_verdict` (`wait: true` while PENDING), then `pr_merge` on "
-    "READY; never merge red.\n"
-    "4. Give the person a final response with the result, PR, validation and any action needed. "
-    "If blocked, use `ask` for the missing decision. Parent reports and Fleet await are retired; "
-    "use native subagents for internal orchestration.\n"
-    "If the task has a design page whose 上线后怎么验收 card you fill: after the switch shoot each "
-    "item you mark done / passed on PRODUCTION (Playwright on the live URL, phone 390 + desktop "
-    "1440, its `screenshots`), publish them with the page to the same 活页, and run "
-    "`epic-page-surface.sh --lint` on it — a `task-evidence-shot` WARN must be fixed before the final response.\n"
-    "Never claim, comment on or close a GitHub issue yourself, and never file one: the fleet keeps "
-    "no issue state (issue #4898). "
-    "The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository. "
-    "Do it yourself; never ask the person to run anything."
-) % names
-print(json.dumps({"systemMessage": line,
-                  "hookSpecificOutput": {"hookEventName": "SessionStart",
-                                         "additionalContext": ctx}}, ensure_ascii=False))
+    line = ("%s · %s · #%s" if en else "%s · %s · 单 #%s") % (agent, name, num)
+print(json.dumps({"systemMessage": line}, ensure_ascii=False))
 ' 2>/dev/null || :
 exit 0

@@ -1317,6 +1317,82 @@ def check_client_identity(orig_seg, masked_cmd, cwd):
     sys.exit(2)
 
 
+# --- the issue ban (#4898; a rail since T1470) ----------------------------------
+# A session never claims, comments on, closes or files a GitHub issue: the fleet
+# keeps no issue state, a task is a hub record. This used to be words in the
+# worker's SessionStart context; T1470 took the context away, so the rule is held
+# here — the Bash road (`gh issue <write>`) and the GitHub MCP road (matched in
+# hooks/settings-hooks.json). The sole exception (T1299): in
+# GuangZhouShanyouGame/24haowan-monorepo a session files a release-fragment issue
+# through `node tools/cd/fragments-migrate.js --new <file.md>` (not `gh`, so not
+# matched) and then updates THAT issue's body — `gh issue edit` / the MCP
+# update_issue there pass. Only a session (a worker credential, or a worker seat)
+# is held; a person's shell is never touched. FLEET_ALLOW_ISSUE_WRITE=1 is the hatch.
+_ISSUE_EXCEPTION_REPO = "guangzhoushanyougame/24haowan-monorepo"
+_ISSUE_WRITES = {"create", "new", "comment", "close", "reopen", "delete", "transfer",
+                 "lock", "unlock", "pin", "unpin", "develop", "edit"}
+_ISSUE_RE = re.compile(
+    r"\s*(?:sudo\s+|\w+=\S+\s+)*gh\s+(?:(?:-r|--repo)(?:\s+|=)\S+\s+)?issue\s+(?:(?:-r|--repo)(?:\s+|=)\S+\s+)?([a-z-]+)\b")
+_MCP_ISSUE_TOOLS = {"mcp__github__create_issue": "create",
+                    "mcp__github__add_issue_comment": "comment",
+                    "mcp__github__update_issue": "edit"}
+
+
+def _in_session(cwd):
+    return bool(os.environ.get("FLEET_WORKER_CRED", "").strip()) or _direct_seat(cwd)[0] == "worker"
+
+
+def _cmd_repo(raw_seg, cwd):
+    """The repo a `gh issue` statement targets: its -R / --repo, else the cwd's
+    origin (what gh itself reads). Lower-cased; "" when unknown."""
+    m = re.search(r"(?:^|\s)(?:-r|--repo)(?:\s+|=)[\x22\x27]?([^\s\x22\x27]+)", raw_seg)
+    if m:
+        return m.group(1).lower().rstrip("/")
+    try:
+        url = subprocess.run(["git", "-C", cwd or ".", "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=5).stdout.strip().lower()
+    except Exception:
+        return ""
+    url = re.sub(r"\.git$", "", url)
+    m = re.search(r"[:/]([^/:]+/[^/:]+)$", url)
+    return m.group(1) if m else ""
+
+
+def _issue_refuse(what, repo_hint):
+    sys.stderr.write(
+        "⛔ BLOCKED by ~/.claude/fleet/hooks/bash-guard.py: a session may not %s a GitHub issue — "
+        "the fleet keeps no issue state; a task is its hub record (issue #4898, T1470). "
+        "Say it in your final response (or `ask` the person) instead.%s\n"
+        "The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, create the release-fragment "
+        "issue with `node tools/cd/fragments-migrate.js --new <file.md>`, then edit that issue's body.\n"
+        "Truly the person's own call, on purpose? Prefix FLEET_ALLOW_ISSUE_WRITE=1.\n"
+        % (what, repo_hint))
+    sys.exit(2)
+
+
+def check_issue_write(masked_seg, raw_seg, masked_cmd, cwd):
+    m = _ISSUE_RE.match(masked_seg)
+    if not m or m.group(1) not in _ISSUE_WRITES:
+        return
+    if not _in_session(cwd) or _hatched(masked_cmd, "FLEET_ALLOW_ISSUE_WRITE"):
+        return
+    sub = m.group(1)
+    if sub == "edit" and _cmd_repo(raw_seg, cwd) == _ISSUE_EXCEPTION_REPO:
+        return
+    _issue_refuse("`gh issue %s`" % sub, "")
+
+
+def check_mcp_issue(name, tool_input, cwd):
+    sub = _MCP_ISSUE_TOOLS.get(name)
+    if not sub or not _in_session(cwd) or os.environ.get("FLEET_ALLOW_ISSUE_WRITE", "").strip() == "1":
+        return
+    ti = tool_input if isinstance(tool_input, dict) else {}
+    repo = ("%s/%s" % (ti.get("owner", ""), ti.get("repo", ""))).lower()
+    if sub == "edit" and repo == _ISSUE_EXCEPTION_REPO:
+        return
+    _issue_refuse("%s (%s)" % (sub, name), "")
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -1332,6 +1408,14 @@ def main():
             else:                       # no service here: the mod's fallback (#2057)
                 check_fallback(name, _tool_mcp_name(_RETIRED_TOOLS[name]),
                                data.get("cwd") or os.getcwd())
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+        allow()
+    if name in _MCP_ISSUE_TOOLS:        # the issue ban on the MCP road (T1470)
+        try:
+            check_mcp_issue(name, data.get("tool_input"), data.get("cwd") or os.getcwd())
         except SystemExit:
             raise
         except Exception:
@@ -1365,6 +1449,12 @@ def main():
             raise
         except Exception:
             pass                         # fail open, as every rail here
+        try:
+            check_issue_write(masked[a:b].lower(), cmd[a:b].lower(), masked, cwd)
+        except SystemExit:
+            raise
+        except Exception:
+            pass                         # fail open
         try:
             check_client_identity(cmd[a:b], masked, cwd)
         except SystemExit:

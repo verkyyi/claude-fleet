@@ -31,6 +31,12 @@
         ]
       },
       {
+        "matcher": "mcp__github__create_issue|mcp__github__add_issue_comment|mcp__github__update_issue",
+        "hooks": [
+          { "type": "command", "command": "python3 ~/.claude/fleet/hooks/bash-guard.py" }
+        ]
+      },
+      {
         "matcher": "mcp__space__.*",
         "hooks": [
           { "type": "command", "command": "python3 ~/.claude/fleet/hooks/studio-guard.py" }

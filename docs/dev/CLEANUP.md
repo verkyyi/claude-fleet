@@ -457,7 +457,7 @@ uses. Only `working` is screened there — it is unambiguous and cwd-independent
 every subtler signal stays in the one authoritative gate, because a pre-screen may
 only ever *save* a call, never decide a reap.
 
-The worker-side half of this lives in its flow (`bin/fleet-worker-start-hook.sh`):
+The worker-side half of this is the repo's own landing rule (this repo's CLAUDE.md):
 land with **one** `gh pr merge … --delete-branch`, never a chained
 `push --delete` — a failed merge must not delete the branch.
 

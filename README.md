@@ -403,9 +403,10 @@ Codex skills under `$CODEX_HOME/skills/` and invoked as `$fleet-history`,
 `$fleet-context`, and so on. Each declares an owner seat (`worker` / `hub` /
 `either`) and refuses from the wrong one. Live so far:
 
-- A worker runs no command to start: its flow (the `brief` tool, a PR, `pr_verdict` →
-  `pr_merge`, `report`) rides its SessionStart hook (`bin/fleet-worker-start-hook.sh`,
-  issue #4898); the cleanup daemon reaps afterwards (see [docs/dev/CLEANUP.md](docs/dev/CLEANUP.md)).
+- A worker runs no command to start: its first turn is the person's words and
+  Claude Code's default behaviour (with the repo's CLAUDE.md) does the rest — its
+  SessionStart hook (`bin/fleet-worker-start-hook.sh`) only shows one grey line
+  (T1470); the cleanup daemon reaps afterwards (see [docs/dev/CLEANUP.md](docs/dev/CLEANUP.md)).
 - **`/fleet-history`** (hub) — browse & resume closed sessions (landed + unlanded,
   workers **and** `scratch-<N>` sessions) from the history ledger, reconstructing a
   reaped worktree off the recorded SHA so `claude --resume` still works.
