@@ -147,8 +147,8 @@ for _a in "$@"; do
     --seed-file=*) SEED_FILE="${_a#--seed-file=}" ;;
     # --words-file <f> (issue #3331, EPIC #3178 ⑧): the person's own words — a task
     # someone typed (⌘P's `new` start). They are the session's FIRST TURN, shown as
-    # typed; the flow comes from the SessionStart hook (fleet-worker-start-hook.sh),
-    # never a visible command. No file ⇒ the issue's title is the first turn.
+    # typed; no flow is added to it (the SessionStart hook only shows a grey line,
+    # T1470), never a visible command. No file ⇒ the issue's title is the first turn.
     # The caller owns the file.
     --words-file) _want=words-file ;;
     --words-file=*) WORDS_FILE="${_a#--words-file=}" ;;
@@ -726,8 +726,8 @@ tf="$(fleet_cache_dir "$(fleet_slug "$REPO")")/task_$slug.txt"
 # backlog pick) — shown exactly as written. The flow does not ride the first turn:
 # the window is stamped `@seed_words 1` before its agent starts, and the
 # SessionStart hook (bin/fleet-worker-start-hook.sh) reads it — a grey line for the
-# person, and the flow for the agent (brief → implement → PR `Closes #N` →
-# pr_verdict / pr_merge → report). The stamp and the words go together or not at
+# person and nothing for the agent (T1470: Claude Code's default behaviour is the
+# guidance). The stamp and the words go together or not at
 # all. No words, a Codex session (no SessionStart context road it reads the same
 # way) or FLEET_SEED_WORDS=0 ⇒ the flow rides the first turn as plain words. There
 # is no claim command any more (issue #4898): the fleet keeps no issue state.

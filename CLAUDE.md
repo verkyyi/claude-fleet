@@ -365,13 +365,14 @@ one-off drill / audit records do not go in the repo (issue #3576).
   is that record alone (issue #4897, EPIC #4895 批 0): its session opens in a
   worktree of the repo bound to `T<n>` (`dash-raw-session.sh --repo --task`,
   `@task` + `@task_flow 1` before the agent starts, the worktree's git dir marked
-  `fleet-task` — `fleet_worktree_task`), `fleet-worker-start-hook.sh` gives it the
-  task flow (read the record with `brief`, PR, merge on green, summarize the
-  result — no issue claimed, commented on or closed), and every reaper
+  `fleet-task` — `fleet_worktree_task`), `fleet-worker-start-hook.sh` gives the
+  person one grey line naming `T<n>` and the agent nothing (T1470), and every reaper
   reads «over» as the record closed (`fleet_task_closed`, `fleet_task_control.py
   closed`): fleet-cleanup-idle.py's task route (`merged` = record closed),
   fleet-cleanup.sh's completion gate and worktree-autoclean.sh for any session
-  that carries a record. Sessions retain the issue-operation ban (#4898).
+  that carries a record. Sessions retain the issue-operation ban (#4898), held
+  by a rail since T1470: `hooks/bash-guard.py` refuses a session's `gh issue`
+  writes and the GitHub MCP issue writers (BREAK-IT `worker-issue-write`).
   The sole exception: in GuangZhouShanyouGame/24haowan-monorepo, a session may create a GitHub issue labeled release-fragment only through the repository tool `node tools/cd/fragments-migrate.js --new <file.md>`, then update that issue body according to `doc/release-ledger/fragment-schema.md`. Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden; this exception does not apply to any other repository.
   Task dispatch files no issue (issue #4898, 批 1): no hub ⇒
   `fleet-task-record.sh dispatch` exits 3. A session's `ask` and park write
@@ -384,17 +385,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
   worktree via `--worktree`, else `--no-repo`); the history ledger's col 15 is the
   `T<n>` (a Claude row fills 12–14 with `-`), its title the `@task_line` words, and
   `list` / `rows` mark the row `T<n>` — resume stays by the session key.
-- **A session's first turn is the person's own words; the flow rides a hook**
-  (issue #3331, EPIC #3178 ⑧, D2 = ①; the claim left with #4898). `dash-issue-session.sh`
+- **A session's first turn is the person's own words; no flow is injected**
+  (issue #3331, EPIC #3178 ⑧; the claim left with #4898, the flow with T1470). `dash-issue-session.sh`
   seeds a Claude worker with `--words-file` (else the issue's title) — shown as typed —
   and stamps the window `@seed_words` before its agent starts: the words and the
   stamp go together or not at all. `bin/fleet-worker-start-hook.sh` (SessionStart,
-  `startup` only) reads the stamp and answers one grey `systemMessage` line
-  (「fleet-worker · <repo> · 单 #N · 做完开 PR，门绿了自己合」) + an `additionalContext`
-  with the flow: `brief`, implement, a PR carrying `Closes #N`, `pr_verdict` →
-  `pr_merge`, then a summary — never a claim, comment or close (a task record's
-  session gets the same flow off `@task_flow`). fleet-worker's body stays empty, so
-  this is the flow's only road in. A no-repo task, a scratch, a Codex worker or
+  `startup` only) reads the stamp (or `@task_flow`) and answers one grey
+  `systemMessage` line (「fleet-worker · <repo> · 单 #N」 / 「… · 任务 T<n>」) and NO
+  `additionalContext`: Claude Code's default behaviour, with the repo's own
+  CLAUDE.md, is the guidance (T1470). fleet-worker's body stays empty. What the
+  fleet must hold is a rail, never a sentence: the base checkout
+  (`base-readonly-guard.py`), the issue ban (`bash-guard.py`). How a repo lands
+  work (PR, merge on green) is that repo's CLAUDE.md or the person's words. A no-repo task, a scratch, a Codex worker or
   `FLEET_SEED_WORDS=0` ⇒ no stamp: the flow rides the first turn as plain words.
   `seed-words-selftest.sh` + `dash-issue-session-prompt-selftest.sh` pin it.
 - **A session says when it may be closed: `@reap_policy`** (issue #1902). Chosen

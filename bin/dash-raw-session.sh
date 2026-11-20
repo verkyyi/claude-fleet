@@ -1244,8 +1244,8 @@ fi
     # A development task (issue #4897, EPIC #4895 批 0): a repo session bound to
     # the hub's record T<n> and no issue. @task_flow — stamped with @task before
     # the agent starts, as dash-issue-session.sh's @seed_words — tells the
-    # SessionStart hook (fleet-worker-start-hook.sh) to put the task flow on it:
-    # read the record, implement, PR, merge on green, final response with PR and validation.
+    # SessionStart hook (fleet-worker-start-hook.sh) to show the person the task's
+    # grey line; the agent is given no flow (T1470).
     [ -n "$TASK_REF" ] && stamp="$stamp$(fleet_win_stamp_cmd @task "$TASK_REF" @task_flow 1)"
   fi
   [ "$NOREPO" != 1 ] && [ -n "$rsid" ] && launch="$launch --resume $rsid"

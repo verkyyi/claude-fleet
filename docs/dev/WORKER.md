@@ -1,6 +1,6 @@
 # Worker lifecycle — background and troubleshooting
 
-A worker's flow is not a command: it rides its SessionStart hook (`bin/fleet-worker-start-hook.sh`) — `brief` → implement → PR → `pr_verdict` / `pr_merge` → `report`. Its ticket is the hub's task record `T<n>`; GitHub hosts only the code and the PR (EPIC #4895). This document keeps the rationale, incident references and troubleshooting behind that flow — reference material, not a charter to preload.
+A worker is given no flow (T1470): its first turn is the person's words, and Claude Code's default behaviour with the repo's own CLAUDE.md is the whole guidance — its SessionStart hook (`bin/fleet-worker-start-hook.sh`) only shows the person one grey line. What the fleet must hold is a rail: the base checkout (`hooks/base-readonly-guard.py`), the issue ban (`hooks/bash-guard.py`, BREAK-IT `worker-issue-write`). Its ticket is the hub's task record `T<n>`; GitHub hosts only the code and the PR (EPIC #4895). This document keeps the rationale, incident references and troubleshooting behind that flow — reference material, not a charter to preload.
 
 A worker is a full agent, not a deckhand (#441): it owns the implementation and landing. The rails protect shared state; they do not make the operator a routine approval gate. One worker owns one task, one worktree and one PR. Work finishes with a confirmed merge and a report (which closes the record), or an explicit blocker.
 

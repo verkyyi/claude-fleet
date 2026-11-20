@@ -1,25 +1,21 @@
 #!/bin/bash
-# seed-words-selftest.sh — a worker whose first turn is the person's words is given
-# its flow by a hook (issue #3331, EPIC #3178 ⑧, D2 = ①; no claim since #4898).
+# seed-words-selftest.sh — a worker whose first turn is the person's words opens
+# with one grey line and NO injected flow (issue #3331, EPIC #3178 ⑧; T1470).
 #
 # The spawn half (dash-issue-session.sh writes the words AND stamps
 # `@seed_words`, or neither) is dash-issue-session-prompt-selftest
-# A / W. This is the other half — bin/fleet-worker-start-hook.sh, the only road
-# the flow has into a fleet-worker (its body is empty) — on an isolated tmux
-# socket, plus the hook table wiring it:
+# A / W. This is the other half — bin/fleet-worker-start-hook.sh — on an
+# isolated tmux socket, plus the hook table wiring it:
 #
 #   T  hooks/settings-hooks.json runs it on SessionStart with no matcher (startup)
-#   S  a stamped worker window at `startup` ⇒ JSON: additionalContext tells the
-#      agent to read `brief` FIRST, then PR (`Closes #N`) → pr_verdict / pr_merge →
-#      report, naming the issue and repo — no claim skill (issue #4898);
-#      systemMessage is the person's one grey line. An old stamp (/fleet-history)
-#      counts the same.
+#   S  a stamped worker window at `startup` ⇒ JSON with the person's one grey
+#      line (systemMessage) and NO additionalContext: Claude Code's default
+#      behaviour is the guidance (T1470). An old stamp (/fleet-history) the same.
 #   N  nothing printed: resume / compact, no stamp (a scratch, a no-repo session,
 #      an old window), a desk ticket, no pane, a broken event — exit 0 every time
 #   L  the line follows the interface language (en)
 #   K  a development task with no issue (@task T<n> + @task_flow 1, issue #4897)
-#      ⇒ the task flow: read the record with `brief`, PR, pr_verdict / pr_merge,
-#      report merged; @task alone (no flow) ⇒ nothing
+#      ⇒ the grey line names T<n>, no context; @task alone (no flow) ⇒ nothing
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd)"
 . "$BIN/selftest-lib.sh"
@@ -44,39 +40,35 @@ sys.exit(0 if ok else 1)
 EOF
 ok "T the hook runs on every SessionStart (startup included)"
 
-# The exception must reach every independent instruction source (T1299), even
-# when this host cannot run the real tmux legs below.
+# The exception must reach every instruction source that still carries the flow
+# (T1299); the worker hook carries none since T1470 — its issue ban is a rail
+# (hooks/bash-guard.py, which names the one exception).
 python3 - "$ROOT" <<'PY_POLICY' || st_fail "P the sole release-fragment exception must be scoped in every instruction source"
 from pathlib import Path
 import sys
 root = Path(sys.argv[1])
 for name in (
-    "bin/fleet-worker-start-hook.sh", "bin/dash-issue-session.sh",
-    "bin/fleet-brief.sh", "conf/codex-preamble.md", "CLAUDE.md",
-    "conf/agent-defaults/claude/agents/fleet-worker.md",
+    "bin/dash-issue-session.sh", "bin/fleet-brief.sh", "conf/codex-preamble.md", "CLAUDE.md",
 ):
     s = (root / name).read_text().replace("\\`", "`")
     for token in ("GuangZhouShanyouGame/24haowan-monorepo",
                   "node tools/cd/fragments-migrate.js --new <file.md>",
-                  "release-fragment", "doc/release-ledger/fragment-schema.md"):
+                  "release-fragment", "doc/release-ledger/fragment-schema.md",
+                  "The sole exception:", "then update that issue body",
+                  "Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden",
+                  "this exception does not apply to any other repository"):
         assert token in s, (name, token)
-    if name.endswith("agents/fleet-worker.md"):
-        for token in ("唯一例外", "更新这份 issue 的正文", "认领、评论任务进度、关闭 issue、创建普通 issue 仍禁止", "其他仓库不适用"):
-            assert token in s, (name, token)
-    else:
-        for token in ("The sole exception:", "then update that issue body",
-                      "Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden",
-                      "this exception does not apply to any other repository"):
-            assert token in s, (name, token)
+g = (root / "hooks/bash-guard.py").read_text()
+assert "guangzhoushanyougame/24haowan-monorepo" in g and "fragments-migrate.js" in g, "bash-guard: the exception"
+h = (root / "bin/fleet-worker-start-hook.sh").read_text()
+for token in ('"additionalContext"', "pr_merge", "brief", "Never claim"):
+    assert token not in h, ("the worker hook still injects", token)
 PY_POLICY
-ok "P every instruction source limits the exception to one repository, tool, label and body update"
+ok "P the exception stays scoped where the flow is still words; the worker hook injects none"
 
-policy() {
-  st_has "policy repo" "$1" 'The sole exception: in GuangZhouShanyouGame/24haowan-monorepo'
-  st_has "policy tool" "$1" 'node tools/cd/fragments-migrate.js --new <file.md>'
-  st_has "policy body" "$1" 'then update that issue body'
-  st_has "policy forbidden" "$1" 'Claiming issues, posting progress comments, closing issues, and creating ordinary issues remain forbidden'
-  st_has "policy other repos" "$1" 'this exception does not apply to any other repository'
+nocontext() { # <label> <json>
+  printf '%s' "$2" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if "hookSpecificOutput" not in d and set(d) == {"systemMessage"} else 1)' \
+    || st_fail "$1: the hook must print only the grey line, no context (T1470)" "$2"
 }
 
 command -v tmux >/dev/null 2>&1 || { echo "seed-words-selftest: no tmux — S/P/N/L skipped"; echo "selftest OK: $pass"; exit 0; }
@@ -91,26 +83,20 @@ hook() { # <source> — run the hook as the pane's own process would
 }
 field() { python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print(eval(sys.argv[1]))' "$1"; }
 
-# ===== S: a stamped worker window ⇒ brief first, then the flow ================
+# ===== S: a stamped worker window ⇒ the grey line only =========================
 setw @seed_words 1; setw @issue 3312; setw @repo acme/tokenledger; setw @agent_def fleet-worker
 out=$(hook startup); rc=$?
 [ "$rc" = 0 ] || st_fail "S the hook must exit 0" "$out"
-ctx=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["additionalContext"]') || st_fail "S no additionalContext" "$out"
-ev=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["hookEventName"]')
-[ "$ev" = SessionStart ] || st_fail "S hookEventName must be SessionStart" "$out"
-case "$ctx" in *"Before anything else"*'the fleet tool `brief`'*'Closes #3312'*'`pr_merge`'*'final response'*) ;; *) st_fail "S the context: brief first, then PR → merge → final response" "$ctx" ;; esac
-case "$ctx" in *fleet-claim-*|*"claim skill"*) st_fail "S no claim skill any more (issue #4898)" "$ctx" ;; esac
-case "$ctx" in *"#3312"*"acme/tokenledger"*) ;; *) st_fail "S the context must name the issue and the repo" "$ctx" ;; esac
-policy "$ctx"
+nocontext S "$out"
 line=$(printf '%s' "$out" | field 'd["systemMessage"]')
-[ "$line" = "fleet-worker · tokenledger · 单 #3312 · 做完开 PR，门绿了自己合" ] || st_fail "S the person's grey line" "$line"
+[ "$line" = "fleet-worker · tokenledger · 单 #3312" ] || st_fail "S the person's grey line" "$line"
 setw @seed_words /fleet-history
-case "$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')" in *'the fleet tool `brief`'*) ;; *) st_fail "S an old stamp gets the same flow" ;; esac
-ok "S startup on a stamped window: brief first, the flow, one grey line; an old stamp the same"
+nocontext "S an old stamp" "$(hook startup)"
+ok "S startup on a stamped window: one grey line, no injected flow; an old stamp the same"
 
 # ===== L: the line follows the interface language ==============================
 line=$(LANG_UI=en hook startup | field 'd["systemMessage"]')
-case "$line" in "fleet-worker · tokenledger · #3312 · "*merges*) ;; *) st_fail "L an English line in English" "$line" ;; esac
+[ "$line" = "fleet-worker · tokenledger · #3312" ] || st_fail "L an English line in English" "$line"
 ok "L the grey line is English when the person reads English"
 
 # ===== N: nothing for anything else ============================================
@@ -126,30 +112,21 @@ setw @issue 3312
 printf '{"source":"startup"}' | env -u TMUX -u TMUX_PANE bash "$HOOK" >/dev/null; [ $? = 0 ] || st_fail "N must exit 0"
 ok "N resume/compact/clear, desk, unstamped, broken event, no pane: nothing, exit 0"
 
-# ===== K: a development task with no issue ⇒ the task flow (issue #4897) ========
+# ===== K: a development task with no issue ⇒ the grey line names T<n> ==========
 unsetw @seed_words; unsetw @issue
 setw @task T42; setw @task_flow 1; setw @repo acme/tokenledger; setw @agent_def fleet-worker
 out=$(hook startup); rc=$?
 [ "$rc" = 0 ] || st_fail "K the hook must exit 0" "$out"
-ctx=$(printf '%s' "$out" | field 'd["hookSpecificOutput"]["additionalContext"]') || st_fail "K no additionalContext" "$out"
-case "$ctx" in *"T42"*"acme/tokenledger"*"NOT to a GitHub issue"*) ;; *) st_fail "K the context must name the record and the repo, and no issue" "$ctx" ;; esac
-case "$ctx" in *'the fleet tool `brief`'*'`pr_verdict`'*'`pr_merge`'*'final response'*) ;; *) st_fail "K the flow: brief → PR → pr_verdict/pr_merge → final response" "$ctx" ;; esac
-case "$ctx" in *"Closes #"[0-9]*) st_fail "K a task's PR carries no Closes" "$ctx" ;; esac
+nocontext K "$out"
 line=$(printf '%s' "$out" | field 'd["systemMessage"]')
-[ "$line" = "fleet-worker · tokenledger · 任务 T42 · 做完开 PR，门绿了自己合" ] || st_fail "K the person's grey line" "$line"
+[ "$line" = "fleet-worker · tokenledger · 任务 T42" ] || st_fail "K the person's grey line" "$line"
 line=$(LANG_UI=en hook startup | field 'd["systemMessage"]')
-case "$line" in "fleet-worker · tokenledger · task T42 · "*merges*) ;; *) st_fail "K an English line in English" "$line" ;; esac
-policy "$ctx"  # ordinary repo: the exception must not authorize it
-setw @repo GuangZhouShanyouGame/24haowan-monorepo
-ctx=$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')
-policy "$ctx"
-st_has "K fragment repo still uses its hub record" "$ctx" 'its body names T42 and carries no `Closes #N`'
-setw @repo acme/tokenledger
+[ "$line" = "fleet-worker · tokenledger · task T42" ] || st_fail "K an English line in English" "$line"
 unsetw @task_flow; [ -z "$(hook startup)" ] || st_fail "K @task without @task_flow (a no-repo task, ⌘P) ⇒ nothing"
 setw @task_flow 1; setw @task bogus; [ -z "$(hook startup)" ] || st_fail "K a malformed @task ⇒ nothing"
 setw @task T42; [ -z "$(hook resume)" ] || st_fail "K resume ⇒ nothing"
 setw @issue 3312; setw @seed_words /fleet-history
-case "$(hook startup | field 'd["hookSpecificOutput"]["additionalContext"]')" in *'Closes #3312'*) ;; *) st_fail "K an issue window that carries @task gets the issue flow" ;; esac
-ok "K a task session (@task + @task_flow, no issue): read the record, PR, merge, final response"
+[ "$(hook startup | field 'd["systemMessage"]')" = "fleet-worker · tokenledger · 单 #3312" ] || st_fail "K an issue window that carries @task reads as the issue"
+ok "K a task session (@task + @task_flow, no issue): the grey line names T<n>, no context"
 
-printf '\nselftest OK: %s assertions passed (words first ⇒ brief next)\n' "$pass"
+printf '\nselftest OK: %s assertions passed (words first, nothing injected)\n' "$pass"
