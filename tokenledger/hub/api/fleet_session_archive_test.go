@@ -184,3 +184,68 @@ func TestSessionArchiveReactivationReturnsToBoard(t *testing.T) {
 		t.Fatalf("not persisted: %v %v", prefs, err)
 	}
 }
+
+// A session and the sessions it opened are archived in one call: every ID or
+// none, and another person's ID among them writes nothing.
+func TestSessionArchiveTreeAllOrNone(t *testing.T) {
+	s := &Server{Store: openTestStore(t), LiveStore: NewLive(), ViewerToken: viewerToken, Fleet: true}
+	if err := s.Store.EnsureNodes(); err != nil {
+		t.Fatal(err)
+	}
+	enablePeople(t, &harness{srv: s}, pAlice, pBob)
+	mk := func(owner, title string) string {
+		task, err := s.Store.CreateFleetTask(store.FleetTask{Owner: owner, Title: title, AuthorityVersion: 1, RequestedAgent: "codex", ResolvedAgent: "codex"}, title, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task.FID
+	}
+	parent, child, grand, bobs := mk(pAlice, "parent"), mk(pAlice, "child"), mk(pAlice, "grand"), mk(pBob, "bob's")
+	handler := s.Handler()
+	call := func(body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "http://fleet.test/v1/fleet/session_archive", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "http://fleet.test")
+		r.Header.Set("Accept", "application/json")
+		r.AddCookie(personCookie(pAlice, "alice"))
+		out := httptest.NewRecorder()
+		handler.ServeHTTP(out, r)
+		return out
+	}
+	archived := func() map[string]bool {
+		got, err := s.Store.SessionArchivePreferences(pAlice)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	ids := func(xs ...string) string { b, _ := json.Marshal(xs); return string(b) }
+	for _, bad := range []string{
+		`{"ids":[],"archived":true}`,
+		`{"ids":` + ids(parent, parent) + `,"archived":true}`,
+		`{"ids":` + ids(parent, "scratch-1") + `,"archived":true}`,
+		`{"id":"` + parent + `","ids":` + ids(child) + `,"archived":true}`,
+	} {
+		if got := call(bad); got.Code != 400 {
+			t.Fatalf("bad %s: %d %s", bad, got.Code, got.Body.String())
+		}
+	}
+	if got := call(`{"ids":` + ids(parent, child, bobs) + `,"archived":true}`); got.Code != 404 {
+		t.Fatalf("another person's id: %d %s", got.Code, got.Body.String())
+	}
+	if got := archived(); len(got) != 0 {
+		t.Fatalf("a refused tree wrote %v", got)
+	}
+	if got := call(`{"ids":` + ids(parent, child, grand) + `,"archived":true}`); got.Code != 200 || !strings.Contains(got.Body.String(), grand) {
+		t.Fatalf("tree archive: %d %s", got.Code, got.Body.String())
+	}
+	if got := archived(); !got[parent] || !got[child] || !got[grand] {
+		t.Fatalf("tree archived: %v", got)
+	}
+	if got := call(`{"ids":` + ids(parent, child, grand) + `,"archived":false}`); got.Code != 200 {
+		t.Fatalf("tree unarchive: %d %s", got.Code, got.Body.String())
+	}
+	if got := archived(); got[parent] || got[child] || got[grand] {
+		t.Fatalf("tree unarchived: %v", got)
+	}
+}

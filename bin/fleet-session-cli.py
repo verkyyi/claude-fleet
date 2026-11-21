@@ -176,7 +176,7 @@ def pending_rows(rs, gone_too=False):
                 if r.get('fid') and not is_fid(matched.get('fleet_id')):
                     matched['fleet_id'] = r['fid']
                 matched.update(archived=r.get("archived", False), board=r.get("board"), code=r.get("code") or matched.get("code") or "", cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
-                               task=r.get('task') or matched.get('task') or '',
+                               task=r.get('task') or matched.get('task') or '', opened_by=r.get('from') or '',
                                execution_endpoint=r.get('execution_endpoint') or matched.get('execution_endpoint') or '')
                 continue
             ended = gone_too and r.get("gone") and not r.get("archived")
@@ -190,7 +190,7 @@ def pending_rows(rs, gone_too=False):
                            pending_start_explicit=r.get('pending_start_explicit',False),
                            execution_endpoint=r.get('execution_endpoint') or '', lost=r.get('lost',False),
                            cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
-                           fleet_id=r.get("fid") or "",
+                           fleet_id=r.get("fid") or "", opened_by=r.get("from") or "",
                            code=r.get("code") or ""))
     return rs
 
@@ -743,12 +743,33 @@ def archive_busy(row):
     return bool(row.get("running")) or row.get("state") in ("working", "needs", "blocked", "looping", "starting")
 
 
+def archive_family(all_rows, row):
+    """The sessions `row` opened, and those they opened (the hub's `from`), on
+    the same side of archived as `row` — archive takes them with it."""
+    ident = lambda r: r.get("board") or r.get("fleet_id") or ""
+    kids = {}
+    for r in all_rows:
+        if r.get("opened_by"):
+            kids.setdefault(r["opened_by"], []).append(r)
+    out, seen, todo = [], {id(row)}, list(kids.get(ident(row), []))
+    while todo:
+        x = todo.pop(0)
+        if id(x) in seen:
+            continue
+        seen.add(id(x))
+        out.append(x)
+        todo.extend(kids.get(ident(x), []))
+    want = bool(row.get("archived"))
+    return [r for r in out if is_fid(ident(r)) and ident(r) != ident(row) and bool(r.get("archived")) == want]
+
+
 def cmd_archive(args, archived=True):
     yes = "--yes" in args or "-y" in args
     args = [a for a in args if a not in ("--yes", "-y")]
     if len(args) != 1:
         return usage()
-    row, rc = one(rows(gone=archived), args[0])
+    all_rows = rows(gone=archived)
+    row, rc = one(all_rows, args[0])
     if row is None:
         return rc
     fid = row.get("board") or row.get("fleet_id")
@@ -757,21 +778,36 @@ def cmd_archive(args, archived=True):
         # refuses it — never stop a session that then cannot be archived
         say("入口尚未确认此会话的身份，请稍后重试")
         return 1
-    if archived and archive_stops(row):
-        if archive_busy(row) and not yes:
-            got = ask("「%s」还在运行，归档会停止它。确定？[y/N] " % (row.get("name") or args[0]))
+    # the sessions it opened go with it (all or none at the hub)
+    family = archive_family(all_rows, row)
+    ids = [fid] + [r.get("board") or r.get("fleet_id") for r in family]
+    if archived:
+        stops = [r for r in [row] + family if archive_stops(r)]
+        busy = [r for r in stops if archive_busy(r)]
+        if busy and not yes:
+            if busy == [row]:
+                q = "「%s」还在运行，归档会停止它。确定？[y/N] " % (row.get("name") or args[0])
+            else:
+                q = "归档会停止 %d 个还在运行的会话：%s。确定？[y/N] " % (
+                    len(busy), "、".join("「%s」" % (r.get("name") or r.get("title") or "?") for r in busy))
+            got = ask(q)
             if got is None:
                 say("不在终端里：确认请加 --yes")
                 return 2
             if got.strip().lower() not in ("y", "yes"):
                 return 1
-        if stop_row(row):
-            say("没能停止，未归档")
-            return 1
-    ok, why = hub_write("session_archive", {"id": fid, "archived": archived})
+        for r in stops:
+            if stop_row(r):
+                say("没能停止「%s」，未归档" % (r.get("name") or "?") if r is not row else "没能停止，未归档")
+                return 1
+    body = {"ids": ids, "archived": archived} if family else {"id": fid, "archived": archived}
+    ok, why = hub_write("session_archive", body)
     if ok and not os.environ.get("FLEET_SESSION_CLI_ROWS"):
         hub_freshen(force=True)
-    say(("已归档" if archived else "已取消归档") if ok else why)
+    words = "已归档" if archived else "已取消归档"
+    if ok and family:
+        words += "（连同它开的 %d 个会话）" % len(family)
+    say(words if ok else why)
     return 0 if ok else 1
 
 

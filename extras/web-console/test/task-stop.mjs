@@ -70,3 +70,25 @@ assert.deepEqual(archivePlan({id:'d',at:now,group:'gone',board:{id:'d',state:'do
 assert.deepEqual(archivePlan({id:'f',at:now,board:{id:'f',state:'working',lost:true},live:{id:'fleet/f',state:'working'}}),{stop:false,confirm:false},'out of reach: archive only');
 assert.deepEqual(archivePlan({id:'e',at:now,board:{id:'e',archived:true},live:{id:'fleet/e',state:'working'}}),{stop:false,confirm:false},'unarchive stops nothing');
 console.log('PASS Task stop: controlled offline, legacy classification, refusal, identity, pending, and proof scope');
+// A session and the sessions it opened are archived together (`from`).
+{
+  const { archiveFamily, archiveTreePlan } = await import('../src/app/archive.ts');
+  const mk = (id, from, extra = {}) => ({ id, title: id, at: now, board: { id, state: 'done', ...(from ? { from } : {}), ...extra } });
+  const root = { ...mk('p'), live: { id: 'fleet/p', state: 'idle' } };
+  const child = { ...mk('c', 'p', { state: 'working', running: true }), live: { id: 'fleet/c', state: 'working' } };
+  const grand = { ...mk('g', 'c'), group: 'gone' };
+  const old = mk('o', 'p', { archived: true });
+  const rows = [root, child, grand, old];
+  assert.deepEqual(archiveFamily(rows, root).map((r) => r.id), ['c', 'g'], 'down the tree, never one already archived');
+  const plan = archiveTreePlan(rows, root);
+  assert.deepEqual(plan.ids, ['p', 'c', 'g']);
+  assert.deepEqual(plan.stop.map((r) => r.id), ['p', 'c'], 'an ended grandchild is not stopped');
+  assert.deepEqual(plan.confirm.map((r) => r.id), ['c'], 'asked only about the running child');
+  assert.deepEqual(archiveTreePlan(rows, grand).ids, ['g'], 'a leaf: itself');
+  const cyc = [{ ...root, board: { ...root.board, from: 'g' } }, child, grand];
+  assert.deepEqual(archiveFamily(cyc, cyc[0]).map((r) => r.id), ['c', 'g'], 'a cycle is cut');
+  const arch = [mk('p', '', { archived: true }), mk('c', 'p', { archived: true }), mk('x', 'p')];
+  assert.deepEqual(archiveTreePlan(arch, arch[0]).ids, ['p', 'c'], 'unarchive: the archived family');
+  assert.deepEqual(archiveTreePlan(arch, arch[0]).stop, [], 'unarchive stops nothing');
+}
+console.log('PASS archive family');

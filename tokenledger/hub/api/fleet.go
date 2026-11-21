@@ -1033,6 +1033,12 @@ func (s *Server) CallFleetTool(req *http.Request, tool string, args map[string]a
 	}
 	if tool == "session_archive" {
 		id, _ := args["id"].(string)
+		if ids, ok := args["ids"].([]any); ok && len(ids) > 0 {
+			id, _ = ids[0].(string)
+			if len(ids) > 1 {
+				id += fmt.Sprintf(" +%d", len(ids)-1)
+			}
+		}
 		fleetID = "session:" + id
 	}
 	opID := ""

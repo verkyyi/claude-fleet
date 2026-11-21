@@ -1329,9 +1329,11 @@ func fleetToolSpecs() []toolSpec {
 		},
 		{
 			Name:        "session_archive",
-			Title:       "Archive or unarchive one session",
-			Description: "Set the owner's session list visibility by its lifelong ID. Archiving does not stop execution, delete history or change retention. Takes effect on Web and Terminal. Needs worker:message.",
-			InputSchema: obj(map[string]any{"id": map[string]any{"type": "string"}, "archived": map[string]any{"type": "boolean"}}, "id", "archived"),
+			Title:       "Archive or unarchive sessions",
+			Description: "Set the owner's session list visibility by lifelong ID: `id` for one session, or `ids` for a session and the sessions it opened (all or none). Archiving does not stop execution, delete history or change retention. Takes effect on Web and Terminal. Needs worker:message.",
+			InputSchema: obj(map[string]any{"id": map[string]any{"type": "string"},
+				"ids":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "maxItems": 200},
+				"archived": map[string]any{"type": "boolean"}}, "archived"),
 		},
 		{
 			Name:  "worker_pin",
