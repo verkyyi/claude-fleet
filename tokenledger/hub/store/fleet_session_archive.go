@@ -23,29 +23,38 @@ func (s *Store) ensureSessionArchives() error {
 }
 
 func (s *Store) SetSessionArchived(owner, id string, archived bool) error {
+	return s.SetSessionsArchived(owner, []string{id}, archived)
+}
+
+// SetSessionsArchived sets every ID or none (a session and the sessions it
+// opened are archived together): one unknown ID writes nothing.
+func (s *Store) SetSessionsArchived(owner string, ids []string, archived bool) error {
 	tx, err := s.write.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var exists bool
-	err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM fleet_ids WHERE owner=? AND id=? UNION ALL SELECT 1 FROM fleet_tasks WHERE owner=? AND fid=?)`, owner, id, owner, id).Scan(&exists)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return sql.ErrNoRows
-	}
 	value := 0
 	if archived {
 		value = 1
 	}
-	// Keep an explicit unarchive too: restored old history must not disappear
-	// behind the ordinary board's age/count cap immediately after restoration.
-	_, err = tx.Exec(`INSERT INTO fleet_session_archives(owner,id,archived,archived_at) VALUES(?,?,?,?) ON CONFLICT(owner,id) DO UPDATE SET archived=excluded.archived,
- archived_at=CASE WHEN fleet_session_archives.archived=excluded.archived THEN fleet_session_archives.archived_at ELSE excluded.archived_at END`, owner, id, value, time.Now().Unix())
-	if err != nil {
-		return err
+	now := time.Now().Unix()
+	for _, id := range ids {
+		var exists bool
+		err = tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM fleet_ids WHERE owner=? AND id=? UNION ALL SELECT 1 FROM fleet_tasks WHERE owner=? AND fid=?)`, owner, id, owner, id).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return sql.ErrNoRows
+		}
+		// Keep an explicit unarchive too: restored old history must not disappear
+		// behind the ordinary board's age/count cap immediately after restoration.
+		_, err = tx.Exec(`INSERT INTO fleet_session_archives(owner,id,archived,archived_at) VALUES(?,?,?,?) ON CONFLICT(owner,id) DO UPDATE SET archived=excluded.archived,
+ archived_at=CASE WHEN fleet_session_archives.archived=excluded.archived THEN fleet_session_archives.archived_at ELSE excluded.archived_at END`, owner, id, value, now)
+		if err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
