@@ -5,8 +5,10 @@ hub row carries its worker_id's key alias (`<fleet UUID>/<slug>:scratch-N`), so
 bin/fleet-session-cli.py's own_ids takes the window's @fleet_id instead and the
 hub's list merges onto it; an already-stopped session is chosen by its short
 code or task number; an id that is no identity is refused BEFORE any stop.
+Archiving a session takes the sessions it opened with it, in one {ids} call.
 Drives: bin/fleet-session-cli.py, bin/fleet_view.py."""
 import importlib.util
+import json
 import os
 import sys
 import unittest
@@ -139,6 +141,87 @@ class RemoteAlias(Archive):
         with patch.object(fleet_view, "board_apply", side_effect=lambda *a: ({"x": []}, [])):
             self.assertEqual(self.m.cmd_archive(["活页 MCP v2：修体检四个", "--yes"]), 1)
         self.assertEqual((self.stops, self.writes), ([], []))
+
+
+GRAND = "0b9a3c55-1d7e-4c3a-9f60-7d1f1e2a4b11"
+OLD = "9e8d7c6b-5a49-4382-8170-6f5e4d3c2b1a"
+
+
+def family_board(archived=False):
+    """LIVE opened GONE, GONE opened GRAND; OLD (LIVE's too) was archived
+    before. `archived` puts GONE and GRAND in the archive."""
+    live, gone = board()[0]["x"][0], board()[1][0]
+    gone = dict(gone, **{"from": LIVE, "archived": archived})
+    grand = dict(gone, fid=GRAND, board=GRAND, code="GRND", task="T1379", name="孙会话", text="孙会话",
+                 **{"from": GONE, "archived": archived})
+    old = dict(gone, fid=OLD, board=OLD, code="OLDX", task="T1377", name="旧的", text="旧的",
+               **{"from": LIVE, "archived": True})
+    return {"x": [live]}, [gone, grand, old]
+
+
+class Family(Archive):
+    """Archiving a session takes the sessions it opened with it (`from`, down the
+    tree), in ONE hub call {ids} — every one or none; unarchiving likewise."""
+    def test_archive_by_name_sends_identity(self):
+        with patch.object(fleet_view, "board_apply", side_effect=lambda *a: family_board()):
+            self.assertEqual(self.m.cmd_archive(["活页 MCP v2：修体检四个", "--yes"]), 0)
+        self.assertEqual(self.stops, ["@175"], "an ended child is not stopped again")
+        self.assertEqual(self.writes, [("session_archive", {"ids": [LIVE, GONE, GRAND], "archived": True})],
+                         "the family, never one already archived")
+
+    def test_unarchive_takes_the_archived_family(self):
+        with patch.object(fleet_view, "board_apply", side_effect=lambda *a: family_board(archived=True)):
+            self.assertEqual(self.m.cmd_archive(["HZWX"], archived=False), 0)
+        self.assertEqual(self.writes, [("session_archive", {"ids": [GONE, GRAND], "archived": False})])
+
+    def test_leaf_is_one_id(self):
+        with patch.object(fleet_view, "board_apply", side_effect=lambda *a: family_board()):
+            self.assertEqual(self.m.cmd_archive(["GRND", "--yes"]), 0)
+        self.assertEqual(self.writes, [("session_archive", {"id": GRAND, "archived": True})], "byte for byte as before")
+
+
+class ViewFamily(unittest.TestCase):
+    """The 看台 marks each row with the family archive takes (`opened`), asks once
+    while any of it runs, and sends {ids}."""
+    def rows(self):
+        def mk(fid, frm="", **kw):
+            e = dict(kind="sess", fid=fid, board=fid, target="id:" + fid, text=fid[:4], name=fid[:4], archived=False)
+            if frm:
+                e["from"] = frm
+            e.update(kw)
+            return e
+        return [mk(LIVE), mk(GONE, LIVE), mk(GRAND, GONE), mk(OLD, LIVE, archived=True)]
+
+    def test_family_marked_and_sent(self):
+        rows = self.rows()
+        with patch.object(fleet_view, "task_status", side_effect=lambda e: "work" if e["fid"] == GRAND else "quiet"):
+            fleet_view.opened_mark(rows)
+            root = rows[0]
+            self.assertEqual(root["opened"], [GONE, GRAND])
+            self.assertEqual(root["opened_busy"], [GRAND[:4]])
+            self.assertNotIn("opened", rows[2], "a leaf opened nothing")
+            with patch.object(fleet_view, "archive_stops", return_value=False):
+                self.assertEqual(fleet_view.archive_ask(root), "key", "a running child asks first")
+                self.assertIn("1", fleet_view.archive_prompt(root))
+                self.assertIsNone(fleet_view.archive_ask(rows[3]), "unarchive never asks")
+        with patch.object(fleet_view, "sh", side_effect=lambda *a: list(a)):
+            argv = fleet_view.archive_action(root, "", "fleet")
+            self.assertEqual(json.loads(argv[-1]), {"ids": [LIVE, GONE, GRAND], "archived": True})
+            argv = fleet_view.archive_action(rows[2], "", "fleet")
+            self.assertEqual(json.loads(argv[-1]), {"id": GRAND, "archived": True})
+
+    def test_no_from_marks_nothing(self):
+        rows = [dict(r) for r in self.rows()]
+        for r in rows:
+            r.pop("from", None)
+        fleet_view.opened_mark(rows)
+        self.assertFalse(any("opened" in r for r in rows), "a flat list: byte for byte")
+
+    def test_cycle_cut(self):
+        rows = self.rows()
+        rows[0]["from"] = GRAND
+        fam = [d["fid"] for d in fleet_view.opened_by(rows, rows[0])]
+        self.assertEqual(fam, [GONE, GRAND, OLD])
 
 
 if __name__ == "__main__":

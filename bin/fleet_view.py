@@ -2286,7 +2286,54 @@ def entries(vid, now=None, hub=True, kept=None, view_request=True):
         if e.get("kind") == "sess":
             e["list_scope"] = fleet
     link_overlay(out, here, me, now)
+    opened_mark(out)
     return out
+
+
+def opened_by(rows, root):
+    """Every row `root` opened, and every row those opened (`from` — who opened
+    it, the hub's board word, else the node's @from_fid), preorder; never
+    `root` itself, a cycle cut. The display tree drops a live child under an
+    ended parent; this does not — archive takes the whole family."""
+    kids = {}
+    for e in rows:
+        if e.get("kind", "sess") == "sess" and e.get("from"):
+            kids.setdefault(e["from"], []).append(e)
+    out, seen = [], {id(root)}
+    todo = list(reversed(kids.get(tree_key(root), []) + (kids.get(root["fid"], []) if root.get("fid") and root.get("fid") != tree_key(root) else [])))
+    while todo:
+        x = todo.pop()
+        if id(x) in seen:
+            continue
+        seen.add(id(x))
+        out.append(x)
+        k = tree_key(x)
+        todo.extend(reversed(kids.get(k, []) + (kids.get(x["fid"], []) if x.get("fid") and x["fid"] != k else [])))
+    return out
+
+
+def archive_family(rows, root):
+    """The rows archiving (or unarchiving) `root` changes with it: those it
+    opened, down the tree, that have a board ID and sit on the same side."""
+    want = bool(root.get("archived"))
+    return [d for d in opened_by(rows, root) if d.get("board") and d["board"] != root.get("board")
+            and bool(d.get("archived")) == want]
+
+
+def opened_mark(out):
+    """Each session row carries the board IDs of the family archive takes with
+    it (`opened`), and the names of those still at work (`opened_busy`) — the
+    one question asked before stopping them. A row that opened nothing: neither."""
+    rows = [e for e in out if e.get("kind") == "sess"]
+    if not any(e.get("from") for e in rows):
+        return
+    for e in rows:
+        fam = archive_family(rows, e) if e.get("board") else []
+        if fam:
+            e["opened"] = [d["board"] for d in fam]
+            busy = [d for d in fam if not d.get("archived") and not d.get("lost") and task_status(d) != "quiet"]
+            if busy:
+                e["opened_busy"] = [d.get("text") or d.get("name") or d["board"][:8] for d in busy]
 
 
 def link_overlay(out, here, me, now=None):
@@ -5425,7 +5472,12 @@ _ARCHIVE_HOLD = {}  # short bridge until the saved Hub preference reaches the ca
 
 
 def archive_action(r, answer, fleet):
-    return sh("fleet-hub-write.sh", "session_archive", json.dumps({"id": r["board"], "archived": not r.get("archived", False)}))
+    """One session: {id}, byte for byte as before; one that opened others: the
+    whole family in one call, {ids} — the hub writes every one or none."""
+    opened = [x for x in (r.get("opened") or []) if x != r["board"]]
+    body = {"ids": [r["board"]] + opened} if opened else {"id": r["board"]}
+    body["archived"] = not r.get("archived", False)
+    return sh("fleet-hub-write.sh", "session_archive", json.dumps(body))
 
 
 def archive_stops(r):
@@ -5436,8 +5488,23 @@ def archive_stops(r):
 
 
 def archive_ask(r):
-    """Ask first only while it is still doing something; an idle one just goes."""
-    return "key" if archive_stops(r) and task_status(r) != "quiet" else None
+    """Ask first only while it, or a session it opened, is still doing
+    something; an idle family just goes."""
+    if r.get("archived"):
+        return None
+    return "key" if (archive_stops(r) and task_status(r) != "quiet") or r.get("opened_busy") else None
+
+
+def archive_prompt(r):
+    en = ui_lang() == "en"
+    busy = r.get("opened_busy") or []
+    if not busy:
+        return "Still running — stop and archive? y / n" if en else "会话还在运行，归档会停止它。确定？ y / n"
+    names = "、".join(one_line(n, 24) for n in busy[:3]) + ("…" if len(busy) > 3 else "")
+    n = len(busy) + (1 if archive_stops(r) and task_status(r) != "quiet" else 0)
+    if en:
+        return "Archive stops %d running session%s (%s) — y / n" % (n, "" if n == 1 else "s", names.replace("、", ", "))
+    return "归档会停止 %d 个还在运行的会话（%s）。确定？ y / n" % (n, names)
 
 
 ACTIONS = [
@@ -5449,7 +5516,7 @@ ACTIONS = [
      "far": lambda r, a, f: "deletestart", "ask": None, "slow": True, "thread": True},
     {"id": "archive", "label": lambda r: (("Unarchive" if r.get("archived") else "Archive") if ui_lang() == "en" else ("取消归档" if r.get("archived") else "归档")),
      "when": lambda r: bool(r.get("board")), "local": archive_action, "far": archive_action, "ask": archive_ask,
-     "prompt": lambda r: ("Still running — stop and archive? y / n" if ui_lang() == "en" else "会话还在运行，归档会停止它。确定？ y / n"),
+     "prompt": archive_prompt,
      "keys": "yYnN", "yes": True, "slow": True, "thread": True},
     {"id": "continue", "label": lambda r: "Continue task" if ui_lang() == "en" else "继续任务",
      "when": lambda r: bool(controlled_stop_task(r)) and bool(r.get("cancel_request")) and not r.get("running") and not pending_start_task(r),
@@ -5709,6 +5776,20 @@ def restore_archived(r, fleet):
     return p.returncode
 
 
+def archive_stop(r, ans, fleet):
+    """Stop one session before it is archived: (rc, words)."""
+    result = stop_task(r, ui_lang(), bin_dir=act_bin())
+    if result is None:
+        cmd = far('stop')(r, ans, fleet) if r.get('far') else sh('fleet-worker-stop.sh', fleet, 'fid:' + r['fid'])
+        try:
+            q = subprocess.run(cmd, env=act_env(fleet), capture_output=True, text=True,
+                               stdin=subprocess.DEVNULL, timeout=60)
+            result = (q.returncode, one_line(((q.stderr.strip() or q.stdout.strip()).splitlines() or [""])[-1], 120))
+        except (OSError, subprocess.TimeoutExpired):
+            result = (1, "")
+    return result
+
+
 def act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     reactivates = a.get("id") in ("resume", "continue", "message", "answer")
     result = _act_run(qo, vid, fleet, a, r, ans, client, wait=True if r.get("archived") and reactivates else wait)
@@ -5727,17 +5808,20 @@ def _act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
     argv = fn(r, ans, fleet)
     label = a["label"](r).rstrip("…")
     if a["id"] == "archive":
-        # Archive = stop + hide (task DDBQ): stop first; a stop that fails archives nothing.
-        if archive_stops(r):
-            result = stop_task(r, ui_lang(), bin_dir=act_bin())
-            if result is None:
-                cmd = far('stop')(r, ans, fleet) if r.get('far') else sh('fleet-worker-stop.sh', fleet, 'fid:' + r['fid'])
-                try:
-                    q = subprocess.run(cmd, env=act_env(fleet), capture_output=True, text=True,
-                                       stdin=subprocess.DEVNULL, timeout=60)
-                    result = (q.returncode, one_line(((q.stderr.strip() or q.stdout.strip()).splitlines() or [""])[-1], 120))
-                except (OSError, subprocess.TimeoutExpired):
-                    result = (1, "")
+        # Archive = stop + hide (task DDBQ): stop first; a stop that fails archives
+        # nothing. The sessions it opened go with it, stopped the same way.
+        family = []
+        if r.get("opened"):
+            want = set(r["opened"])
+            family = [d for d in entries(vid) if d.get("kind") == "sess" and d.get("board") in want]
+            if len({d["board"] for d in family}) != len(want):
+                # the list moved since the menu: never archive what was not asked
+                return 1, say("view_overlay_gone"), False
+            family = [act_row(fleet, d) for d in family]
+        for x in ([r] + family) if not r.get("archived") else []:
+            if not archive_stops(x):
+                continue
+            result = archive_stop(x, ans, fleet)
             if result[0] != 0:
                 return result[0], say("view_act_failed_fmt", label, result[1]), False
         # A Hub preference works even when the session's node is offline.
@@ -5751,7 +5835,8 @@ def _act_run(qo, vid, fleet, a, r, ans, client="", wait=True):
             said = (p.stderr.strip() or p.stdout.strip()).splitlines()
             return p.returncode, say("view_act_failed_fmt", label, one_line(said[-1] if said else "", 120)), False
         r["archived"] = not r.get("archived", False)
-        _ARCHIVE_HOLD[r["board"]] = (r["archived"], time.monotonic() + 30, 0)
+        for board in [r["board"]] + list(r.get("opened") or []):
+            _ARCHIVE_HOLD[board] = (r["archived"], time.monotonic() + 30, 0)
         hub_reread(fleet)
         return 0, say("view_act_done_fmt", label), False
     if argv == 'taskcontinue':
