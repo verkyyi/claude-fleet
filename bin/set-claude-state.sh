@@ -581,6 +581,10 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
       [ -f "${0%/*}/fleet_task_notify.py" ] \
         && (python3 "${0%/*}/fleet_task_notify.py" turn --pane "$TMUX_PANE" --state "${wstate:-$sem}" \
               --transcript "${_tp:-}" </dev/null >/dev/null 2>&1 &) ;;
+    looping)
+      # a Stop on a wait: re-asked for a while, the turn written if it clears
+      [ "$sem" = 'done' ] && [ -f "${0%/*}/fleet_task_notify.py" ] \
+        && (python3 "${0%/*}/fleet_task_notify.py" settle --pane "$TMUX_PANE" </dev/null >/dev/null 2>&1 &) ;;
   esac
   # Web sessions continue at a clean boundary even after their page closes
   # (T943). The shared gate judges the native error; this hook authorizes no

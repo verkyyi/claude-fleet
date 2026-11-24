@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """fleet_task_notify.py — a task session's turn, written to its own ID ledger (task T9AQ).
 
-    fleet_task_notify.py turn --pane %P --state done|needs [--transcript F]
+    fleet_task_notify.py turn --pane %P --state done|needs [--transcript F] [--socket S]
+    fleet_task_notify.py settle --pane %P [--socket S]   a Stop that wrote `looping`: re-ask
+                                                    every 5 s for FLEET_TASK_NOTIFY_SETTLE (120) s
     fleet_task_notify.py summary <transcript>      → the last reply's (uuid, text), for tests
 
 set-claude-state.sh runs `turn` in the background after it writes `done` or
-`needs` on a window that carries a hub task (@task). It reads the reply the turn
+`needs` on a window that carries a hub task (@task); fleet_window_reeval
+(fleet-lib.sh) runs it when a stale `looping` it re-asks turns out `done` — a turn
+that ended while a background job's last word was still settling. It reads the reply the turn
 ended on — the transcript's last assistant text (Claude), else the agent's own
 OSC 7501 words (@agent_status, Codex) or the open dialog's question
 (@claude_needs_detail) — and appends ONE event to the window's ID ledger:
@@ -38,9 +42,12 @@ PR_URL_RE = re.compile(r"github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)/pull/([1-
 PR_WORD_RE = re.compile(r"\bPR\s*#([1-9][0-9]{0,9})\b")
 
 
+SOCKET = []
+
+
 def tmux(*a):
     try:
-        return subprocess.run(["tmux"] + list(a), capture_output=True, text=True, timeout=5).stdout
+        return subprocess.run(["tmux"] + SOCKET + list(a), capture_output=True, text=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
 
@@ -154,15 +161,42 @@ def turn(pane, state, transcript):
     return 0
 
 
+def settle(pane, secs=None):
+    """A task window's Stop wrote `looping` (a wait the turn left behind — often a
+    background job's last word still settling). Re-ask it (fleet_window_reeval) a
+    few times; once it reads `done`, the re-ask's own hook writes the turn."""
+    import time
+    if not pane or os.environ.get("FLEET_TASK_NOTIFY", "1") == "0":
+        return 0
+    if not tmux("display-message", "-p", "-t", pane, "#{@task}").strip():
+        return 0
+    try:
+        secs = int(os.environ.get("FLEET_TASK_NOTIFY_SETTLE", "120")) if secs is None else secs
+    except ValueError:
+        secs = 120
+    end = time.time() + max(0, secs)
+    while time.time() < end:
+        time.sleep(5)
+        if tmux("display-message", "-p", "-t", pane, "#{@claude_state}").strip() != "looping":
+            return 0   # a prompt, a new Stop or another re-ask decided it
+        sock = SOCKET[1] if SOCKET else ""
+        r = subprocess.run(["bash", "-c", '. "$1/fleet-lib.sh"; fleet_window_reeval "$2" "$3"', "-", BIN,
+                            os.path.basename(sock) if sock else "", pane],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode == 0 and "-> done" in r.stdout:
+            return 0
+    return 0
+
+
 def main(argv):
     if argv[:1] == ["summary"] and len(argv) == 2:
         uid, text = last_reply(argv[1])
         print(json.dumps({"uuid": uid, "text": text, "artifacts": artifacts_of(text)}, ensure_ascii=False))
         return 0
-    if argv[:1] != ["turn"]:
+    if argv[:1] not in (["turn"], ["settle"]):
         sys.stderr.write(__doc__)
         return 2
-    opts = {"--pane": "", "--state": "", "--transcript": ""}
+    opts = {"--pane": "", "--state": "", "--transcript": "", "--socket": ""}
     it = iter(argv[1:])
     for a in it:
         if a in opts:
@@ -170,6 +204,10 @@ def main(argv):
         else:
             sys.stderr.write("unknown option %s\n" % a)
             return 2
+    if opts["--socket"]:
+        SOCKET[:] = ["-S", opts["--socket"]]   # a daemon's call (fleet_window_reeval): no $TMUX
+    if argv[0] == "settle":
+        return settle(opts["--pane"])
     return turn(opts["--pane"], opts["--state"], opts["--transcript"])
 
 
