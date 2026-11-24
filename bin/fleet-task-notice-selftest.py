@@ -30,7 +30,23 @@ spec.loader.exec_module(fixture)
 @unittest.skipUnless(fixture.TMUX, "tmux unavailable")
 class TaskNotice(unittest.TestCase):
     def setUp(self):
-        self.r = fixture.Rig(self, "claude")
+        # every test here shares the Rig's label (agent + pid): the last test's
+        # server may still be going down — wait it out, once more if it was not
+        import os, time
+        label = "fadcl%d" % os.getpid()
+        for attempt in range(3):
+            for _ in range(50):
+                if subprocess.run([fixture.TMUX, "-L", label, "has-session"], capture_output=True).returncode != 0:
+                    break
+                subprocess.run([fixture.TMUX, "-L", label, "kill-server"], capture_output=True)
+                time.sleep(0.1)
+            try:
+                self.r = fixture.Rig(self, "claude")
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 2:
+                    raise
+                time.sleep(1)
         self.addCleanup(self.r.close)
         self.r.env.update(FLEET_SKIP_GLOBAL_CONF="1", CCQUOTA_FLEET="1")
         self.fid = str(uuid.uuid4())
