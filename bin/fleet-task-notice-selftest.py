@@ -57,7 +57,7 @@ class TaskNotice(unittest.TestCase):
         frm = self.fleet + "/" + self.task_fid
         text = "[任务通知] N4BN 完成 · 调研\n结论：报告在 ~/.claude/handoff/x-report.md\n全文：fleet-task-record.sh get N4BN"
         return dict(id=frm + "#tn-" + state + "-" + suffix, kind="message", **{"from": frm}, to=to,
-                    from_node="mini2", payload=dict(text=text, task_notice=dict(task="N4BN", fid=self.task_fid,
+                    from_node="mac-b", payload=dict(text=text, task_notice=dict(task="N4BN", fid=self.task_fid,
                                                                                  state=state, title="调研")))
 
     def notices(self):

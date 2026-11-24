@@ -21,9 +21,9 @@ const (
 func noticeRig(t *testing.T) *store.Store {
 	t.Helper()
 	st := storetest.OpenFleet(t)
-	// the dispatcher's machine (mini2): its fleet lists the dispatching window
+	// the dispatcher's machine (mac-b): its fleet lists the dispatching window
 	workers := `[{"worker_id":"` + noticeDispFleet + `/scratch-134","identity":"` + noticeDispFID + `"}]`
-	if _, err := st.RecordFleetSnapshot("ep-d", "mini2", "alice", "m-d",
+	if _, err := st.RecordFleetSnapshot("ep-d", "mac-b", "alice", "m-d",
 		[]store.FleetReport{{FleetID: noticeDispFleet, Name: "fleet", State: "up", WorkersJSON: workers}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestTaskNoticeDispatcherMovedLogin(t *testing.T) {
 	// the dispatcher's window is gone from its fleet's list (closed / cleared):
 	// the notice still goes to its machine, whose node puts it in 「✦ 消息」.
 	st := noticeRig(t)
-	if _, err := st.RecordFleetSnapshot("ep-d", "mini2", "alice", "m-d",
+	if _, err := st.RecordFleetSnapshot("ep-d", "mac-b", "alice", "m-d",
 		[]store.FleetReport{{FleetID: noticeDispFleet, Name: "fleet", State: "up", WorkersJSON: `[]`}}, time.Now()); err != nil {
 		t.Fatal(err)
 	}

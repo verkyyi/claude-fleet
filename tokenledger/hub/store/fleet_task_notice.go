@@ -199,7 +199,7 @@ func raiseTaskNotice(tx *sql.Tx, r *idRow, n taskNotice, now time.Time) (string,
 		short = FleetIDCode(r.ID)
 	}
 	body, _ := json.Marshal(map[string]any{
-		"text": TaskNoticeText(short, title, n.State, n.Summary, n.PR, n.Artifacts, r.Machine),
+		"text":        TaskNoticeText(short, title, n.State, n.Summary, n.PR, n.Artifacts, r.Machine),
 		"task_notice": map[string]string{"task": short, "fid": r.ID, "state": n.State, "title": oneLine(title, 120)},
 	})
 	at := now.UTC().Format(rfc)
