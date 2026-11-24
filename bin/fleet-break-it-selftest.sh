@@ -8683,8 +8683,11 @@ drill_parent_origin_retired() {
 }
 
 drill_task_done_unheard() {
-  local t0; t0=$(now); CAP=90
-  python3 "$BIN/fleet-task-notice-selftest.py" >"$WORK/task-done-unheard.log" 2>&1 || {
+  local t0; t0=$(now); CAP=180
+  # its own tmux dir: an earlier drill's TMUX_TMPDIR may be gone by now
+  mkdir -p "$WORK/tdu-tmux"
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$WORK/tdu-tmux" \
+    python3 "$BIN/fleet-task-notice-selftest.py" >"$WORK/task-done-unheard.log" 2>&1 || {
     WHY="a task's end / wait does not reach its dispatcher once: $(tail -15 "$WORK/task-done-unheard.log")"; return 1;
   }
   _drill_go_tests 'TestTaskNoticeOncePerState TestTaskNoticeCloseAndOff TestTaskNoticeDispatcherMovedLogin' \

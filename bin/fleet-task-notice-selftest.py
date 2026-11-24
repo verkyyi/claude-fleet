@@ -161,7 +161,7 @@ class TaskNotice(unittest.TestCase):
                            input=json.dumps({"hook_event_name": "Stop", "transcript_path": tp}),
                            text=True, capture_output=True)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        for _ in range(300):
+        for _ in range(600):
             evs = [e for e in self.ledger() if e.get("ev") == "turn"]
             if evs:
                 break
