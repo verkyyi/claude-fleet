@@ -706,6 +706,9 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 				return err
 			}
 		}
+		if st == TaskNoticeDone && strings.TrimSpace(summary) == "" && pr == "" {
+			return nil // a done with no reply (an older node's startup idle) tells nobody anything
+		}
 		return s.noticeOn(tx, r, taskNotice{State: st, Mark: evStr(ev, "mark", 64), Summary: summary, PR: pr,
 			Artifacts: noticeArtifacts(ev)})
 	case "closed":

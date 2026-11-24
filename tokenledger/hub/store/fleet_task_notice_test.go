@@ -85,11 +85,15 @@ func TestTaskNoticeOncePerState(t *testing.T) {
 		_ = got
 	}
 	ev(1, `"ev":"opened","agent":"claude"`)
+	// the agent's startup idle (a done with no reply, from an older node): nothing
+	if got, err := push(t, st, "ep-w", w, ledger(t, `{"id":"`+w+`","seq":2,"ts":1001,"ev":"turn","state":"done","mark":"e0","summary":""}`)); err != nil || len(got.Notify) != 0 {
+		t.Fatalf("an empty done raised a notice: %v %v", got.Notify, err)
+	}
 	if n := notices(t, st, w); len(n) != 0 {
 		t.Fatalf("opened raised %d notices", len(n))
 	}
 	// the turn ends: one notice, down the DISPATCHER's endpoint, to its window
-	got, err := push(t, st, "ep-w", w, ledger(t, `{"id":"`+w+`","seq":2,"ts":1002,"ev":"turn","state":"done","mark":"aa11","summary":"调研完成，报告在 ~/.claude/handoff/x-report.md","pr":"o/r#7","artifacts":["https://example.com/p"]}`))
+	got, err := push(t, st, "ep-w", w, ledger(t, `{"id":"`+w+`","seq":3,"ts":1003,"ev":"turn","state":"done","mark":"aa11","summary":"调研完成，报告在 ~/.claude/handoff/x-report.md","pr":"o/r#7","artifacts":["https://example.com/p"]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,29 +130,29 @@ func TestTaskNoticeOncePerState(t *testing.T) {
 	}
 
 	// the same reply said again (the Stop hook AND the agent's OSC 7501): nothing new
-	ev(3, `"ev":"turn","state":"done","mark":"aa11","summary":"调研完成"`)
+	ev(4, `"ev":"turn","state":"done","mark":"aa11","summary":"调研完成"`)
 	// a resend of what landed: nothing new
-	if _, err := push(t, st, "ep-w", w, ledger(t, `{"id":"`+w+`","seq":2,"ts":1002,"ev":"turn","state":"done","mark":"zz","summary":"x"}`)); err != nil {
+	if _, err := push(t, st, "ep-w", w, ledger(t, `{"id":"`+w+`","seq":3,"ts":1003,"ev":"turn","state":"done","mark":"zz","summary":"x"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if n := notices(t, st, w); len(n) != 1 {
 		t.Fatalf("a repeated turn raised a second notice: %d", len(n))
 	}
 	// it waits on a person: one 等人
-	ev(4, `"ev":"turn","state":"waiting","mark":"bb22","summary":"要不要合并？"`)
 	ev(5, `"ev":"turn","state":"waiting","mark":"bb22","summary":"要不要合并？"`)
+	ev(6, `"ev":"turn","state":"waiting","mark":"bb22","summary":"要不要合并？"`)
 	// the explicit result after it: a done again (the state changed)
-	ev(6, `"ev":"result","state":"succeeded","summary":"merged"`)
+	ev(7, `"ev":"result","state":"succeeded","summary":"merged"`)
 	// …and a second result in the same state, then the close: nothing
-	ev(7, `"ev":"result","state":"merged","summary":"merged"`)
-	ev(8, `"ev":"closed","reason":"reaped"`)
+	ev(8, `"ev":"result","state":"merged","summary":"merged"`)
+	ev(9, `"ev":"closed","reason":"reaped"`)
 	n = notices(t, st, w)
 	var states []string
 	for _, r := range n {
 		_, suf, _ := strings.Cut(r.ID, "#tn-")
 		states = append(states, suf)
 	}
-	if strings.Join(states, ",") != "done-aa11,waiting-bb22,done-r6" {
+	if strings.Join(states, ",") != "done-aa11,waiting-bb22,done-r7" {
 		t.Fatalf("notices = %v", states)
 	}
 	if !strings.Contains(n[1].Payload, "在等：要不要合并") || !strings.Contains(n[1].Payload, "等人") {

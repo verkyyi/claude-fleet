@@ -136,6 +136,8 @@ def turn(pane, state, transcript):
         text = needs_detail.strip() + ("\n\n" + text if text and needs_detail.strip() not in text else "")
     if not text:
         text = str(said.get("msg") or "") if isinstance(said, dict) else ""
+    if status == "done" and not text.strip():
+        return 0  # no reply yet: the agent's startup idle (OSC 7501) is not a finished task
     mark = hashlib.sha1(("%s|%s|%s" % (status, uid, text if not uid else "")).encode("utf-8")).hexdigest()[:16]
     if mark == last_mark:
         return 0  # this turn's word is already written
