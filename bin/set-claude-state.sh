@@ -573,6 +573,15 @@ if [ "$sem" != "leave" ] && [ -z "$held" ]; then
     tmux "$@" \; set-window-option -t "$TMUX_PANE" @claude_state_ts "$(date +%s)" 2>/dev/null
   }
   _write_state
+  # A task session's turn that ended (done) or waits on a person (needs) goes on
+  # its ID ledger — the hub tells the task's dispatcher, once per state (task
+  # T9AQ). Backgrounded; the script itself skips a window with no @task.
+  case "${wstate:-$sem}" in
+    done|needs)
+      [ -f "${0%/*}/fleet_task_notify.py" ] \
+        && (python3 "${0%/*}/fleet_task_notify.py" turn --pane "$TMUX_PANE" --state "${wstate:-$sem}" \
+              --transcript "${_tp:-}" </dev/null >/dev/null 2>&1 &) ;;
+  esac
   # Web sessions continue at a clean boundary even after their page closes
   # (T943). The shared gate judges the native error; this hook authorizes no
   # exit and never waits for a transfer. Old installs without it keep working.

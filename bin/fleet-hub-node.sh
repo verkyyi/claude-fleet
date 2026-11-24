@@ -221,6 +221,15 @@ else:
     if not text.strip():
         sys.exit("empty message")
     open(os.path.join(work, "msg"), "w").write(text)
+    # A task's completion notice (task T9AQ, the hub's own — fleet_task_notice.go):
+    # with no live window for its dispatcher it goes to 「✦ 消息」, never waits.
+    tn = p.get("task_notice")
+    if isinstance(tn, dict):
+        code = re.sub(r"[^A-Za-z0-9]", "", str(tn.get("task") or ""))[:26]
+        st = str(tn.get("state") or "")
+        if not code or st not in ("done", "waiting", "failed", "ended"):
+            sys.exit("bad task notice")
+        open(os.path.join(work, "notice"), "w").write("%s\t%s" % (code, st))
     # The repo the sender meant (issue #1649) — a bare issue:<N> matched by number
     # — and an issue comment the sender's bridge forwarded: checked and applied below.
     repo = str(p.get("repo") or "")
@@ -257,13 +266,32 @@ home=$(fleet_wid_home "wid:$TO") || die 1 "target $TO is not a fleet on this mac
 sock=$(fleet_socket "$home")
 pkey=${TO#*/}
 fkey=${FROM#*/}
+
+# A task notice whose dispatcher has no live window here (closed, or never on this
+# login's screen again): one row in 「✦ 消息」 naming the task, settled delivered —
+# the hub never holds it for a window that may not come back (task T9AQ). The
+# relay id is the row's tag, so a resend after a lost ack writes nothing twice.
+task_notice_kept() {
+  local code st first sub
+  IFS=$'\t' read -r code st < "$WORK/notice"
+  case "$st" in "done") sub="done" ;; waiting) sub=ask ;; *) sub=stuck ;; esac   # fleet_notice.py cls_of
+  if ! python3 "$BIN/fleet_notice.py" seen "$RID" >/dev/null 2>&1; then
+    first=$(head -n2 "$WORK/msg" | tr "\n" " ")
+    python3 "$BIN/fleet_notice.py" notify "$( [ "$st" = "done" ] && echo info || echo warn )" "$first" \
+      --next "fleet-task-record.sh get $code" --kind session --sub "$sub" --tag "$RID" \
+      --source task-notice --no-draw </dev/null >/dev/null 2>&1 \
+      || die 75 "could not write 「✦ 消息」 for task $code"
+  fi
+  printf 'kept in ✦ 消息 at %s: %s has no live window (task %s)\n' "$(hostname -s 2>/dev/null)" "$pkey" "$code" >&2
+  exit 0
+}
 # An identity-form recipient resolves through its stable @fleet_id.
 pfwin=''
 if fleet_is_fid "$pkey"; then
   pfwin=$(fleet_win_for_fid "$pkey" "$sock" 2>/dev/null) || pfwin=''
   # Not live here (yet): the hub holds it and pushes it again the beat this
   # machine's inventory lists that identity (issue #1647).
-  [ -n "$pfwin" ] || die 75 "not now: recipient $pkey has no live window here"
+  [ -n "$pfwin" ] || { [ -s "$WORK/notice" ] && task_notice_kept; die 75 "not now: recipient $pkey has no live window here"; }
   # No-repo sessions may have no key; their stable identity remains usable.
   _pk=$(fleet_window_okey "$home" "$pfwin" 2>/dev/null)
   [ -n "$_pk" ] && pkey=$_pk
@@ -273,7 +301,8 @@ if [ "$KIND" = message ]; then
   loc=$(fleet_worker_locate "wid:$TO" "$home" 2>/dev/null)
   case "$loc" in
     local\ *) ;;
-    *) die 75 "not now: $TO has no live window here" ;;
+    *) [ -s "$WORK/notice" ] && task_notice_kept
+       die 75 "not now: $TO has no live window here" ;;
   esac
   # The repo rail (issue #1649): a sender that matched a bare issue:<N> by number
   # names the repo it meant; a window here working ANOTHER repo's #N never gets it.
@@ -289,6 +318,8 @@ if [ "$KIND" = message ]; then
   # bridge is gone (issue #4899) — refused for good, never re-sent.
   [ -s "$WORK/bridge" ] && die 1 "no issue bridge here (removed, claude-fleet#4899) — the comment was not delivered"
   text="[from $fkey on ${NODE:-another machine}]"$'\n'"$(cat "$WORK/msg")"
+  # a task notice says who it is from itself (its first line names the task)
+  [ -s "$WORK/notice" ] && text=$(cat "$WORK/msg")
   out=$(env -u TMUX FLEET_PEER_DELIVERY_ID="$RID" FLEET_PEER_RELAY_RETRY=1 bash "$BIN/fleet-peer-send.sh" -L "$sock" "wid:$TO" "$text" 2>&1); rc=$?
   case "$rc" in
     0) printf '%s\n' "$out" >&2; exit 0 ;;

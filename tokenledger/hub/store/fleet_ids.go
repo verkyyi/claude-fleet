@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -296,6 +297,9 @@ type FleetIDPushed struct {
 	Seq     int    `json:"seq"`
 	Short   string `json:"short"`
 	Machine string `json:"machine,omitempty"`
+	// Notify: endpoints a task notice was raised for in this push (task
+	// T9AQ) — the caller pushes their relays now.
+	Notify []string `json:"-"`
 }
 
 func (s *Store) ensureFleetIDs() error {
@@ -449,6 +453,8 @@ type idRow struct {
 	// who opened it (task PV5W): agent | schedule | api, from its `opened`
 	// session_source — the list keeps a closed session in its group
 	sessionSource string
+	// endpoints a task notice was raised for (fleet_task_notice.go)
+	noticeEPs []string
 }
 
 // ApplyFleetIDEvents applies a node's events in seq order (see the file's head).
@@ -583,7 +589,7 @@ func (s *Store) ApplyFleetIDEvents(p FleetIDPush) (FleetIDPushed, error) {
 	if err := tx.Commit(); err != nil {
 		return FleetIDPushed{}, err
 	}
-	return FleetIDPushed{Seq: r.Seq, Short: r.Short, Machine: r.Machine}, nil
+	return FleetIDPushed{Seq: r.Seq, Short: r.Short, Machine: r.Machine, Notify: r.noticeEPs}, nil
 }
 
 func nonNil(l []string) []string {
@@ -675,14 +681,44 @@ func (s *Store) applyIDEvent(tx *sql.Tx, r *idRow, ev map[string]any, seq int, t
 			return err
 		}
 		// EPIC T644 C6: the record it carries ends in the same transaction.
-		_, err := writeTaskResult(tx, r.Owner, r.ID, r.taskID, taskRefsOf(r.Task, r.Aliases), st, pr, seq, time.Now())
-		return err
+		if _, err := writeTaskResult(tx, r.Owner, r.ID, r.taskID, taskRefsOf(r.Task, r.Aliases), st, pr, seq, time.Now()); err != nil {
+			return err
+		}
+		// …and its dispatcher hears it (task T9AQ), once per state.
+		ns := TaskNoticeFailed
+		switch st {
+		case "merged", "succeeded", "done":
+			ns = TaskNoticeDone
+		case "blocked", "waiting":
+			ns = TaskNoticeWaiting
+		case "failed":
+		default:
+			return nil // stopped / unknown: no word for the dispatcher
+		}
+		return s.noticeOn(tx, r, taskNotice{State: ns, Mark: "r" + strconv.Itoa(seq), Summary: evStr(ev, "summary", 2000),
+			PR: pr, NewState: true})
+	case "turn":
+		// A task session's turn ended or waits on a person (task T9AQ,
+		// bin/fleet_task_notify.py): the record's note / pr, and its dispatcher's notice.
+		st, summary, pr := evStr(ev, "state", 20), evStr(ev, "summary", 2000), evStr(ev, "pr", 210)
+		if st == TaskNoticeDone && (strings.TrimSpace(summary) != "" || pr != "") {
+			if err := writeTaskNote(tx, r, oneLine(summary, 1000), pr, time.Now()); err != nil {
+				return err
+			}
+		}
+		return s.noticeOn(tx, r, taskNotice{State: st, Mark: evStr(ev, "mark", 64), Summary: summary, PR: pr,
+			Artifacts: noticeArtifacts(ev)})
 	case "closed":
 		// the node's own word wins over a reconcile's (BCYB: hub:gone …)
 		if r.ClosedAt == 0 || strings.HasPrefix(r.CloseReason, IDHubClose) {
 			r.ClosedAt, r.CloseReason = ts, evStr(ev, "reason", 200)
 			// A4G2: the session is over — a record it carries with no result ends too
 			if _, err := endTasksOnIDClose(tx, r.Owner, r.ID, r.taskID, taskRefsOf(r.Task, r.Aliases), r.CloseReason, time.Now()); err != nil {
+				return err
+			}
+			// a session that closed before saying anything: its dispatcher hears that (T9AQ)
+			if err := s.noticeOn(tx, r, taskNotice{State: TaskNoticeEnded, Mark: "c" + strconv.Itoa(seq),
+				Summary: "会话已关闭（" + r.CloseReason + "）", OnlyFirst: true}); err != nil {
 				return err
 			}
 			if r.natives > 0 {

@@ -155,6 +155,10 @@
 #                                                   bin/fleet-hub-node.sh (deliver: an identity found here is
 #                                                   never «not now»), fleet-lib.sh fleet_window_okey (a keyless
 #                                                   session's key is its @fleet_id, issue #4341)
+#   task-done-unheard                               bin/fleet_task_notify.py (off set-claude-state.sh),
+#                                                   bin/fleet-hub-node.sh (deliver: a task_notice with no live
+#                                                   window → 「✦ 消息」 once), bin/fleet-task-notice-selftest.py;
+#                                                   the hub half: hub/store/fleet_task_notice_test.go
 #   orphan-report-unseen                            bin/fleet-orphan-reports.py, fleet-control-read.sh column 31,
 #                                                   fleet_hub_common.py orphan_rep_cell
 #   reap-other-repo-clears / reap-stale-stamp       bin/fleet-cleanup-idle.py, fleet_reap_notice.py, fleet-reap-live.py
@@ -8675,6 +8679,21 @@ drill_parent_origin_retired() {
     WHY="Parent ancestry reintroduced: $(tail -8 "$WORK/parent-origin-retired.log")"; return 1;
   }
   WHAT='真实隔离tmux拆窗保留FID/native/task且不复制Parent；旧ID历史不变，prev接续可路由、Parent不可'
+  SECS=$(since "$t0")
+}
+
+drill_task_done_unheard() {
+  local t0; t0=$(now); CAP=180
+  # its own tmux dir: an earlier drill's TMUX_TMPDIR may be gone by now
+  mkdir -p "$WORK/tdu-tmux"
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$WORK/tdu-tmux" \
+    python3 "$BIN/fleet-task-notice-selftest.py" >"$WORK/task-done-unheard.log" 2>&1 || {
+    WHY="a task's end / wait does not reach its dispatcher once: $(tail -15 "$WORK/task-done-unheard.log")"; return 1;
+  }
+  _drill_go_tests 'TestTaskNoticeOncePerState TestTaskNoticeCloseAndOff TestTaskNoticeDispatcherMovedLogin' \
+    "$ROOT/tokenledger/hub/store/fleet_task_notice_test.go" \
+    '任务一轮结束/问人写一条turn；hub每个状态只发一条给派发者、写note/pr；派发者窗口在就按身份投进（/clear后照收），不在就进✦消息一次；重推不重复（go test）' \
+    ./hub/store || return 1
   SECS=$(since "$t0")
 }
 
