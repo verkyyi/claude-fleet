@@ -74,6 +74,11 @@ type BoardRow struct {
 	Context     [2]string `json:"context"`
 	Coordinator string    `json:"coordinator,omitempty"`
 	Outcome     string    `json:"outcome,omitempty"`
+	// The record's conclusion and PR (task T9AQ): its session's last reply's
+	// first words and the PR it named — what `fleet ls` / `show` read once the
+	// session is parked or gone.
+	Note string `json:"note,omitempty"`
+	PR   string `json:"pr,omitempty"`
 
 	ID                string    `json:"id"`
 	Code              string    `json:"code,omitempty"`
@@ -437,6 +442,7 @@ func (s *Server) buildBoard(owner string, live []FleetSession, now time.Time) (*
 			r.ExecutionEndpoint = t.ExecutionEndpoint
 			r.CancelRequest, r.Generation = t.CancelRequest, t.Generation
 			r.Outcome = taskEnd(*t)
+			r.Note, r.PR = t.Note, t.PR
 			if r.Agent == "" && t.ActualAgent != "" {
 				r.Agent, r.AgentBasis = t.ActualAgent, "actual"
 			}

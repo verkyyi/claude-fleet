@@ -989,6 +989,8 @@ def tool_task(args):
         argv += ["--agent", args["coding_agent"]]
     if args.get("model"):
         argv += ["--model", args["model"]]   # task J7BN: a DeepSeek session, placed by the hub
+    if args.get("notify") is False:
+        argv += ["--notify", "off"]          # task T9AQ: no completion message to the caller
     r = run(argv, input_text=args.get("body", ""), check=False, timeout=FILE_TIMEOUT_S + SPAWN_TIMEOUT_S,
             env=spawn_env(ASSERT_TTL_S))
     out = {"command": "fleet-task-record.sh", "exit": r.returncode, "stdout": r.stdout, "stderr": r.stderr}
@@ -1623,6 +1625,10 @@ TOOLS = {
             "model": START_MODEL,
             "agent": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
                       "description": "The agent file a no-repo session starts as (issue #3122)."},
+            "notify": {"type": "boolean", "description": "Default true: when the task finishes, fails or "
+                       "waits on a person, YOU get one message (task code · title · its last reply's first "
+                       "words · PR / report / link · state) — into this session, or its 「✦ 消息」 if this "
+                       "window is gone. Do not poll for it. false = no message."},
 },
             "required": ["title"], "additionalProperties": False}}),
     "send": (tool_send, {

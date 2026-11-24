@@ -99,6 +99,10 @@ func (s *Server) handleNodeIDs(w http.ResponseWriter, r *http.Request) {
 			httpError(w, http.StatusInternalServerError, "could not store the events")
 			return
 		}
+		// a task notice this push raised (task T9AQ): down its dispatcher's node now
+		for _, target := range got.Notify {
+			go s.dispatchRelays(target)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": in.ID, "seq": got.Seq, "short": got.Short})
 	case ref == "" && r.Method == http.MethodGet && r.URL.Query().Has("parent"):
 		parent := r.URL.Query().Get("parent")

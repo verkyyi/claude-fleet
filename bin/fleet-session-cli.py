@@ -177,13 +177,17 @@ def pending_rows(rs, gone_too=False):
                     matched['fleet_id'] = r['fid']
                 matched.update(archived=r.get("archived", False), board=r.get("board"), code=r.get("code") or matched.get("code") or "", cancel_request=r.get('cancel_request') or '', generation=r.get('generation'),
                                task=r.get('task') or matched.get('task') or '',
+                               # the record's conclusion / PR (task T9AQ)
+                               note=r.get('note') or matched.get('note') or '',
+                               pr=matched.get('pr') or r.get('pr') or '',
                                execution_endpoint=r.get('execution_endpoint') or matched.get('execution_endpoint') or '')
                 continue
             ended = gone_too and r.get("gone") and not r.get("archived")
             if not (ended or r.get("archived") or pending_start_task(r) or fleet_view.controlled_stop_task(r)) or r.get("fid") in known:
                 continue
             rs.append(dict(key="id:" + r["board"], name=r["name"], title=r["text"],
-                           state=r.get("state") or "starting", node=r.get("machine") or "", issue="", pr="", reap="",
+                           state=r.get("state") or "starting", node=r.get("machine") or "", issue="", pr=r.get("pr") or "", reap="",
+                           note=r.get("note") or "",
                            group="", repo=r.get("repo") or "", ended="gone" if ended else "", task=r["task"],
                            archived=r.get("archived", False), board=r.get("board"),
                            record_only=True, pending_start=r.get('pending_start',False),
@@ -710,7 +714,7 @@ def cmd_ls(args):
     rs = attach_bus(rs)
     if "--json" in args:
         keep = ("key", "name", "state", "issue", "node", "pr", "reap", "title", "group", "repo", "test",
-                "archived", "worker_id", "fleet_id", "ended", "task", "code", "pending_start", "record_only")
+                "archived", "worker_id", "fleet_id", "ended", "task", "code", "pending_start", "record_only", "note")
         derived = (("progress", progress), ("epic_url", epic_link))
         bus = (("agent", "agent"), ("ctx_left", "left"), ("ctx_band", "band"), ("ctx_ts", "ts"),
                ("model", "model"), ("effort", "effort"), ("ask_kind", "ask_kind"), ("ask", "ask"))
@@ -782,7 +786,7 @@ def cmd_show(args):
     if row is None:
         return rc
     attach_bus([row])
-    lines = fields(row, sys.stdout.isatty() and not os.environ.get("NO_COLOR"), short=False) + [("标题", row.get("title") or ""), ("总单", epic_link(row)), ("仓库", row.get("repo") or ""),
+    lines = fields(row, sys.stdout.isatty() and not os.environ.get("NO_COLOR"), short=False) + [("标题", row.get("title") or ""), ("结论", row.get("note") or ""), ("总单", epic_link(row)), ("仓库", row.get("repo") or ""),
                            ("分组", row.get("group") or ""), ("key", row["key"])]
     w = max(cells(k) for k, _ in lines)
     for k, v in lines:

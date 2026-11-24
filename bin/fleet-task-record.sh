@@ -60,6 +60,7 @@
 #                       set / attach print the task's code (else T<n>) on stdout
 #   fleet-task-record.sh dispatch --title T [--body-file F|-] [--repo o/n]
 #                     [--spawn] [--reap P] [--agent A] [--model M] [--session S] [--origin O] [--via V] [--print]
+#                     [--notify on|off]
 #                     → the `task` tool: the record FIRST (a local text file the
 #                       body names — ~/fleet-drafts/… — rides in it, T793:
 #                       fleet_local_refs.py; what cannot is said on stderr) (its code, then
@@ -81,6 +82,11 @@
 #                       --model deepseek|deepseek-pro (task J7BN): a DeepSeek
 #                       session (Claude Code), placed by the hub in its region —
 #                       the spawner asks the hub with the model, never opens it here.
+#                       --notify off (task T9AQ): the calling session ($FLEET_FROM_FID,
+#                       request_payload.from_fid) is NOT messaged when the task ends or
+#                       waits on a person; on (the default) it gets one ordinary message
+#                       per state (the hub's fleet_task_notice.go), its 「✦ 消息」 when
+#                       its window is gone.
 #   fleet-task-record.sh retitle T<n> --from F --title T
 #                     → a blank session's record renamed ONCE (T652): from its
 #                       placeholder F to its first prompt's first line T — the
@@ -336,7 +342,7 @@ EOF
 esac
 
 if [ "$cmd" = dispatch ]; then
-  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' tsess='' pwin='' origin='' via=编排 blank=0 model=''
+  title='' bodyf='' repo='' spawn=0 reap='' agent='' as_agent='' tsess='' pwin='' origin='' via=编排 blank=0 model='' notify=on
   while [ $# -gt 0 ]; do
     case "$1" in
       --title) title="${2:-}"; shift ;;
@@ -354,6 +360,8 @@ if [ "$cmd" = dispatch ]; then
       --via) via="${2:-编排}"; shift ;;
       --print) pwin=--print ;;
       --blank) blank=1 ;;
+      # --notify off (task T9AQ): its end / wait is not messaged to the caller
+      --notify) case "${2:-}" in on|off) notify=$2 ;; *) die 2 "--notify must be on or off" ;; esac; shift ;;
       # --model (task J7BN): a DeepSeek session — Claude Code, placed by the hub
       # in its region (dash-raw-session.sh --model); none = the agent's own
       --model)
@@ -451,11 +459,11 @@ PYTITLE
     # the dispatch and the record's payload in ONE interpreter (T992: they were
     # fleet_dispatch.py + a payload `python3 -` — two starts, ~0.2 s): line 1 the
     # dispatch (fleet_dispatch.resolve, its CLI's own call), line 2 the payload
-    both=$(python3 - "$BIN" "$agent" "$template" "${FLEET_AGENT:-}" "$tok" "$title" "$body" "$repo" "$reap" "$as_agent" "$via" "$model" "$blank" "${FLEET_FROM_FID:-}" <<'JSON'
+    both=$(python3 - "$BIN" "$agent" "$template" "${FLEET_AGENT:-}" "$tok" "$title" "$body" "$repo" "$reap" "$as_agent" "$via" "$model" "$blank" "${FLEET_FROM_FID:-}" "$notify" <<'JSON'
 import json,re,sys
 sys.path.insert(0, sys.argv[1])
 import fleet_dispatch
-agent,template,default,tok,title,body,repo,reap,as_agent,via,model,blank,from_fid=sys.argv[2:]
+agent,template,default,tok,title,body,repo,reap,as_agent,via,model,blank,from_fid,notify=sys.argv[2:]
 try:
     d=fleet_dispatch.resolve([agent] if agent else [], template, "", default, None, tok)
 except (ValueError, TypeError) as e:
@@ -466,6 +474,8 @@ print(json.dumps(dict(authority_version=1, token=d["request_id"], title=title, v
     requested_agent=d["requested_agent"], resolved_agent=d["resolved_agent"],
     request_payload=dict(dispatch=d,title=title,body=body,blank=blank=="1",repo=repo,reap=reap,template=as_agent,rule="",draft="",pr_note="",
                          **({"model": model} if model else {}),
+                         # its end / wait is messaged to from_fid unless off (task T9AQ)
+                         **({"notify": "off"} if notify == "off" else {}),
                          # who opened it, by ID (task PV5W): the list draws it under that session
                          **({"from_fid": from_fid} if re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", from_fid) else {}))),
     ensure_ascii=False))   # the hub reads 16 KB: UTF-8 words, not \uXXXX (half the bytes — T661)
