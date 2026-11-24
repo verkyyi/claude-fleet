@@ -4757,7 +4757,10 @@ drill_epic_driver_unknown_command() {
 drill_cross_send_queued_receipt() {
   CAP=120; local started
   started=$(now)
-  python3 "$BIN/fleet-return-message-selftest.py" >"$WORK/queued-receipt.out" 2>&1 \
+  # its own tmux dir: an earlier drill's exported TMUX_TMPDIR may be gone by now
+  mkdir -p "$WORK/cqr-tmux"
+  env -u TMUX -u TMUX_PANE TMUX_TMPDIR="$WORK/cqr-tmux" \
+    python3 "$BIN/fleet-return-message-selftest.py" >"$WORK/queued-receipt.out" 2>&1 \
     || { WHY="$(tail -8 "$WORK/queued-receipt.out" | tr '\n' ' ')"; return 1; }
   SECS=$(since "$started"); WHAT='pending inbox retries the same relay; final receipt follows native delivery'
 }

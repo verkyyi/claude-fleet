@@ -9955,6 +9955,12 @@ fleet_window_reeval() {
   # Wake the spinner (issue #887), the same marker the Stop hook touches.
   [ -n "$sp" ] && : > "$sp.dirty" 2>/dev/null
   fleet_hub_nudge   # …and the hub (issue #1481)
+  # A task session whose stale wait cleared has ended its turn after all: its
+  # dispatcher hears it now, as from a Stop that wrote `done` (task T9AQ).
+  if [ "$ns" = 'done' ] && [ -f "${BASH_SOURCE[0]%/*}/fleet_task_notify.py" ]; then
+    ( python3 "${BASH_SOURCE[0]%/*}/fleet_task_notify.py" turn --pane "$t" --state "done" ${sp:+--socket "$sp"} \
+        </dev/null >/dev/null 2>&1 & )
+  fi
   return 0
 }
 

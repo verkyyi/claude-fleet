@@ -30,7 +30,23 @@ spec.loader.exec_module(fixture)
 @unittest.skipUnless(fixture.TMUX, "tmux unavailable")
 class TaskNotice(unittest.TestCase):
     def setUp(self):
-        self.r = fixture.Rig(self, "claude")
+        # every test here shares the Rig's label (agent + pid): the last test's
+        # server may still be going down — wait it out, once more if it was not
+        import os, time
+        label = "fadcl%d" % os.getpid()
+        for attempt in range(3):
+            for _ in range(50):
+                if subprocess.run([fixture.TMUX, "-L", label, "has-session"], capture_output=True).returncode != 0:
+                    break
+                subprocess.run([fixture.TMUX, "-L", label, "kill-server"], capture_output=True)
+                time.sleep(0.1)
+            try:
+                self.r = fixture.Rig(self, "claude")
+                break
+            except subprocess.CalledProcessError:
+                if attempt == 2:
+                    raise
+                time.sleep(1)
         self.addCleanup(self.r.close)
         self.r.env.update(FLEET_SKIP_GLOBAL_CONF="1", CCQUOTA_FLEET="1")
         self.fid = str(uuid.uuid4())
@@ -173,6 +189,53 @@ class TaskNotice(unittest.TestCase):
             time.sleep(0.1)
         self.assertEqual([(e["state"], e["summary"]) for e in evs], [("done", "全部完成")],
                          "state=%s err=%s" % (self.r.tm("display-message", "-p", "-t", self.r.pane, "#{@claude_state}"), p.stderr[-500:]))
+
+    def test_reeval_done_writes_the_turn(self):
+        # a Stop that wrote `looping` on a stale wait (a background job's last word
+        # still settling); the re-ask that turns it `done` writes the turn (fleet-lib.sh)
+        import time
+        self.r.opt("@task", "T1481")
+        self.r.opt("@claude_state", "looping")
+        self.r.opt("@claude_wait", "tool")
+        home = self.r.root / "home"
+        proj = home / ".claude" / "projects" / "x"
+        proj.mkdir(parents=True)
+        sid = self.r.tm("display-message", "-p", "-t", self.r.win, "#{@cc_session_id}")
+        (proj / (sid + ".jsonl")).write_text(json.dumps({"type": "assistant", "uuid": "u7",
+            "message": {"content": [{"type": "text", "text": "后台跑完了，全部完成"}]}}, ensure_ascii=False) + "\n")
+        env = dict(self.r.env, HOME=str(home))
+        p = self.run_cmd("bash", "-c", '. "$1/fleet-lib.sh"; fleet_window_reeval "$2" "$3"', "-", str(BIN),
+                         self.r.label, self.r.win, env=env)
+        self.assertIn("-> done", p.stdout)
+        for _ in range(600):
+            evs = [e for e in self.ledger() if e.get("ev") == "turn"]
+            if evs:
+                break
+            time.sleep(0.1)
+        self.assertEqual([(e["state"], e["summary"]) for e in evs], [("done", "后台跑完了，全部完成")])
+
+    def test_settle_after_a_stale_looping_stop(self):
+        # the Stop wrote `looping` on a wait that clears a moment later: settle
+        # re-asks it, the re-ask writes `done`, its hook writes the turn
+        import time
+        self.r.opt("@task", "T1481")
+        self.r.opt("@claude_state", "looping")
+        self.r.opt("@claude_wait", "tool")
+        home = self.r.root / "home"
+        proj = home / ".claude" / "projects" / "y"
+        proj.mkdir(parents=True)
+        sid = self.r.tm("display-message", "-p", "-t", self.r.win, "#{@cc_session_id}")
+        (proj / (sid + ".jsonl")).write_text(json.dumps({"type": "assistant", "uuid": "u8",
+            "message": {"content": [{"type": "text", "text": "等的任务跑完了"}]}}, ensure_ascii=False) + "\n")
+        sock = self.r.tm("display-message", "-p", "#{socket_path}")
+        env = dict(self.r.env, HOME=str(home), TMUX=sock + ",1,0", FLEET_TASK_NOTIFY_SETTLE="30")
+        self.run_cmd("python3", str(BIN / "fleet_task_notify.py"), "settle", "--pane", self.r.pane, env=env)
+        for _ in range(600):
+            evs = [e for e in self.ledger() if e.get("ev") == "turn"]
+            if evs:
+                break
+            time.sleep(0.1)
+        self.assertEqual([(e["state"], e["summary"]) for e in evs], [("done", "等的任务跑完了")])
 
 
 if __name__ == "__main__":
