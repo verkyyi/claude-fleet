@@ -67,7 +67,7 @@ check("B: dash-issue-session.sh stamps @from_fid",
       'fleet_is_fid "${FLEET_FROM_FID:-}" && _sw+=(\\; set-window-option -t "$win" @from_fid "$FLEET_FROM_FID")' in iss)
 rec = read("bin", "fleet-task-record.sh")
 check("B: the record's payload carries from_fid",
-      '"${FLEET_FROM_FID:-}" <<\'JSON\'' in rec and '{"from_fid": from_fid}' in rec)
+      '"${FLEET_FROM_FID:-}" "$notify" <<\'JSON\'' in rec and '{"from_fid": from_fid}' in rec)
 check("B: a migration carries it", "@session_source @from_fid\"" in read("bin", "fleet-migrate.sh"))
 
 # ---- C: the column ----------------------------------------------------------------
