@@ -9958,7 +9958,7 @@ fleet_window_reeval() {
   # A task session whose stale wait cleared has ended its turn after all: its
   # dispatcher hears it now, as from a Stop that wrote `done` (task T9AQ).
   if [ "$ns" = 'done' ] && [ -f "${BASH_SOURCE[0]%/*}/fleet_task_notify.py" ]; then
-    ( python3 "${BASH_SOURCE[0]%/*}/fleet_task_notify.py" turn --pane "$t" --state done ${sp:+--socket "$sp"} \
+    ( python3 "${BASH_SOURCE[0]%/*}/fleet_task_notify.py" turn --pane "$t" --state "done" ${sp:+--socket "$sp"} \
         </dev/null >/dev/null 2>&1 & )
   fi
   return 0
