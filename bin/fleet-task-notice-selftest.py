@@ -130,6 +130,11 @@ class TaskNotice(unittest.TestCase):
         return str(f)
 
     def test_turn_writes_one_event_per_reply(self):
+        # the agent's startup idle (OSC 7501 → done) before any reply: nothing
+        self.r.opt("@task", "T1481")
+        self.turn("done", self.transcript())
+        self.assertEqual(self.ledger(), [], "a done with no reply wrote a turn")
+        self.r.tm("set-option", "-w", "-u", "-t", self.r.win, "@task")
         tp = self.transcript(("u1", "做完了。PR https://github.com/o/r/pull/12 · 报告 ~/.claude/handoff/x-report.md"))
         self.turn("done", tp)
         self.assertEqual(self.ledger(), [], "a window with no @task wrote a turn")
