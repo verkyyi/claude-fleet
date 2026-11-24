@@ -274,10 +274,10 @@ fkey=${FROM#*/}
 task_notice_kept() {
   local code st first sub
   IFS=$'\t' read -r code st < "$WORK/notice"
-  case "$st" in done) sub=done ;; waiting) sub=ask ;; *) sub=stuck ;; esac   # fleet_notice.py cls_of
+  case "$st" in "done") sub=done ;; waiting) sub=ask ;; *) sub=stuck ;; esac   # fleet_notice.py cls_of
   if ! python3 "$BIN/fleet_notice.py" seen "$RID" >/dev/null 2>&1; then
     first=$(head -n2 "$WORK/msg" | tr "\n" " ")
-    python3 "$BIN/fleet_notice.py" notify "$( [ "$st" = done ] && echo info || echo warn )" "$first" \
+    python3 "$BIN/fleet_notice.py" notify "$( [ "$st" = "done" ] && echo info || echo warn )" "$first" \
       --next "fleet-task-record.sh get $code" --kind session --sub "$sub" --tag "$RID" \
       --source task-notice --no-draw </dev/null >/dev/null 2>&1 \
       || die 75 "could not write 「✦ 消息」 for task $code"
