@@ -399,7 +399,9 @@ func loadFleetAccountKey(srv *api.Server) error {
 // darwin-arm64 — a build missing one is refused, claude-fleet#2631);
 // CCQUOTA_FLEET_RELEASE_NPM the registries a missing Claude Code is fetched
 // from (default npm, then npmmirror); CCQUOTA_FLEET_RELEASE_PREV_KEY the key
-// the signing key replaced (it vouches for the new one).
+// the signing key replaced (it vouches for the new one);
+// CCQUOTA_FLEET_RELEASE_KEEP how many releases the store keeps (default
+// api.ReleaseKeep = 3; unset, not a number or < 1 = the default).
 //
 // The signing key's home is the release train, not here (claude-fleet#3559):
 // CCQUOTA_FLEET_RELEASE_ROOT is the offline root's PUBLIC key (`ed25519
@@ -409,6 +411,21 @@ func loadFleetAccountKey(srv *api.Server) error {
 // CCQUOTA_FLEET_RELEASE_REVOKED names the root's revocation list to hand out at
 // once (/v1/fleet/release/revoked). Neither key: no releases. A key that cannot
 // be read, or one without a dir: the hub refuses to start.
+// releaseKeep reads CCQUOTA_FLEET_RELEASE_KEEP: a whole number ≥ 1, else
+// api.ReleaseKeep (an unreadable value is said once, never fatal).
+func releaseKeep(v string) int {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return api.ReleaseKeep
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		log.Printf("fleet: CCQUOTA_FLEET_RELEASE_KEEP=%q is not a whole number ≥ 1 — keeping %d releases", v, api.ReleaseKeep)
+		return api.ReleaseKeep
+	}
+	return n
+}
+
 func loadFleetReleases(srv *api.Server) error {
 	path := os.Getenv("CCQUOTA_FLEET_RELEASE_KEY")
 	rootSpec := strings.TrimSpace(os.Getenv("CCQUOTA_FLEET_RELEASE_ROOT"))
@@ -455,7 +472,8 @@ func loadFleetReleases(srv *api.Server) error {
 	srv.Releases = &api.ReleaseStore{Dir: dir, Key: key, Root: root, RevokedFile: os.Getenv("CCQUOTA_FLEET_RELEASE_REVOKED"), Repo: repo, Source: srv.Stable,
 		DistDir: srv.FleetDistDir, DistSrc: SrcDigest, ArtifactsDir: os.Getenv("CCQUOTA_FLEET_RELEASE_ARTIFACTS"),
 		Platforms:     strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_PLATFORMS")),
-		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM"))}
+		NPMRegistries: strings.Fields(os.Getenv("CCQUOTA_FLEET_RELEASE_NPM")),
+		Keep:          releaseKeep(os.Getenv("CCQUOTA_FLEET_RELEASE_KEEP"))}
 	// CCQUOTA_FLEET_RELEASE_PREV_KEY: the key this one replaced, kept for the
 	// overlap — it vouches for the new one at key-endorsement, and every
 	// client that pinned it takes the new key by itself (claude-fleet#3162)

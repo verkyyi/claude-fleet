@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/verkyyi/claude-fleet/tokenledger/hub/api"
+	"github.com/verkyyi/claude-fleet/tokenledger/shared/release"
 )
 
 func TestBindHosts(t *testing.T) {
@@ -127,5 +130,36 @@ func TestReleaseKeyOnUnmountedVolume(t *testing.T) {
 	t.Setenv("CCQUOTA_CHECK_UNMOUNTED", "")
 	if err := loadFleetReleases(srv); err == nil {
 		t.Fatal("a missing key with no check hint did not refuse the start")
+	}
+}
+
+// CCQUOTA_FLEET_RELEASE_KEEP sets how many releases the store keeps; unset,
+// not a number or < 1 keeps api.ReleaseKeep (3) — 10 filled the hub's disk on
+// 2026-11-26.
+func TestReleaseKeepFromEnv(t *testing.T) {
+	if api.ReleaseKeep != 3 {
+		t.Fatalf("default keep %d, want 3", api.ReleaseKeep)
+	}
+	for v, want := range map[string]int{"": 3, " ": 3, "5": 5, " 7 ": 7, "1": 1, "0": 3, "-2": 3, "ten": 3, "2.5": 3} {
+		if got := releaseKeep(v); got != want {
+			t.Errorf("CCQUOTA_FLEET_RELEASE_KEEP=%q: keep %d, want %d", v, got, want)
+		}
+	}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CCQUOTA_FLEET_RELEASE_KEY", "")
+	t.Setenv("CCQUOTA_FLEET_RELEASE_ROOT", release.FormatPublicKey(pub))
+	t.Setenv("CCQUOTA_FLEET_RELEASE_DIR", t.TempDir())
+	for v, want := range map[string]int{"": 3, "6": 6, "nope": 3} {
+		t.Setenv("CCQUOTA_FLEET_RELEASE_KEEP", v)
+		srv := &api.Server{Stable: &api.StableSource{}}
+		if err := loadFleetReleases(srv); err != nil || srv.Releases == nil {
+			t.Fatalf("KEEP=%q: err %v, releases %v", v, err, srv.Releases)
+		}
+		if srv.Releases.Keep != want {
+			t.Errorf("KEEP=%q: store Keep %d, want %d", v, srv.Releases.Keep, want)
+		}
 	}
 }
