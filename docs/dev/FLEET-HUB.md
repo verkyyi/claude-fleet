@@ -1535,8 +1535,8 @@ with a code, never `unknown`:
   asked), `failed:*` 5 for an unknown outcome, never counted as reaped. That
   reap is the confirmed one, so without `--yes` it is `skip:needs-confirm`
   and nothing is sent; the node's adapter sets `FLEET_REAP_LOCAL=1` so its
-  own run never bounces back. So `/fleet-epic-run`'s per-tick
-  `dash-reap.sh <key> --yes` and ⌘P's 回收 on a remote row
+  own run never bounces back. Explicit
+  `dash-reap.sh <key> --yes` calls and ⌘P's 回收 on a remote row
   (`fleet-row-remote.sh reap`, the same toast as a local row's) reap
   another machine's merged window the way they reap one here. An older node
   that writes no fields back is read off its error message. Hub off: the

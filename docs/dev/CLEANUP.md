@@ -165,8 +165,8 @@ Every report is also appended to the parent's children ledger
 (`$FLEET_STATE/children/<parent-key>.ndjson`, issue #937), delivered or not. A
 parent verifies a report — or asks how all its children are doing — with ONE
 read of `bin/fleet-children.sh` (ledger + live window state + the PR
-cache), never a `gh pr list` + `capture-pane` per report; `/fleet-epic-run` says
-so (issue #940).
+cache), never a `gh pr list` + `capture-pane` per report (issue #940).
+This describes historical Parent/report behavior; EPIC commands are retired.
 The reporting selftest uses two local windows and the actual inbox transport.
 
 | Piece | What |

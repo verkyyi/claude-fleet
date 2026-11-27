@@ -846,8 +846,8 @@ From `fleet doctor`.
 
 From `fleet doctor`.
 
-- **What it is**: whether someone is still driving a batch of tasks (an EPIC).
-- **On WARN / FAIL**: the heartbeat stopped while the batch's parent task (`T<n>`) is still open: resume its driver session from `/fleet-history`, or run `/fleet-epic-run --task T<n>` in a session. The batch is on the hub's Sessions page, its members under the parent task and the driver's last tick beside it.
+- **What it is**: a compatibility check for heartbeat marks left by older EPIC drivers. EPIC commands and the dedicated driver are retired.
+- **On WARN / FAIL**: review the old task record and its implementation evidence. An ordinary Task's Agent can continue the remaining work under your authorization; the old charter is background context.
 
 #### `socket`
 

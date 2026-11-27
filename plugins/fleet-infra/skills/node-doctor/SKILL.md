@@ -109,7 +109,7 @@ fleet doctor | grep -E '^ *(WARN|FAIL) '        # 只看要动的
 | `drill` | machine | [release-rules] | 演练标记（故意失败）：更新器会回滚，不用动 |
 | `emit` | node | [node-doctor] | 事件外发：装 curl，或修 `FLEET_EMIT_URL` 的接收端 |
 | `entry` | node | [runbook-door-down] | 入口端口：名单落后 / 配置被拒 / 有人却没在听 |
-| `epic` | node | [node-doctor] | 批次没人在跑：在一个不绑单的会话里重新 `/fleet-epic-run <N>` |
+| `epic` | node | [node-doctor] | 旧批次心跳已停：查看旧任务记录，由普通 Task 的 Agent 按授权继续；EPIC 驱动入口已退役 |
 | `files` | node | [mac-node-prep] | 打开文件数快满：找出谁开的，必要时调高系统上限 |
 | `firstrun` | node | [mac-node-prep] | 首次运行检查没过：照行内修 |
 | `fleet` | node | [release-rules] | 常驻服务还跑切换前的版本：照行内重启；客户端落后：`fleet update` |

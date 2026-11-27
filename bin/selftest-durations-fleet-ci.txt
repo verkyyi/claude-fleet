@@ -47,7 +47,6 @@
 8.8 dist-no-github-selftest.sh
 2.0 dist-source-selftest.sh
 6.3 doctor-resident-selftest.sh
-0.0 epic-autoreport-selftest.sh
 0.1 epic-page-selftest.sh
 0.9 epic-page-surface-selftest.sh
 1.0 fleet-account-add-selftest.sh

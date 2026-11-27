@@ -5,8 +5,7 @@
 #
 #   A  manifests: the marketplace lists exactly the plugins/ dirs, each entry's
 #      source is its dir and its name the dir's plugin.json name; epic
-#      depends on nothing (its driver dispatches with
-#      the core's tools, issue #4334); every plugin pins a version;
+#      depends on nothing (issue #4334); every plugin pins a version;
 #      `claude plugin validate` passes (when claude is on PATH)
 #   B  paths: every skill has name + description frontmatter, every command /
 #      agent / hooks.json / .mcp.json the plugin carries exists and parses, and
@@ -29,18 +28,11 @@
 #      when git can tell)
 #   H  the real thing (claude on PATH): a sandbox HOME adds the marketplace and
 #      lists none of the three; install fleet-browser lists it; uninstall
-#      lists none again; install fleet-epic carries its three commands, epic-page
-#      and agents/epic-driver.md (and pulls in no other plugin, #4334)
-#   I  the epic plugin (issue #3116, EPIC #3111 C5): fleet-epic carries
-#      /fleet-epic-plan · run · report · /fleet-task-plan (T661), epic-page (its
-#      task-page example among it) and the epic-driver agent file
-#      (`fleet: reap: loop-end`, every tool — spawn among them); the core ships
-#      no epic-driver; installed, `--as epic-driver` (the orchestrator's driver
-#      line) resolves to the plugin's file and the launch says `--agent
-#      epic-driver`; not installed, there is no such agent; a login an older
-#      release shipped epic-driver into gets fleet-epic (carry-over, D); it names
-#      no steward and no /fleet-orchestrate, and the driver mounts fleet-orch itself
-#      (EPIC #4333 C5, issue #4338: a batch runs with only fleet-epic installed)
+#      lists none again; install fleet-epic carries fleet-task-plan and epic-page
+#      (and pulls in no other plugin, #4334)
+#   I  the epic plugin retains task design pages; old --as driver names refuse
+#      with ROLE_RETIRED, even if the plugin is not installed. conf/gone.list
+#      guards the removed EPIC command and agent paths.
 #   J  a retired plugin (fleet-feedback, issue #4904): installed here ⇒ ensure
 #      uninstalls it (--dry-run only says so); not installed ⇒ nothing runs;
 #      the marketplace no longer lists it
@@ -265,9 +257,9 @@ out=$(ens --gone "$WORK/gone")
 hasnt "installed fleet-epic@claude-fleet" "$out" "D carry-over: an old epic command cannot reinstall automation"
 hasnt "installed fleet-browser" "$out" "D carry-over: an installed plugin is not re-installed"
 
-# carry-over of an agent file the core shipped (issue #3116): epic-driver left
-# conf/agent-defaults/ for plugins/fleet-epic/agents/; a login holding the shipped
-# copy in ~/.claude/agents gets fleet-epic before the agentfiles pass retires it
+# An older core shipped epic-driver into ~/.claude/agents (issue #3116).
+# Its presence must not reinstall retired automation; the agentfiles pass
+# retires the untouched copy and preserves a personal edit.
 echo '[{"id":"fleet-browser@claude-fleet","version":"0.1.0","folderVersion":"0.1.0","enabled":true}]' > "$ST/installed.json"
 rm -f "$CD/commands/fleet-epic-run.md"
 printf 'conf/agent-defaults/claude/agents/epic-driver.md\n' > "$WORK/gone"
@@ -332,16 +324,11 @@ fi
 
 # ---- I: the epic plugin (issue #3116) ---------------------------------------------
 EP="$ROOT/plugins/fleet-epic"
-for f in commands/fleet-epic-plan.md commands/fleet-epic-run.md commands/fleet-epic-report.md \
-         commands/fleet-task-plan.md skills/epic-page/task-page.example.json \
-         skills/epic-page/SKILL.md skills/epic-page/template.html agents/epic-driver.md; do
+# Retired command/agent paths are guarded by conf/gone.list.
+for f in commands/fleet-task-plan.md skills/epic-page/task-page.example.json \
+         skills/epic-page/SKILL.md skills/epic-page/template.html; do
   [ -f "$EP/$f" ] && st_count || fail "I fleet-epic carries no $f"
 done
-for name in plan run report; do
-  has "EPIC_RETIRED" "$(cat "$EP/commands/fleet-epic-$name.md")" "I $name explicitly retires without dispatch"
-done
-has "ROLE_RETIRED" "$(cat "$EP/agents/epic-driver.md")" "I direct native driver explains retirement"
-has "tools: []" "$(cat "$EP/agents/epic-driver.md")" "I driver grants no dispatch tools"
 AE=$(mktemp -d "$WORK/ae.XXXXXX")
 adef() { env HOME="$AE" CLAUDE_CONFIG_DIR="$AE/.claude" FLEET_CONF_DIR="$AE/conf" \
            FLEET_AGENT_PLUGINS_CMD="cat '$AE/plugins.json'" python3 "$BIN/fleet-agent-def.py" "$@" 2>&1; }
@@ -438,7 +425,7 @@ if command -v claude >/dev/null 2>&1 && claude plugin validate --help >/dev/null
   [ -z "$(ids)" ] && st_count || fail "H uninstall → none" "$(ids)"
   out=$(hc install fleet-epic@claude-fleet) || fail "H install fleet-epic" "$out"
   case " $(ids) " in *" fleet-epic@claude-fleet "*) st_count ;; *) fail "H install fleet-epic → listed" "$(ids)" ;; esac
-  for f in agents/epic-driver.md commands/fleet-epic-run.md commands/fleet-task-plan.md skills/epic-page/SKILL.md; do
+  for f in commands/fleet-task-plan.md skills/epic-page/SKILL.md; do
     ls "$H"/.claude/plugins/cache/claude-fleet/fleet-epic/*/"$f" >/dev/null 2>&1 && st_count \
       || fail "H the installed fleet-epic carries $f"
   done

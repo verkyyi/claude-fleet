@@ -14,7 +14,7 @@
     {
       "name": "fleet-epic",
       "source": "./plugins/fleet-epic",
-      "description": "Task design pages (/fleet-task-plan); old EPIC commands explain their retirement. Optional, never installed by migration."
+      "description": "Task design pages (/fleet-task-plan) and the epic-page skill. Optional, never installed by migration."
     },
     {
       "name": "fleet-browser",

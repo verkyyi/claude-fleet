@@ -190,8 +190,8 @@ cx sync >/dev/null                                   # back onto $MK
 
 # ---- E: mention / command / doctor -------------------------------------------------
 [ "$(q mention epic-page)" = fleet-epic:epic-page ] || fail "E mention epic-page" "$(q mention epic-page)"; st_count
-[ "$(q command fleet-epic-run)" = "$HOME_C/plugins/cache/claude-fleet/fleet-epic/9.9.9/commands/fleet-epic-run.md" ] \
-  || fail "E command fleet-epic-run" "$(q command fleet-epic-run)"; st_count
+[ "$(q command fleet-task-plan)" = "$HOME_C/plugins/cache/claude-fleet/fleet-epic/9.9.9/commands/fleet-task-plan.md" ] \
+  || fail "E command fleet-task-plan" "$(q command fleet-task-plan)"; st_count
 q mention mine >/dev/null && fail "E a personal entry has no mention"; st_count
 q command nope >/dev/null && fail "E no such command"; st_count
 doc=$(cx doctor); rc=$?

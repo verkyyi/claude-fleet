@@ -846,8 +846,8 @@ fleet doctor --json
 
 来自 `fleet doctor`。
 
-- **是什么**：一批任务（EPIC）是不是还有人在推。
-- **WARN / FAIL 怎么办**：心跳停了而批次的父任务（`T<n>`）还没收口：从 `/fleet-history` 续上它的驱动会话，或在一个会话里跑 `/fleet-epic-run --task T<n>`。批次在 hub 的会话页里，父任务下面挂着成员，旁边就是驱动最后一拍写的进度。
+- **是什么**：兼容检查旧 EPIC 驱动留下的心跳标记；EPIC 命令和专属驱动已退役。
+- **WARN / FAIL 怎么办**：查看旧任务记录和实施证据。EPIC 命令和专属驱动已退役；由普通 Task 的 Agent 按你的授权继续剩余工作，旧章程仅作背景。
 
 #### `socket`
 

@@ -275,17 +275,18 @@ one-off drill / audit records do not go in the repo (issue #3576).
   bare PATH by `fleet_find_tool` / `fleet_path_fill`; `fleet-doctor`'s `tools` row.
 - **A running EPIC batch does NOT hold the install — one mark PER BATCH, and a
   batch may span versions** (issues #953, #2062, #2934; EPIC #2074 C1).
-  `/fleet-epic-run` stamps `$FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>`
-  (`_-T<n>` for a batch on hub tasks, issue #4957) every tick (`bin/fleet-epic-heartbeat.sh`) and at its end clears ONLY its own
+  This is legacy compatibility: EPIC commands and the dedicated driver are retired.
+  Older sessions used `bin/fleet-epic-heartbeat.sh` to stamp
+  `$FLEET_CONF_DIR/global/epic-running.d/<repo slug>-<N>` (`_-T<n>` for hub tasks,
+  issue #4957) every tick and at the end clear ONLY their own mark
   (`--clear <N>`; a bare `--clear` refuses while several batches are marked);
   `fleet_epic_running_fresh` / `fleet_epic_holding` (`bin/fleet-lib.sh`) are the
   readers. **The hold is off by default** (issue #2934, the 发起人's call): a
   switch moves `current/` and the daemons, never a running session, so
   `fleet-install-sync.sh` and `fleet-node-update.py` switch to a new stable even
   mid-batch (state `epic: off (不挡) …`, `status` `hold    off`). Batch
-  consistency is the driver's book: `/fleet-epic-run` runs
-  `bin/fleet-epic-floor.sh record <EPIC> <member>` after each dispatch (`T<n>` both, since #4957) and the report
-  prints 「本批跨了 K 个版本」 (`show`). `FLEET_EPIC_HOLD_CAP_SECS=<secs>` opts back
+  version history from older drivers remains readable through
+  `bin/fleet-epic-floor.sh show <EPIC>`; their reports printed 「本批跨了 K 个版本」 (`show`). `FLEET_EPIC_HOLD_CAP_SECS=<secs>` opts back
   into the old capped hold: a batch WITH WORK (#2247: `--live` / `--inflight`,
   `live 0` + `inflight 0` = idle) defers the tick BEFORE the switch, for at most
   that long on ONE clock per login / machine (#2843), then switches and notes it

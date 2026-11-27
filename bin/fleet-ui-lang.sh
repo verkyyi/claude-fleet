@@ -894,8 +894,8 @@ fleet_ui_t() {
     en:sidebar_epic_stale_detail_fmt) printf 'heartbeat stopped %s min ago · tap again to reopen its driver' "${1:-}" ;;
     zh:sidebar_ask_epic_fmt)    printf '#%s 没人在跑 — 重开驱动会话？' "${1:-}" ;;
     en:sidebar_ask_epic_fmt)    printf '#%s is not driven — reopen its driver?' "${1:-}" ;;
-    zh:sidebar_epic_reopen)     printf '重开驱动会话 /fleet-epic-run' ;;
-    en:sidebar_epic_reopen)     printf 'Reopen the driver /fleet-epic-run' ;;
+    zh:sidebar_epic_reopen)     printf '旧 EPIC 驱动入口已退役，请查看任务记录' ;;
+    en:sidebar_epic_reopen)     printf 'The EPIC driver is retired; review the task record' ;;
     zh:sidebar_epic_reopen_keys) printf '↵ 开 · esc 取消' ;;
     en:sidebar_epic_reopen_keys) printf '↵ open · esc cancel' ;;
     zh:sidebar_epic_reopening_fmt) printf '在开 #%s 的驱动会话…' "${1:-}" ;;

@@ -12,8 +12,8 @@
 #   C  fleet-claude.sh: `--as <name>` ⇒ the argv carries `--agent <name>` and the
 #      file's model is the FLEET_MODEL default (a fleet's FLEET_MODEL still wins);
 #      no --as ⇒ no agent / role argument at all, byte for byte as before; the
-#      shipped fleet-worker / orchestrator and the plugin's epic-driver answer
-#      --as; a file gone at launch ⇒ a plain session and one stderr line
+#      shipped fleet-worker answers --as; retired driver names refuse distinctly;
+#      another file gone at launch ⇒ a plain session and one stderr line
 #   D  a Claude Code with no `--agent` (its --help says so): the same file rides
 #      --tools / --disallowedTools / --append-system-prompt-file instead; one that
 #      hangs on --help is given ~5 s, then counts as knowing it
@@ -23,12 +23,12 @@
 #   F  ship: the core's agent files land in ~/.claude/agents once, follow the
 #      release while still the fleet's bytes, and are never touched once the
 #      person edits (theirs) or deletes (left out) one; one the core no longer
-#      ships (epic-driver, now the fleet-epic plugin's — issue #3116) is retired
+#      ships (the historical epic-driver — issue #3116) is retired
 #      while still the fleet's bytes, kept once edited, and is not shipped at all
 #   G  the wiring: both spawners take --as and hand it to the wrapper, the wrapper's
 #      resume keeps it, the `spawn` tool's `agent` reaches dash-issue-session.sh
-#      --as; the shipped fleet-worker and fleet-epic's epic-driver have an EMPTY
-#      body (a body replaces Claude Code's own system prompt)
+#      --as; the shipped fleet-worker has an EMPTY body
+#      (a body replaces Claude Code's own system prompt)
 #   H  a Codex start never runs the Claude CLI (issue #4726): `launch --agent codex`
 #      or a spawner's `--for codex` with no shipped file ⇒ exit 1 and no plugin
 #      command run; a cached plugin answer (even a stale one) still answers; a
@@ -114,7 +114,7 @@ eq "C: a fleet's FLEET_MODEL still wins" "$(fc env FLEET_MODEL=fable bash "$BIN/
 case "$(fc bash "$BIN/fleet-claude.sh" x)" in *--agent*|*--role*|*append-system-prompt*) st_miss "C: a plain launch carries a role argument" ;;
   *) st_ok "C: a plain launch carries no agent / role argument" ;; esac
 python3 "$BIN/fleet-agent-def.py" ship >/dev/null
-# epic-driver is the fleet-epic plugin's (issue #3116): installed, it answers
+# Retired role names refuse even when the old plugin is listed as installed:
 printf '[{"id": "fleet-epic@claude-fleet", "enabled": true, "installPath": "%s"}]\n' "$ROOT/plugins/fleet-epic" > "$WORK/plugins.json"
 rm -f "$FLEET_CONF_DIR/agents/plugins.json"
 eq "C: --as fleet-worker" "$(fc bash "$BIN/fleet-claude.sh" --as fleet-worker x)" "--model opus --agent fleet-worker x"
@@ -230,7 +230,7 @@ f=conf/agent-defaults/claude/agents/fleet-worker.md
 b=$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import importlib; m = importlib.import_module("fleet-agent-def"); print(repr(m.parse(open(sys.argv[2]).read())[1]))' \
       "$BIN" "$ROOT/$f")
 eq "G: the shipped $f has an empty body (Claude Code keeps its own system prompt)" "$b" "''"
-# (the core ships no epic-driver — fleet-epic carries it, #3116: conf/gone.list)
+# (the retired epic-driver paths are guarded by conf/gone.list)
 python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("agents") == [] else 1)' "$ROOT/.claude-plugin/plugin.json" \
   && st_ok "G: plugin.json still says \"agents\": []" || st_miss "G: .claude-plugin/plugin.json must say \"agents\": []"
 

@@ -306,3 +306,10 @@ text PlJ5dFCF T1248 tokenledger/README.md,tokenledger/hub/,deploy/
 
 # Reactivation restores visibility; maintenance warm does not.
 re 新回复不会自动取消归档 T1308 docs/dev/CLIENT.md
+
+# EPIC entrypoints retired in #5362: their one-release stubs have expired.
+path plugins/fleet-epic/commands/fleet-epic-plan.md #5362
+path plugins/fleet-epic/commands/fleet-epic-run.md #5362
+path plugins/fleet-epic/commands/fleet-epic-report.md #5362
+path plugins/fleet-epic/agents/epic-driver.md #5362
+path bin/epic-autoreport-selftest.sh #5362

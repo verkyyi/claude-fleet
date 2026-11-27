@@ -138,8 +138,8 @@ slow work, so they repaint instantly:
   (keyed by the parent's key, not its window id, so a migrated parent keeps its
   book). `bin/fleet-children.sh` merges that ledger with each child's live state
   into one line per child plus the same `3/5 ✓ · 1!` summary the list draws —
-  one command instead of a `gh pr` + capture-pane per report — the check
-  `/fleet-epic-run` prescribes on a report (#940). Since #938
+  one command instead of a `gh pr` + capture-pane per report — the historical
+  report check (#940; EPIC commands are now retired). Since #938
   each event also carries a **tier** (`report_tier`): **loud** (someone must act —
   BLOCKED, FAILED not being fixed, REAPED unmerged/dirty, a true STOPPED, a child
   in `needs`) and **quiet** (MERGED, FAILED while fixing) are delivered; **silent**

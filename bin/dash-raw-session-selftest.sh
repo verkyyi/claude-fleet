@@ -387,8 +387,6 @@ want_line=$(sed -n "s/^FLEET_EPIC_RUN_LINE='\(.*\)'$/\1/p" "$BIN/dash-raw-sessio
   || fail "N2 a legacy /fleet-epic-run first line must become the plain words, the charter kept" "$(cat "$tf" 2>/dev/null)"
 printf '%s' "$want_line" | grep -qF 'EPIC_RETIRED' \
   || fail "N2 the legacy charter must identify retired orchestration"
-grep -qF 'EPIC_RETIRED' "$BIN/../plugins/fleet-epic/commands/fleet-epic-plan.md" \
-  || fail "N2 the old plan command must remain a retirement stub"
 reset_scratch
 WINS=$'plan' FLEET_MAX_SESSIONS=0 run_raw --prompt '/fleet-epic-runner x'
 tf="$(grep -o "cat '[^']*task_scratch-1.txt'" "$NEWWIN_LOG" | head -1 | sed "s/^cat '//; s/'$//")"

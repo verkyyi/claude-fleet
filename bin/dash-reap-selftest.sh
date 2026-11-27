@@ -827,15 +827,10 @@ REAP_STATE="done" PANE_PID=$AG MERGED_HEADS=issue-31 MERGED_ISO=$IN_LIFE \
 grep -qE "RUNSHELL .*--exec full 'merged-pr' '[0-9]+'" "$TMLOG" || st_fail "the merge epoch must ride into the bg tail" "$(cat "$TMLOG")"
 [ -d "$WORK/wt31" ] && st_fail "the young merged worker's worktree must be removed by the tail (#1248)" "$(cat "$WORK/f3-err")"
 
-# F4 (#869): every refusal is non-zero, a `session:index` target included, and
-# the EPIC loop's doc never teaches the refused form.
+# F4 (#869): every refusal is non-zero, a `session:index` target included.
 : > "$TMLOG"; : > "$GHLOG"
 run_reap_tok 7 'fleet-x:c4-name-8558' --yes 2>/dev/null
 [ "$TOK" = refused:target ] && [ "$RC" = 4 ] || st_fail "a session:name target must refuse non-zero (#869) (got [$TOK] rc $RC)"
-grep -q 'dash-reap.sh <window-target>' "$BIN/../plugins/fleet-epic/commands/fleet-epic-run.md" \
-  && st_fail "fleet-epic-run.md still teaches the refused <window-target> form (#869)"
-# (issue #4957: the EPIC loop reaps nothing — a member is a task session, closed
-# by the cleanup once its record is.)
 
 # F5 (#867, #4898): a worker that never started is reaped and its issue is left
 # alone — no claim to release, no comment, no false COMPLETED.
