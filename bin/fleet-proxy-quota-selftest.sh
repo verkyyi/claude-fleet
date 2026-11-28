@@ -56,8 +56,8 @@ out = [
 print(json.dumps(out, sort_keys=True))
 PY
 )
-want='[{"rl5h": "29", "rl7d": "57.5", "rl_reset5": "1791341400", "rl_reset7": "1791698400"}, {"rl5h": "11", "rl7d": "40.7", "rl_reset5": "1791341400", "rl_reset7": "1100"}, {"rl5h": "5", "rl7d": "60", "rl_reset5": "-", "rl_reset7": "-"}, null, null, {"rl5h": "-", "rl7d": "90", "rl_reset5": "-", "rl_reset7": "1791698400"}, {"rl5h": "-", "rl7d": "10", "rl_reset5": "-", "rl_reset7": "-"}]'
-[ "$a" = "$want" ] && st_ok_all "A parse: Claude fraction ×100 (0.29→29, no float noise), Codex used-percent, unrounded; windows ordered by minutes; half a reading = none, except a Claude weekly window with no 5h header (no 5-hour cap: rl5h -)" \
+want='[{"rl5h": "29", "rl7d": "57.5", "rl_reset5": "1791341400", "rl_reset7": "1791698400"}, {"rl5h": "11", "rl7d": "40.7", "rl_reset5": "1791341400", "rl_reset7": "1100", "win5": "300", "win7": "10080"}, {"rl5h": "5", "rl7d": "60", "rl_reset5": "-", "rl_reset7": "-", "win5": "300", "win7": "10080"}, null, null, {"rl5h": "-", "rl7d": "90", "rl_reset5": "-", "rl_reset7": "1791698400"}, {"rl5h": "-", "rl7d": "10", "rl_reset5": "-", "rl_reset7": "-"}]'
+[ "$a" = "$want" ] && st_ok_all "A parse: Claude fraction ×100 (0.29→29, no float noise), Codex used-percent, unrounded; windows ordered by minutes, each Codex window's length kept (win5/win7); half a reading = none, except a Claude weekly window with no 5h header (no 5-hour cap: rl5h -)" \
   || st_miss "A parse: $a"
 
 # ── the fake provider ────────────────────────────────────────────────────────

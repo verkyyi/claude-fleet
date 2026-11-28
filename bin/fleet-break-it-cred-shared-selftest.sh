@@ -43,6 +43,11 @@
 #   cred-codex-handoff  bin/fleet-cred-proxy.py codex_sync / codex_merge / save_codex_state /
 #                       codex_sole_vouches: a restart's old process keeps recording refs the
 #                       new one would overwrite; a never-switched session's unseen ref stays put
+#   pool-quota-unread   bin/fleet-cred-proxy.py Budget.quota_entries / flush + rl_reading
+#                       (bin/fleet-cred-proxy-quota-report-selftest.py), the hub's half
+#                       tokenledger/hub/api fleet_node_pool_quota.go (go test
+#                       TestNodePoolQuotaFromUsageReport, when a toolchain is here): the pool's
+#                       quota readings reach the hub on the usage report, not through a relay
 #   cred-ctl-burst      bin/fleet_cred_ctl.py connect (T903): a burst of node-token asks past the
 #                       control socket's backlog is retried, not read as «no node token»;
 #                       bin/fleet-cred-proxy.py listens with a backlog of 128 (the agent's half:
@@ -791,6 +796,26 @@ PY
   grep -q 'ctl.listen(128)' "$BIN/fleet-cred-proxy.py" || { WHY="the proxy's control socket no longer listens with a backlog of 128"; return 1; }
   SECS=$(since "$t0")
   WHAT="控制口 backlog 1、一次答一个：24 个 node-token 同时问，全部拿到 broker 对（被拒的连接退避重试，不再读成「没有节点令牌」）；共享代理的控制口 backlog 128"
+}
+
+# pool-quota-unread: the hub read each pool credential's windows itself, through
+# the Singapore relay; once the hub moved past the relay (2026-10-26) nothing read
+# them — the subscriptions page and the cluster's Codex pick sat on month-old
+# numbers while the machine's proxy held a fresh reading of every account it
+# served. The proxy now hands its readings over on the usage report.
+drill_pool_quota_unread() {
+  CAP=120
+  local t0 out
+  t0=$(now)
+  out=$(python3 "$BIN/fleet-cred-proxy-quota-report-selftest.py" 2>&1) || { WHY="the proxy half: $(printf '%s' "$out" | tail -3 | tr '\n' ' ')"; return 1; }
+  grep -q '^func TestNodePoolQuotaFromUsageReport(' "$ROOT/tokenledger/hub/api/fleet_node_pool_quota_test.go" 2>/dev/null \
+    || { WHY="the hub half's test TestNodePoolQuotaFromUsageReport is gone"; return 1; }
+  WHAT="代理把池订阅的读数随用量上报交给入口（每个读数一次，central 路由、自己的号、没读过的号不交）；入口的半边由 Go 门跑"
+  go_half '^TestNodePoolQuotaFromUsageReport$' ./hub/api; case $? in
+    0) WHAT="代理把池订阅的读数随用量上报交给入口；入口只收发给过这台机器的池凭据、比上次新的读数，存进额度表（go test 一条）" ;;
+    1) return 1 ;;
+  esac
+  SECS=$(since "$t0")
 }
 
 cred_run_drills "$0"

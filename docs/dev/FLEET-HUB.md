@@ -1658,6 +1658,22 @@ any machine's memory and no admin node has to be online.
   answer (`invalid_grant`, its 403) is the answer, never a reason to fall back.
 - A Claude refresh keeps the node path: the relay's token route is OpenAI's.
 
+**A machine's proxy hands the pool's quota over (BREAK-IT `pool-quota-unread`).**
+With no relay to read through (the hub left its reach on 2026-10-26), the readings
+come from the machines that run the pool: the shared credential proxy's usage
+report (`POST /v1/node/usage`) carries `quota: [{provider, account, at, rl5h, rl7d,
+rl_reset5, rl_reset7, win5?, win7?}]` — each leased pool account's newest reading
+off a direct / relay answer, each reading sent once. The hub files one only when the
+account is a pool credential it leased to that very endpoint within the hour
+(`fleet_cred_audit` `issue`), the reading is under an hour old and newer than the
+credential's last (`fleet_credential_quota`), and the login's person owns no
+credential of that label: Claude as a `limit_snapshots` row, Codex as a
+`quota_snapshots` row with `observation proxy_headers` (partial evidence to the
+cluster's pick), both under the credential's identity and its account, with
+`endpoint_id` the reporting node. Anything else is dropped without refusing the
+usage; an older hub ignores the field. No upstream request is made for it
+(`tokenledger/hub/api/fleet_node_pool_quota.go`).
+
 **The hub reads the pool's quota itself (claude-fleet#2169).** With
 `CCQUOTA_FLEET_HUB_QUOTA=relay` (plus the relay URL and the session pass key;
 `CCQUOTA_FLEET_HUB_QUOTA_INTERVAL`, default 5m) the hub reads every pool

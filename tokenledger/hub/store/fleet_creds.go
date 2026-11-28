@@ -458,6 +458,18 @@ func (s *Store) AddCredAudit(a CredAudit) error {
 	return err
 }
 
+// CredIssuedTo reports whether the hub leased (provider, account) to the
+// endpoint at or after since — the gate on a node's quota reading of a pool
+// credential: only a machine that was handed the credential can
+// have read its windows.
+func (s *Store) CredIssuedTo(endpointID, provider, account string, since time.Time) (bool, error) {
+	var n int
+	err := s.read.QueryRow(`SELECT COUNT(*) FROM (SELECT 1 FROM fleet_cred_audit
+		WHERE at >= ? AND action = ? AND endpoint_id = ? AND provider = ? AND account = ? LIMIT 1) x`,
+		fmtTime(since), CredIssue, endpointID, provider, account).Scan(&n)
+	return n > 0, err
+}
+
 // CredAuditLog returns the newest rows first; principalID "" means everyone's.
 func (s *Store) CredAuditLog(principalID string, limit int) ([]CredAudit, error) {
 	if limit <= 0 || limit > 1000 {
