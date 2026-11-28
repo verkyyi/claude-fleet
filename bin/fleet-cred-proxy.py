@@ -115,8 +115,13 @@ retries the same request; the move is logged `route_switch`.
 A SESSION CREDENTIAL OUTLIVES ITS STAMP WHILE ITS SESSION LIVES (issue #1975):
 the session cannot swap the credential in its environment, so the proxy does
 the renewing. An fcp1. minted with --wrap PID stays good past its exp while that
-process (the session's wrapper) lives and the sid is not revoked, at most
-FLEET_CRED_PROXY_RENEW_MAX_SECS (7 days) past it. A hub pass (fcp-h1. / fcp-h2.) is
+process (the session's wrapper) lives and the sid is not revoked — however long:
+the wrapper is known by its pid AND its start time (<state>/live-meta.json), so a
+pid the kernel reused for another process after the wrapper died is refused, and
+no total age ends a live session (a 7-day cap did: every session alive past day 8
+got 401 with no way back but a restart). Only a wrapper whose start time cannot
+be read is held to FLEET_CRED_PROXY_RENEW_MAX_SECS (7 days) past the stamp, and
+the doctor's `cred` row WARNs before that end. A hub pass (fcp-h1. / fcp-h2.) is
 renewed with the hub (POST /v1/fleet/session-cred/renew, the node token) once
 it reaches its renew point — 20 % of its life left (#3561; a pass lives 4h) — on
 the session's next request or the background tick, whichever comes first; the
@@ -188,7 +193,7 @@ doctor's 上游 row, `fleet-cred-proxy.sh upstream`, the 看台's top line).
 FLEET_CRED_UPSTREAM_STATS=0 writes nothing. Forwarding itself is untouched.
 """
 import argparse, base64, fcntl, hashlib, hmac, http.client, json, os, re, secrets, zlib
-import resource, shutil, signal, socket, ssl, sys, threading, time, urllib.error, urllib.request
+import resource, shutil, signal, socket, ssl, subprocess, sys, threading, time, urllib.error, urllib.request
 from urllib.parse import urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1498,14 +1503,114 @@ def codex_merge(mine, disk):
             del sessions[key]
 
 
-def live_session(state):
-    """-> live(claims): an expired fcp1 whose session (its --wrap pid) still runs."""
+# A session's wrapper is known by its pid AND its start time (issue: long sessions
+# 401 on day 8): a pid the kernel handed to another process after the wrapper died
+# belongs to a process that started after the credential was minted. live.json
+# keeps sid -> pid (its readers unchanged); live-meta.json keeps sid -> {pid, st
+# (the wrapper's start), iat, exp}.
+START_SLACK = 5         # seconds: ps / /proc start times are whole seconds
+START_MEMO_SECS = 5
+_START_MEMO = {}
+LIVE_META_LOCK = threading.Lock()   # taken inside Proxy.lock, never around it
+
+
+def proc_start(pid):
+    """-> the process's start time (epoch seconds), or None when it cannot be read."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 1:
+        return None
+    now = time.time()
+    m = _START_MEMO.get(pid)
+    if m and now - m[0] < START_MEMO_SECS:
+        return m[1]
+    st = None
+    try:    # Linux: field 22 of /proc/<pid>/stat, clock ticks after boot
+        with open("/proc/%d/stat" % pid) as f:
+            ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+        with open("/proc/stat") as f:
+            btime = next(int(line.split()[1]) for line in f if line.startswith("btime "))
+        st = btime + ticks // os.sysconf("SC_CLK_TCK")
+    except Exception:
+        try:    # macOS / BSD: ps (any uid's process — separated mode)
+            r = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                               timeout=3, env=dict(os.environ, LC_ALL="C", LANG="C"))
+            txt = " ".join(r.stdout.split())
+            st = int(time.mktime(time.strptime(txt, "%a %b %d %H:%M:%S %Y"))) if txt else None
+        except Exception:
+            st = None
+    if len(_START_MEMO) > 4096:
+        _START_MEMO.clear()
+    _START_MEMO[pid] = (now, st)
+    return st
+
+
+def renew_max_secs():
+    return int(env("FLEET_CRED_PROXY_RENEW_MAX_SECS", str(7 * 86400)))
+
+
+def live_meta_path(state):
+    return os.path.join(state, "live-meta.json")
+
+
+def live_session(state, ttl=None):
+    """-> live(claims): an expired fcp1 whose session (its --wrap process) still runs.
+
+    The session is its wrapper's IDENTITY — pid + start time — never a total age:
+    a wrapper alive with the start time recorded at the mint keeps its credential
+    however long it runs. A wrapper whose start time is later than the mint is a
+    reused pid: refused. A credential minted before live-meta.json (no record) is
+    taken as its wrapper's when that process started before the mint (exp − TTL),
+    and recorded. Only when the start time cannot be read at all does the old
+    bound apply: FLEET_CRED_PROXY_RENEW_MAX_SECS past the stamp."""
     def live(c):
-        if time.time() > c.get("exp", 0) + int(env("FLEET_CRED_PROXY_RENEW_MAX_SECS", str(7 * 86400))):
+        sid = c.get("sid", "")
+        pid = read_json(os.path.join(state, "live.json"), {}).get(sid)
+        if not pid or not pid_alive(pid):
             return False
-        pid = read_json(os.path.join(state, "live.json"), {}).get(c.get("sid", ""))
-        return bool(pid) and pid_alive(pid)
+        exp = int(c.get("exp", 0) or 0)
+        st = proc_start(pid)
+        if st is None:
+            return time.time() <= exp + renew_max_secs()
+        with LIVE_META_LOCK:
+            meta = read_json(live_meta_path(state), {})
+            m = meta.get(sid) if isinstance(meta.get(sid), dict) else {}
+            if m.get("pid") == pid and m.get("st") is not None:
+                return abs(st - int(m["st"])) <= START_SLACK
+            born = int(m.get("iat") or exp - int(ttl or env("FLEET_CRED_PROXY_TTL", "86400")))
+            if st > born + START_SLACK:
+                return False        # this process started after the mint: not the wrapper
+            meta[sid] = dict(m, pid=pid, st=st, exp=max(exp, int(m.get("exp") or 0)))
+            write_json(live_meta_path(state), meta)
+        return True
     return live
+
+
+def live_report(state, ttl=None):
+    """The live sessions' renewal standing, for `status` / the doctor's `cred` row:
+    how many renew by their wrapper's identity (no end), and the ones that cannot
+    be proven (no start time readable) with the hard end each still has."""
+    live = read_json(os.path.join(state, "live.json"), {})
+    meta = read_json(live_meta_path(state), {})
+    out = {"live": 0, "proven": 0, "unproven": 0, "hard_exp": 0, "max_secs": renew_max_secs()}
+    for sid, pid in live.items():
+        if not pid_alive(pid):
+            continue
+        out["live"] += 1
+        m = meta.get(sid) if isinstance(meta.get(sid), dict) else {}
+        st = proc_start(pid)
+        if st is not None and (m.get("st") is None or abs(st - int(m["st"])) <= START_SLACK):
+            out["proven"] += 1
+            continue
+        if st is not None:
+            continue    # a reused pid: its credential is refused already, nothing will end
+        out["unproven"] += 1
+        if m.get("exp"):
+            hard = int(m["exp"]) + out["max_secs"]
+            out["hard_exp"] = hard if not out["hard_exp"] else min(out["hard_exp"], hard)
+    return out
 
 
 # ---- the route decision ----------------------------------------------------
@@ -2709,7 +2814,7 @@ class Proxy(BaseHTTPRequestHandler):
             if provider == "deepseek" and not self.cfg.central_url:
                 return self.deepseek_refuse(sid, path, "no central proxy is configured here (FLEET_CRED_CENTRAL_URL)")
             return self.send(["central"], provider, path, body, self.passes.best(tok), sid, "-", seen, t0)
-        claims, why = self.keys.verify(tok, live=live_session(self.cfg.state))
+        claims, why = self.keys.verify(tok, live=live_session(self.cfg.state, self.cfg.ttl))
         if not claims:
             self.log(ev="deny", path=path.split("?")[0], why=why, hdrs=seen)
             return self.fail(401, why)
@@ -2844,7 +2949,7 @@ class Proxy(BaseHTTPRequestHandler):
                 return self.fail(401, "not a hub pass")
             sid = "h-" + hashlib.sha256(tok.encode()).hexdigest()[:10]
         else:
-            claims, why = self.keys.verify(tok, live=live_session(self.cfg.state))
+            claims, why = self.keys.verify(tok, live=live_session(self.cfg.state, self.cfg.ttl))
             if not claims:
                 self.log(ev="deny", path=bare, why=why)
                 return self.fail(401, why)
@@ -3737,7 +3842,7 @@ def credential_inspect(req, t):
             return dict(ok=True, scope=dict(kind='central', port=t.cfg.bound_port, **{k: data[k] for k in
                         ('id', 'principal', 'worker_id', 'machine', 'endpoint_id', 'provider', 'binding')}))
         with Proxy.lock:
-            claims, why = t.keys.verify(token, live=live_session(t.cfg.state))
+            claims, why = t.keys.verify(token, live=live_session(t.cfg.state, t.cfg.ttl))
             if why or not claims or (claims.get('lg') and claims['lg'] != t.name):
                 return refuse
             sid = claims['sid']
@@ -3808,6 +3913,14 @@ def ctl_handle(req, t):
                 d = read_json(p, {})
                 d = {k: v for k, v in d.items() if pid_alive(v)}
                 d[sid] = wrap; write_json(p, d)
+                # its identity (pid + start time): renewal follows THIS process, never its pid alone
+                with LIVE_META_LOCK:
+                    meta = read_json(live_meta_path(cfg.state), {})
+                    meta = {k: v for k, v in meta.items() if k in d}
+                    now = int(time.time())
+                    meta[sid] = {"pid": wrap, "st": proc_start(wrap), "iat": now,
+                                 "exp": now + int(req.get("ttl") or cfg.ttl)}
+                    write_json(live_meta_path(cfg.state), meta)
         t.log(ev="mint", sid=sid, acct=acct or "(proxy picks)")
         return {"ok": True, "token": tok, "sid": sid}
     if op == "rebind":
@@ -3851,6 +3964,10 @@ def ctl_handle(req, t):
                 d = read_json(p, {})
                 if d.pop(sid, None) is not None:
                     write_json(p, d)
+            with LIVE_META_LOCK:
+                d = read_json(live_meta_path(cfg.state), {})
+                if d.pop(sid, None) is not None:
+                    write_json(live_meta_path(cfg.state), d)
         t.log(ev="revoke", sid=sid)
         return {"ok": True}
     if op == "attach":
@@ -4078,7 +4195,8 @@ def ctl_handle(req, t):
                "trust": t.router.trust or "unknown", "trust_why": t.router.trust_why,
                "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
                "central": cfg.central_url or "", "budget": t.budget.view(),
-               "renew": dict(t.passes.stats), "hub_passes": len(t.passes.held)}
+               "renew": dict(t.passes.stats), "hub_passes": len(t.passes.held),
+               "local_creds": live_report(cfg.state, cfg.ttl)}
         if Proxy.tenants:
             out.update(shared=True, login=t.name, logins=sorted(Proxy.tenants), user=cfg.run_user,
                        version=cfg.version)

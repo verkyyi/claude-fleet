@@ -604,7 +604,9 @@ a file, a config, a log, a comment or a tmux option (`fleet-mcp-selftest.sh` J
 greps for it). **Revoked** when the agent exits (`--cred revoke` puts its nonce on
 the revoked list). A migrated or moved session is launched again on its new
 window and so gets a fresh credential for the **same** `worker_id` — and an older
-one still holds there, since it names the session, not the pane.
+one still holds there, since it names the session, not the pane. A credential its
+server accepts past `exp` (a fresh server process — a reconnect, the `--call` road —
+holds only the launch's) is re-signed in that server's memory on the spot.
 
 **Format** — `fwc1.<base64url claims>.<base64url HMAC-SHA256>`, signed with this
 login's key `$FLEET_CONF_DIR/worker-cred/key` (0600, made on first mint). Claims:
@@ -617,7 +619,9 @@ login's key `$FLEET_CONF_DIR/worker-cred/key` (0600, made on first mint). Claims
 | `fleet_uuid` | the fleet UUID (`fleet_uuid`), empty on a machine with none |
 | `key` · `repo` · `issue` · `origin` | what the session was at issue time (informative; a scratch bound later keeps its `fid`) |
 | `iat` · `exp` | issued · expires: **24 h**, renewed hourly in the server's memory while it holds (decision 7) |
-| `nonce` | what the revoked list (`$FLEET_CONF_DIR/worker-cred/revoked`, nonces only) names |
+| `wrap` · `wst` | the session's wrapper (`FLEET_SESSION_WRAP`): its pid and start time. Past `exp` the credential still holds while THAT process runs — no total age; a pid reused after the wrapper died starts later and is refused. A credential minted without them (before they existed) is held by the calling pane's `@session_wrap` when that process started before the credential (`born`, the first `iat`) |
+| `born` | the first `iat`, kept across renewals |
+| `nonce` | what the revoked list (`$FLEET_CONF_DIR/worker-cred/revoked`, `<nonce> <wrapper pid:start> <exp>`) names; a line stays until its `exp` or while its wrapper runs |
 
 `worker_id` = `<fleet_uuid>/<fid>` (`fid` alone without a fleet UUID) — the same
 string `fleet_worker_id` prints.
@@ -629,7 +633,7 @@ included:
 | refused when | text |
 |---|---|
 | malformed / not this login's key / tampered | `credential is malformed` · `signature does not verify` |
-| past `exp` | `credential expired` |
+| past `exp` and its wrapper is gone (or another process now has its pid) | `credential expired` |
 | its nonce is revoked | `credential was revoked (its session exited)` |
 | called from another fleet | `credential is for fleet X, this pane is in Y` |
 | called from a pane whose window is not the credential's session | `this pane's window (…) is not the credential's session (…)` |
