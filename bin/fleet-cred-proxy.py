@@ -2814,7 +2814,7 @@ class Proxy(BaseHTTPRequestHandler):
             if provider == "deepseek" and not self.cfg.central_url:
                 return self.deepseek_refuse(sid, path, "no central proxy is configured here (FLEET_CRED_CENTRAL_URL)")
             return self.send(["central"], provider, path, body, self.passes.best(tok), sid, "-", seen, t0)
-        claims, why = self.keys.verify(tok, live=live_session(self.cfg.state, self.cfg.ttl))
+        claims, why = self.keys.verify(tok, live=live_session(self.cfg.state, getattr(self.cfg, "ttl", None)))
         if not claims:
             self.log(ev="deny", path=path.split("?")[0], why=why, hdrs=seen)
             return self.fail(401, why)
@@ -2949,7 +2949,7 @@ class Proxy(BaseHTTPRequestHandler):
                 return self.fail(401, "not a hub pass")
             sid = "h-" + hashlib.sha256(tok.encode()).hexdigest()[:10]
         else:
-            claims, why = self.keys.verify(tok, live=live_session(self.cfg.state, self.cfg.ttl))
+            claims, why = self.keys.verify(tok, live=live_session(self.cfg.state, getattr(self.cfg, "ttl", None)))
             if not claims:
                 self.log(ev="deny", path=bare, why=why)
                 return self.fail(401, why)
@@ -3842,7 +3842,7 @@ def credential_inspect(req, t):
             return dict(ok=True, scope=dict(kind='central', port=t.cfg.bound_port, **{k: data[k] for k in
                         ('id', 'principal', 'worker_id', 'machine', 'endpoint_id', 'provider', 'binding')}))
         with Proxy.lock:
-            claims, why = t.keys.verify(token, live=live_session(t.cfg.state, t.cfg.ttl))
+            claims, why = t.keys.verify(token, live=live_session(t.cfg.state, getattr(t.cfg, "ttl", None)))
             if why or not claims or (claims.get('lg') and claims['lg'] != t.name):
                 return refuse
             sid = claims['sid']
@@ -4196,7 +4196,7 @@ def ctl_handle(req, t):
                "relay": bool(cfg.relay_url), "relay_pass": bool(relay_pass(cfg)),
                "central": cfg.central_url or "", "budget": t.budget.view(),
                "renew": dict(t.passes.stats), "hub_passes": len(t.passes.held),
-               "local_creds": live_report(cfg.state, cfg.ttl)}
+               "local_creds": live_report(cfg.state, getattr(cfg, "ttl", None))}
         if Proxy.tenants:
             out.update(shared=True, login=t.name, logins=sorted(Proxy.tenants), user=cfg.run_user,
                        version=cfg.version)
