@@ -307,7 +307,7 @@ no obstacles section — a fleet-side defect is RECORDED as a task, its code goe
 the closing summary only, and if the reader needs it, it is a 下一步 row in plain
 words.
 
-The **上线证据** line is the seam with `/fleet-epic-report` (issue #810): one
+The **上线证据** line connects implementation to its report (issue #810): one
 line a worker can follow before landing and the report can collect afterwards —
 a URL to screenshot, a command whose output to keep, a pane to `capture-pane`.
 Write it so both can act on it without asking.

@@ -1,6 +1,6 @@
 {
   "name": "fleet-epic",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Task design pages via /fleet-task-plan. Historical fleet-epic naming remains for compatibility; EPIC plan/run/report and the driver are retired.",
   "author": {
     "name": "verkyyi",

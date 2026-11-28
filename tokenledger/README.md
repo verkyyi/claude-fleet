@@ -1837,8 +1837,7 @@ Every stored, delivered or failed relay is a `fleet_audit` row
 
 ### A spawn picks its machine — node placement (claude-fleet#1425)
 
-With `CCQUOTA_FLEET=1`, claude-fleet's `dash-issue-session.sh` (the dash, the
-backlog and `/fleet-epic-run` all spawn through it) defaults to
+With `CCQUOTA_FLEET=1`, claude-fleet's `dash-issue-session.sh` defaults to
 `--node auto`: right after it took the issue's lease it asks the hub where the
 session should run.
 

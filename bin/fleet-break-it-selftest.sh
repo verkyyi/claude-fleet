@@ -4608,14 +4608,18 @@ drill_norepo_never_placed() {
     || { WHY="dash-raw-session.sh keeps every no-repo session here again, past the hub"; return 1; }
   grep -q "\[ \"\$NOREPO\" = 1 \] && _prepo=''" "$BIN/dash-raw-session.sh" \
     || { WHY="a no-repo session asks the hub with the fleet's repo — only that repo's machines"; return 1; }
-  # a plugin's shipped agent file (the EPIC driver) travels like the core's
-  out=$(bash -c '. "$1/fleet-lib.sh"; for n in epic-driver fleet-epic:epic-driver fleet-worker; do
-      fleet_agent_file_travels "$n" || echo "no:$n"; done
-    for n in nosuch fleet-epic:nosuch ../x a:b:c; do fleet_agent_file_travels "$n" && echo "yes:$n"; done; :' _ "$BIN")
+  # A shipped plugin agent travels like the core's; use a fixture because the
+  # historical epic-driver file is retired (conf/gone.list).
+  mkdir -p "$WORK/travel/bin" "$WORK/travel/plugins/sample/agents"
+  printf -- '---\nname: reviewer\n---\n' > "$WORK/travel/plugins/sample/agents/reviewer.md"
+  out=$(bash -c '. "$1/fleet-lib.sh"; fleet_agent_file_travels fleet-worker || echo no:fleet-worker
+    _FLEET_LIB_DIR=$2
+    for n in reviewer sample:reviewer; do fleet_agent_file_travels "$n" || echo "no:$n"; done
+    for n in nosuch sample:nosuch ../x a:b:c; do fleet_agent_file_travels "$n" && echo "yes:$n"; done; :' _ "$BIN" "$WORK/travel/bin")
   [ -z "$out" ] || { WHY="fleet_agent_file_travels: $out"; return 1; }
   go_half '^TestNodePlaceNoRepoScratch$' ./hub/api; [ $? = 1 ] && return 1
   SECS=$(since "$t0")
-  WHAT="带任务记录的不绑仓库会话问入口、不按仓库筛候选、开到别台带 no_repo；epic-driver 这类插件模板随发布旅行；无记录的仍本机开"
+  WHAT="带任务记录的不绑仓库会话问入口、不按仓库筛候选、开到别台带 no_repo；随发布的插件模板可跨机器放置；无记录的仍本机开"
 }
 
 # ---- one primary state source (issue #2537, EPIC #2535 C2) ------------------------

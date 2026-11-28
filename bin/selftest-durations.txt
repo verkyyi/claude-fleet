@@ -73,7 +73,6 @@
 0.3 docs-links-selftest.sh
 11.7 doctor-resident-selftest.sh
 0.1 entry-e2e-selftest.sh
-0.0 epic-autoreport-selftest.sh
 0.1 epic-page-selftest.sh
 0.9 epic-page-surface-selftest.sh
 0.0 favicon-selftest.sh

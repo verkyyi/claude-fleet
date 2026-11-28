@@ -890,7 +890,7 @@ def status(parent_ref, cap):
     got = record("get", parent_ref)
     parent = got.get("task") or {}
     if parent.get("authority_version") != 1:
-        raise Fail(2, "%s is not an authoritative task: an EPIC is a parent task opened by /fleet-epic-plan" % parent_ref)
+        raise Fail(2, "%s is not an authoritative task: this legacy EPIC reader requires an existing authoritative parent task" % parent_ref)
     # the record answers to its code too: read on by its T<n>, name it by its code
     parent_ref = parent.get("id") if TREF.match(str(parent.get("id") or "")) else parent_ref
     pcode = code_rec(parent)

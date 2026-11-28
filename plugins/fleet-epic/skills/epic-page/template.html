@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<!-- epic-page · the ONE frame both /fleet-epic-plan (design page) and
-     /fleet-epic-report (batch report) render into, so the operator reads the
+<!-- epic-page · the ONE frame for a design page and its implementation
+     report, so the operator reads the
      pair as one document (issue #809). Copy this file, keep the <style> and the
      section ids, replace every slot marked ⟨…⟩. Nothing here is fetched from a
      CDN except the font — the page is served byte-for-byte.
@@ -726,7 +726,7 @@ if(document.readyState==="loading") document.addEventListener("DOMContentLoaded"
      EVERY row carries a default recommendation, so a nod settles all of them. A decision that
      only matters after the batch is approved is marked 「（批后）」 on its 事项.
      Write-back: every row → the parent's 发起人拍板; a 「（批后）」 row ALSO → the parent's 待决.
-     The #open anchor stays — /fleet-epic-run appends to the parent's 待决, not to this page. -->
+     The #open anchor stays for historical links into the decision section. -->
 <section id="signoff">
 <span id="open"></span>
 <h2>需要你定的事</h2>

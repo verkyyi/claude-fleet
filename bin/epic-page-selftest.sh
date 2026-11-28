@@ -1,17 +1,14 @@
 #!/bin/bash
 # epic-page-selftest.sh — the shared EPIC page frame (skills/epic-page, issue #809)
-# and the two commands that render into it stay in lockstep. Hermetic: no node,
-# no tailscale, no network.
+# and its live skill stay in lockstep. Hermetic: no tailscale, no network.
 #
-#   1. template.html carries every section id the plan command names — the ids
-#      are the contract the command text refers to, so dropping one silently
-#      strands an instruction.
+#   1. template.html carries the section ids the live skill documents;
+#      historical page links keep their anchors.
 #   2. the member card carries the six fields, 上线证据 included — that line is
-#      the seam with /fleet-epic-report (#810).
+#      the evidence contract for a report (#810).
 #   3. the frame honours the artifact-design contract a page served as-is needs:
 #      a <title>, tokens on :root, the dark-mode guard, a body background.
-#   4. BOTH commands point at the frame (plan renders it, report reuses it), and
-#      plan re-renders a revision in the same file it opened (no second copy).
+#   4. the live skill shares the rendered page when authorized.
 #   5. the skill registers: SKILL.md frontmatter name matches the dir and the
 #      copy-install marker is present (fleet-plugin-selftest checks the tree
 #      generically; this pins THIS skill's supporting file).
@@ -19,7 +16,7 @@
 #      FILE order, the band speaks plain words, a member card folds to one line
 #      with no key on it, the metric table is 指标/现在/目标, 需要你定的事 is one
 #      事项/建议 table, and the order section is folded whole — while the
-#      write-back shapes /fleet-epic-run parses stay exactly as they were.
+#      historical charter write-back shapes stay exactly as they were.
 #   7. a members-only 403 (活页 #12410) that carries error.login_url shows the
 #      「以成员身份登录后提交」 link (target _top); without one the old words stay.
 #      Runs the template's own <denied> block under node (skipped with no node).
@@ -29,7 +26,6 @@ BIN="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$BIN/.."
 T="$ROOT/plugins/fleet-epic/skills/epic-page/template.html"
 SK="$ROOT/plugins/fleet-epic/skills/epic-page/SKILL.md"
-PLAN="$ROOT/plugins/fleet-epic/commands/fleet-epic-plan.md"
 CHECKS=0
 has() { CHECKS=$((CHECKS + 1)); grep -q -- "$2" "$1" || st_fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
 hasF() { CHECKS=$((CHECKS + 1)); grep -q -F -- "$2" "$1" || st_fail "$3 — [$2] not in ${1#"$ROOT"/}"; }
@@ -136,11 +132,9 @@ hasF "$T" '<summary>预检原文</summary>' "template: the preflight screen is f
 CHECKS=$((CHECKS + 1))
 grep -A1 -F '<section id="order">' "$T" | grep -q -F '<details class="fold">' \
   || st_fail "template: #order is not folded whole"
-# 6f. the plan command carries the rules, and write-back is unchanged
-# 6g. the concurrency caps are the operator's (issue #881 point 16): plan and run
-#     state them at most — never advise a value, never ask, never change one
-RUN="$ROOT/plugins/fleet-epic/commands/fleet-epic-run.md"
-for f in "$PLAN" "$RUN" "$T"; do
+# 6g. the concurrency caps are the operator's (issue #881 point 16): the live
+#     plan command, skill and template must not suggest a value.
+for f in "$ROOT/plugins/fleet-epic/commands/fleet-task-plan.md" "$SK" "$T"; do
   CHECKS=$((CHECKS + 1))
   grep -qE 'FLEET_(GLOBAL_)?MAX_SESSIONS=[0-9]' "$f" && st_fail "${f#"$ROOT"/} suggests a session-cap value"
 done
