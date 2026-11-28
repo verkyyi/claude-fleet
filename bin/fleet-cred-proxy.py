@@ -162,7 +162,9 @@ credential of this login (direct / relay) is metered off its own `usage`
 (input + cache writes + output — cache reads are left out) and reported to the
 hub every FLEET_CRED_BUDGET_SECS (15) when usage exists (idle standing refresh:
 once per 60s), as POST /v1/node/usage with the node
-token — one entry per (provider, session, account, model), the session named by
+token — one entry per (provider, session, account, model), plus `quota`: each
+leased pool account's newest direct / relay reading, once (docs/dev/FLEET-HUB.md
+«A machine's proxy hands the pool's quota over») — the session named by
 the worker_id its launcher minted it for (`mint --worker`, kept in
 workers.json), with input / cache writes / cache reads / output apart and the
 old `tokens` beside them (issue #3376); the hub files each under the login's
@@ -1018,6 +1020,7 @@ class Budget:
         self.state, self.ts, self.err = {}, 0, ""
         self.said = ""               # the last flush problem logged (said once per change)
         self.misses, self.miss_why = 0, ""   # 2xx answers the meter read nothing from (#3407)
+        self.quota_sent = {}         # (provider, account) -> the ts of the reading last reported
 
     def worker(self, sid):
         """-> the worker_id the session's credential was minted for ("" = none
@@ -1035,6 +1038,29 @@ class Budget:
             p = self.pending.setdefault((provider, worker or "", acct or "", model or ""), [0] * len(PENDING_FIELDS))
             for i, n in enumerate((tokens, 1, u.get("in", 0), u.get("cache_write", 0), u.get("cache_read", 0), u.get("out", 0))):
                 p[i] += n
+
+    def quota_entries(self):
+        """-> the pool accounts' readings the hub has not been told yet: every
+        account this login leases from the hub (pool.json), its newest reading off
+        a direct / relay answer (Proxy.reads). The hub files each under that pool
+        credential — the hub's own quota reader is off since the hub left the
+        relay's reach, and these are the readings the pick itself goes by."""
+        if self.cfg is None or not getattr(self.cfg, "store", False) or not getattr(self.cfg, "state", None):
+            return []
+        out = []
+        for k in sorted(pool_index(self.cfg)):
+            provider, _, acct = k.partition(":")
+            if provider not in ("claude", "codex") or not SAFE_LABEL(acct):
+                continue
+            with Proxy.lock:
+                rd = dict(Proxy.reads.get((provider, acct)) or {})
+            ts = int(rd.get("ts") or 0)
+            if not ts or rd.get("route") not in ("direct", "relay") or ts <= self.quota_sent.get((provider, acct), 0):
+                continue
+            e = {"provider": provider, "account": acct, "at": ts}
+            e.update({f: rd[f] for f in ("rl5h", "rl7d", "rl_reset5", "rl_reset7", "win5", "win7") if f in rd})
+            out.append(e)
+        return out
 
     @staticmethod
     def entry(key, v):
@@ -1092,9 +1118,14 @@ class Budget:
             # Four normal budget ticks, capped at a minute; an explicitly
             # shorter interval retains its faster policy/reset feedback.
             idle_every = min(60, 4 * max(1, int(env("FLEET_CRED_BUDGET_SECS", "15"))))
-            if not sent and not self.err and self.ts and time.time() - self.ts < idle_every:
+        quota = self.quota_entries()
+        with self.lock:
+            if not sent and not quota and not self.err and self.ts and time.time() - self.ts < idle_every:
                 return self.state
-        body = json.dumps({"usage": [self.entry(k, v) for k, v in sorted(sent.items())]}).encode()
+        rep = {"usage": [self.entry(k, v) for k, v in sorted(sent.items())]}
+        if quota:
+            rep["quota"] = quota
+        body = json.dumps(rep).encode()
         try:
             req = urllib.request.Request(hub_dial(hub) + "/v1/node/usage", data=body, method="POST",
                                          headers={"Authorization": "Bearer " + tok, "Content-Type": "application/json"})
@@ -1105,6 +1136,8 @@ class Budget:
                 "HTTP %d" % e.code if isinstance(e, urllib.error.HTTPError) else type(e).__name__), log)
             return None
         with self.lock:
+            for q in quota:
+                self.quota_sent[(q["provider"], q["account"])] = q["at"]
             for k, v in sent.items():
                 p = self.pending.get(k)
                 if p:
@@ -3412,7 +3445,7 @@ def rl_reading(provider, headers, now=None):
         # primary is the short window; trust the minutes when both say otherwise
         if wins[0][0] is not None and wins[1][0] is not None and wins[0][0] > wins[1][0]:
             wins.reverse()
-        (_, p5, r5), (_, p7, r7) = wins
+        (m5, p5, r5), (m7, p7, r7) = wins
     else:
         k5 = "anthropic-ratelimit-unified-5h-utilization"
         p5 = _num(h.get(k5))
@@ -3427,7 +3460,12 @@ def rl_reading(provider, headers, now=None):
     # six places cancel the float noise (0.29 × 100 = 28.999…96 → "29")
     pc = lambda x: "-" if x is None else ("%.6f" % x).rstrip("0").rstrip(".")
     rs = lambda r: str(int(r)) if r is not None and r > 0 else "-"
-    return {"rl5h": pc(p5), "rl7d": pc(p7), "rl_reset5": rs(r5), "rl_reset7": rs(r7)}
+    out = {"rl5h": pc(p5), "rl7d": pc(p7), "rl_reset5": rs(r5), "rl_reset7": rs(r7)}
+    if provider == "codex":   # each window's length, for the hub's copy (its pick checks the windows)
+        for k, m in (("win5", m5), ("win7", m7)):
+            if m is not None and m > 0:
+                out[k] = str(int(m))
+    return out
 
 
 def claude_token(accounts, label):

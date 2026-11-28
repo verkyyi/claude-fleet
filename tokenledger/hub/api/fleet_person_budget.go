@@ -314,6 +314,9 @@ func humanDur(d time.Duration) string {
 // counts it); when the split is there, the split is what is filed.
 type usageReport struct {
 	Usage []usageEntry `json:"usage"`
+	// Quota: the pool credentials' readings the machine's proxy holds
+	// (fleet_node_pool_quota.go); an older proxy sends none.
+	Quota []nodeQuotaReading `json:"quota,omitempty"`
 }
 
 type usageEntry struct {
@@ -470,6 +473,13 @@ func (s *Server) handleNodeUsage(w http.ResponseWriter, r *http.Request) {
 	// the login's owner: the machine's account, else the login row bound to
 	// this very endpoint (a node's machine name may drift — claude-fleet#2212)
 	principal, err := s.principalOnNode(ep.ID, host, user)
+	if r.Method == http.MethodPost && len(rep.Quota) > 0 {
+		person := principal
+		if err != nil {
+			person = ""
+		}
+		s.nodePoolQuota(ep, person, rep.Quota, time.Now())
+	}
 	if err != nil {
 		// no person for this login: nothing to count against, nothing refused —
 		// and its usage raised, never dropped in silence (claude-fleet#3376)
