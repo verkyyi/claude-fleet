@@ -1936,8 +1936,11 @@ class Tenant:
     # answers). A session keeps its account (its prompt cache lives there) until
     # that account reaches the ceiling, answers a quota 429, or is limited; then
     # the next request runs on the one with the most room, the session none the
-    # wiser. Unread accounts rank in the middle (PICK_UNKNOWN). A new pick ranks
-    # a Claude account's week by its pace, not its raw percent (task CBSB).
+    # wiser. An unread account ranks FIRST (PICK_UNKNOWN, below any reading):
+    # readings come only from answers, so one never tried would never be read
+    # and never picked (BREAK-IT cred-unread-starved); its first answer reads it.
+    # A new pick ranks a Claude account's week by its pace, not its raw percent
+    # (task CBSB).
     def held(self, provider):
         if provider == "codex":
             return tenant_labels(self.cfg, "codex")   # the pool's and the store's own homes
@@ -2473,7 +2476,7 @@ class Tenant:
         return nxt if nxt and nxt != acct and self.usable(provider, nxt, time.time()) else None
 
 
-PICK_UNKNOWN = 50.0
+PICK_UNKNOWN = -1000.0   # below any reading, pace included (≥ −100): an unread account is tried first
 WEEK_SECS = 7 * 86400   # the weekly window's length, for pace (task CBSB)
 REJECT_HOLD = int(os.environ.get("FLEET_CRED_REJECT_HOLD") or 900)    # a 401'd account stays out (s)
 

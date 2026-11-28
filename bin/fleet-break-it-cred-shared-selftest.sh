@@ -16,6 +16,9 @@
 #   cred-weekly-only    bin/fleet-cred-proxy.py rl_reading / used / pick_account (task CBSB): an
 #                       account with no 5-hour cap (Ultra) answers the weekly window only; its
 #                       reading is kept, so the pick leaves it before its week runs out
+#   cred-unread-starved bin/fleet-cred-proxy.py pick_account / PICK_UNKNOWN: a new session
+#                       goes to an account the proxy has no reading for before one it has read,
+#                       so a pool account no session ever touched is not starved forever
 #   cred-sep-codex-full bin/fleet-cred-proxy.py held / standing / limit_until + the default
 #                       home unpinned (issue #4606), bin/fleet-session-cred.sh mint / standing:
 #                       Codex forwards the original429 once; only future work skips a spent account
@@ -315,6 +318,33 @@ drill_cred_weekly_only() {
   grep -q '"ev": "pick".*"why": "full"' "$SB/log/alpha.log" || { WHY="no pick why=full in the log"; shared_down; return 1; }
   shared_down
   WHAT="上游只回周窗口（无 5h 头，Ultra）：${first} 周用到 90% 超过挑号上限，下一请求就换到 ${other}，没等 429"
+}
+
+# cred-unread-starved: readings live in the proxy's memory and come only from an
+# answer, so an account no session runs on is never read. Unread used to rank at
+# a fixed 50 %, and a read account's week ranks by its pace (used − week gone,
+# negative for most of a week): the read one won every new pick and the others
+# were never picked, never read — on 2026-11-28 three Max accounts in the pool,
+# every session on one, two idle all week. Now an unread account is tried first:
+# its first answer reads it, and the pace ranking takes over from there.
+drill_cred_unread_starved() {
+  CAP=10
+  local s1 s2 t0 first other
+  shared_up unreadstarved || return 1
+  printf '{"sk-ant-oat-a1":{"u7":40},"sk-ant-oat-a2":{"u7":40}}' > "$CD/accts.json"
+  s1=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --provider claude --sid s1 2>&1)
+  case "$s1" in fcp1.*) ;; *) WHY="mint failed: $s1"; shared_down; return 1 ;; esac
+  [ "$(cred_req "$s1" "$SB/r")" = 200 ] || { WHY="the first request: $(cat "$SB/r")"; shared_down; return 1; }
+  first=$(sed -n 's/.*sk-ant-oat-\(a[12]\).*/\1/p' "$SB/r"); [ "$first" = a1 ] && other=a2 || other=a1
+  t0=$(now)
+  s2=$(FLEET_CONF_DIR="$CA" bash "$BIN/fleet-cred-proxy.sh" mint --provider claude --sid s2 2>&1)
+  [ "$(cred_req "$s2" "$SB/r")" = 200 ] && grep -q "sk-ant-oat-$other" "$SB/r" \
+    || { WHY="a new session went to the read $first (week 40 %, pace negative) instead of the unread $other: $(cat "$SB/r")"; shared_down; return 1; }
+  [ "$(cred_req "$s1" "$SB/r")" = 200 ] && grep -q "sk-ant-oat-$first" "$SB/r" \
+    || { WHY="the first session left its account (its cache): $(cat "$SB/r")"; shared_down; return 1; }
+  SECS=$(since "$t0")
+  shared_down
+  WHAT="${first} 已读（周 40%），${other} 从没被用过：新会话先上没读数的 ${other}，一答就有读数；老会话留在 ${first}"
 }
 
 # cred-sep-codex-full (#4606, T972): Codex never replays current inference.
