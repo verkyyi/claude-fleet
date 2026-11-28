@@ -237,6 +237,14 @@ CRED_ENV = "FLEET_WORKER_CRED"
 CRED_PREFIX = "fwc1"
 CRED_TTL_S = 24 * 3600          # decision 7: at most 24h, renewed while the session lives
 CRED_RENEW_S = 3600
+# A credential past its exp still holds while its session's WRAPPER runs — known by
+# pid + start time (claims wrap / wst; a credential minted before they existed: the
+# calling pane's @session_wrap, started before the credential). No total age: a
+# long session's tool calls never die of the clock, and a pid reused after the
+# wrapper died starts later, so it is refused. A fresh server process (a reconnect,
+# the --call road) holds only the launch's credential — this is what keeps it good.
+WRAP_ENV = "FLEET_SESSION_WRAP"
+START_SLACK_S = 5               # ps / /proc start times are whole seconds
 CRED_FID_WAIT_S = 1.5           # a spawner stamps @fleet_id just after new-window
 HELD = {"cred": None}           # the credential this server acts with (renewed in place)
 CALLER = {"claims": None}       # the verified claims of the call being served
@@ -286,6 +294,50 @@ def b64d(text):
     return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
 
 
+def proc_start(pid):
+    """A process's start time (epoch seconds), or None (no such process / unreadable).
+    The same reader as bin/fleet-cred-proxy.py's (that one runs `python3 -I`)."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 1:
+        return None
+    try:    # Linux: field 22 of /proc/<pid>/stat, clock ticks after boot
+        with open("/proc/%d/stat" % pid) as fh:
+            ticks = int(fh.read().rsplit(")", 1)[1].split()[19])
+        with open("/proc/stat") as fh:
+            btime = next(int(line.split()[1]) for line in fh if line.startswith("btime "))
+        return btime + ticks // os.sysconf("SC_CLK_TCK")
+    except Exception:
+        pass
+    try:    # macOS / BSD
+        out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                             timeout=3, env=dict(os.environ, LC_ALL="C", LANG="C")).stdout
+        txt = " ".join(out.split())
+        return int(time.mktime(time.strptime(txt, "%a %b %d %H:%M:%S %Y"))) if txt else None
+    except Exception:
+        return None
+
+
+def cred_live(claims):
+    """(pid, start) of the running wrapper this credential belongs to, else None."""
+    if claims.get("wrap") and claims.get("wst") is not None:
+        st = proc_start(claims["wrap"])
+        ok = st is not None and abs(st - int(claims["wst"])) <= START_SLACK_S
+        return (int(claims["wrap"]), st) if ok else None
+    # minted before claims named the wrapper: the calling pane's, if it predates the credential
+    if not os.environ.get("TMUX") or not os.environ.get("TMUX_PANE"):
+        return None
+    try:
+        pid = int(pane_opt("#{@session_wrap}") or 0)
+    except (ValueError, ToolFault, OSError, subprocess.SubprocessError):
+        return None
+    st = proc_start(pid)
+    born = int(claims.get("born") or claims.get("iat") or 0)
+    return (pid, st) if st is not None and st <= born + START_SLACK_S else None
+
+
 def cred_sign(claims, key):
     body = CRED_PREFIX + "." + b64e(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode())
     return body + "." + b64e(hmac.new(key, body.encode(), hashlib.sha256).digest())
@@ -303,8 +355,10 @@ def cred_revoked(nonce):
     return any(line.split(" ", 1)[0] == nonce for line in lines)
 
 
-def cred_verify(cred, now=None):
-    """The claims of a credential that holds, else CredRefused with why (never the credential)."""
+def cred_verify(cred, now=None, live=None, check_exp=True):
+    """The claims of a credential that holds, else CredRefused with why (never the credential).
+    Past its exp it holds only when live(claims) proves its session runs (cred_live);
+    check_exp=False (a revoke) takes any credential this login signed."""
     parts = (cred or "").split(".")
     if len(parts) != 3 or parts[0] != CRED_PREFIX:
         raise CredRefused("credential is malformed")
@@ -318,10 +372,11 @@ def cred_verify(cred, now=None):
         raise CredRefused("credential signature does not verify (forged, or another login's)")
     if not isinstance(claims, dict) or claims.get("v") != 1 or not claims.get("fid") or not claims.get("nonce"):
         raise CredRefused("credential claims are incomplete")
-    if int(claims.get("exp", 0)) <= int(now if now is not None else time.time()):
-        raise CredRefused("credential expired")
     if cred_revoked(claims["nonce"]):
         raise CredRefused("credential was revoked (its session exited)")
+    if check_exp and int(claims.get("exp", 0)) <= int(now if now is not None else time.time()):
+        if not (live and live(claims)):
+            raise CredRefused("credential expired")
     return claims
 
 
@@ -370,38 +425,83 @@ def cred_mint():
         "key": both[1].strip(), "repo": row[0], "issue": row[1], "origin": row[2],
         "iat": now, "exp": now + CRED_TTL_S, "nonce": secrets.token_hex(12),
     }
+    # the session's wrapper (its pid + start time): the credential outlives its exp
+    # while THIS process runs (cred_live)
+    try:
+        wrap = int(os.environ.get(WRAP_ENV) or 0)
+    except ValueError:
+        wrap = 0
+    wst = proc_start(wrap) if wrap > 1 else None
+    if wst is not None:
+        claims.update(wrap=wrap, wst=wst)
     return cred_sign(claims, cred_key(create=True))
 
 
+def revoked_keep(line, now):
+    """A revoked-list line stays while its credential could still hold: until its exp,
+    or while the wrapper it names (`<nonce> <pid>:<start> <exp>`) still runs."""
+    f = line.split(" ")
+    if not f[-1].isdigit():
+        return False
+    if int(f[-1]) > now:
+        return True
+    if len(f) == 3 and ":" in f[1]:
+        pid, _, st = f[1].partition(":")
+        cur = proc_start(pid)
+        return cur is not None and st.isdigit() and abs(cur - int(st)) <= START_SLACK_S
+    return False
+
+
 def cred_revoke(cred):
-    claims = cred_verify(cred)
+    claims = cred_verify(cred, check_exp=False)   # an expired credential is revoked all the same
     path = revoked_path()
     now = int(time.time())
     keep = []
-    try:   # drop the entries whose credential has expired anyway
-        keep = [l for l in path.read_text().splitlines() if l.split(" ")[-1].isdigit() and int(l.split(" ")[-1]) > now]
+    try:   # drop the entries whose credential cannot hold anyway
+        keep = [l for l in path.read_text().splitlines() if revoked_keep(l, now)]
     except OSError:
         pass
-    keep.append("%s %d" % (claims["nonce"], int(claims["exp"])))
+    wrap, wst = claims.get("wrap"), claims.get("wst")
+    if not wrap or wst is None:     # an older credential: the revoking wrapper (it exports itself)
+        try:
+            wrap = int(os.environ.get(WRAP_ENV) or 0)
+        except ValueError:
+            wrap = 0
+        wst = proc_start(wrap) if wrap > 1 else None
+    who = "%d:%d" % (int(wrap), int(wst)) if wrap and wst is not None else "-"
+    keep.append("%s %s %d" % (claims["nonce"], who, int(claims["exp"])))
     tmp = path.with_name(".revoked.%d" % os.getpid())
     tmp.write_text("\n".join(keep) + "\n")
     os.replace(str(tmp), str(path))
     return claims
 
 
-def cred_renew():
-    """Re-sign the held credential with a fresh 24h, while it still holds (decision 7)."""
-    cred = HELD["cred"]
-    if not cred:
-        return
-    try:
-        claims = cred_verify(cred)
-    except ToolFault:
-        return
+def cred_resign(claims, proven=None):
+    """Hold `claims` again with a fresh 24h. `born` keeps the first issue time (an
+    older credential's wrapper must predate it); a wrapper just proven is named."""
     now = int(time.time())
+    claims = dict(claims)
+    claims.setdefault("born", claims.get("iat", now))
+    if proven and not claims.get("wrap"):
+        claims.update(wrap=proven[0], wst=proven[1])
     claims.update(iat=now, exp=now + CRED_TTL_S)
     HELD["cred"] = cred_sign(claims, cred_key())
     os.environ[CRED_ENV] = HELD["cred"]
+    return claims
+
+
+def cred_renew():
+    """Re-sign the held credential with a fresh 24h while it holds — past its exp too,
+    while its session's wrapper runs (decision 7; cred_live)."""
+    cred = HELD["cred"]
+    if not cred:
+        return
+    seen = {}
+    try:
+        claims = cred_verify(cred, live=lambda c: seen.setdefault("p", cred_live(c)))
+    except ToolFault:
+        return
+    cred_resign(claims, seen.get("p"))
 
 
 def renew_loop():
@@ -417,7 +517,8 @@ def identify():
     cred = HELD["cred"]
     if not cred:
         return None
-    claims = cred_verify(cred)
+    seen = {}
+    claims = cred_verify(cred, live=lambda c: seen.setdefault("p", cred_live(c)))
     if not os.environ.get("TMUX") or not os.environ.get("TMUX_PANE"):
         raise CredRefused("credential presented outside a fleet pane")
     here = fleet_label()
@@ -427,6 +528,8 @@ def identify():
     if fid != claims["fid"]:
         raise CredRefused("this pane's window (%s) is not the credential's session (%s)"
                           % (fid or "no @fleet_id", claims["fid"]))
+    if "p" in seen:     # held past its exp by its live wrapper: hold a fresh one from here on
+        cred_resign(claims, seen["p"])
     return claims
 
 

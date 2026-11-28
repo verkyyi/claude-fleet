@@ -262,6 +262,7 @@ FLEET_AUTHORITY_SEEN               handoff: a 看台's authority answer `<mode> 
 FLEET_AUTHORITY_FRESH_SECS         knob: how long one authority answer stands for a start's gate / finish (dash-raw-session.sh, 30; 0 = ask every time — T716)
 FLEET_TIMING_WHAT                  handoff: `session.node` for a start the hub sent this machine, so its clock (from the node's acceptance) is its own run (fleet_control.py → dash-raw-session.sh / fleet_timing_at, T716)
 FLEET_TIMING_READY_SECS            knob: how long a start's executor watches its window for t_ready (fleet_control.py, 120; 0 = never; issue #2238)
+FLEET_CRED_EXPIRY_WARN_SECS        knob: how close a session credential that renews only to FLEET_CRED_PROXY_RENEW_MAX_SECS (its wrapper unprovable) may come to that hard end before the doctor's `cred` row WARNs (2 days)
 FLEET_CRED_PROXY_START_SECS        knob: how long `fleet-cred-proxy.sh ensure` waits for the proxy to come up (30)
 FLEET_CRED_ROLLOUT_WAIT            knob: how long `fleet cred-proxy enable --machine` waits for the shared proxy to come up (75 s, #2134)
 FLEET_CRED_ROLLOUT_PROCS           seam: fleet-cred-rollout sandbox — a file of `<argv0>\t<argv+env>` rows instead of the process table (#2134)

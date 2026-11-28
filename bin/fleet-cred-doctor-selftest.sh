@@ -9,6 +9,7 @@
 #   B  trusted + reachable    → PASS, Claude 走 direct 直连（trusted + reachable）
 #   C  trusted + unreachable  → PASS, relay 经新加坡转发（trusted + unreachable）
 #   D  untrusted              → PASS, central 交给中心代理（untrusted (hub: untrusted)）
+#   W  a session minted with --wrap (its wrapper alive) → PASS 随包装进程续期、不设期限
 #   E  a hub pass the hub will not renew (500) → WARN 通行证续签失败
 #   F  the proxy is dead      → a client computer: INFO (fleet run starts it); a host
 #      (FLEET_HOST=1) with no machine proxy: FAIL, naming machine install (#4674)
@@ -114,6 +115,12 @@ expect "C trusted + unreachable" 0 PASS "Claude 走 relay 经新加坡转发（t
 echo untrusted > "$SB/trust"
 FLEET_CRED_PROXY=1 bash "$BIN/fleet-cred-proxy.sh" route --refresh >/dev/null 2>&1
 expect "D untrusted" 0 PASS "不可信（hub: untrusted）" "Claude 走 central 交给中心代理（untrusted (hub: untrusted) → central"
+
+# ── W: a live session's credential renews by its wrapper's identity, no end ────
+sleep 600 >/dev/null 2>&1 & WR=$!
+FLEET_CRED_PROXY=1 bash "$BIN/fleet-cred-proxy.sh" mint --account a1 --sid s-w --wrap "$WR" >/dev/null 2>&1
+expect "W a wrapped session" 0 PASS "1 个会话随包装进程续期、不设期限"
+kill "$WR" 2>/dev/null; wait "$WR" 2>/dev/null
 
 # ── E: a renewal the hub refuses with a 500 ──────────────────────────────────
 pass_due=$(python3 -c 'import base64, json, time; n = int(time.time())

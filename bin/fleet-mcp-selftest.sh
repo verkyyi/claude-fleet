@@ -471,6 +471,7 @@ for fmt in "\$@"; do :; done
 case "\$fmt" in
   '#{@fleet_id}') printf '%s\n' "\${FAKE_FID:-}" ;;
   '#{window_id}') printf '@1\n' ;;
+  '#{@session_wrap}') printf '%s\n' "\${FAKE_WRAP:-}" ;;
   '#{?@fleet_id,'*) printf '%s\n' "\${FAKE_FID:-issue-1809}" ;;
   '#{@repo}'*) printf 'acme/app\t1809\tissue-77\n' ;;
   *) exec "$WORK/tmux" "\$@" ;;
@@ -479,13 +480,13 @@ SH
 chmod +x "$G/sbin/tmux"
 FID=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
 gsrv() { # gsrv <out> — one stdio session as a pane of fleet `tf`, credential from $CRED
-  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_WORKER_CRED PATH="$G/sbin:$PATH" TMUX="${GTMUX:-1}" \
+  env -u CCQUOTA_FLEET -u FLEET_HUB_URL -u FLEET_WORKER_CRED -u FLEET_SESSION_WRAP PATH="$G/sbin:$PATH" TMUX="${GTMUX:-1}" \
     TMUX_PANE="${GPANE:-%1}" FLEET_CONF_DIR="$G/conf" FLEET_MCP_LOG="$G/calls.log" FAKE_FID="${PANE_FID-$FID}" \
     ${CRED:+FLEET_WORKER_CRED="$CRED"} python3 "$WORK/bin/fleet-mcp.py" > "$1"
 }
 gcred() { # gcred <action> — fleet-mcp.py --cred <action> as the pane, credential from $CRED
-  env -u FLEET_WORKER_CRED PATH="$G/sbin:$PATH" TMUX=1 TMUX_PANE=%1 FLEET_CONF_DIR="$G/conf" FAKE_FID="$FID" \
-    FLEET_CRED_FID_WAIT=0 ${CRED:+FLEET_WORKER_CRED="$CRED"} python3 "$WORK/bin/fleet-mcp.py" --cred "$1"
+  env -u FLEET_WORKER_CRED -u FLEET_SESSION_WRAP PATH="$G/sbin:$PATH" TMUX=1 TMUX_PANE=%1 FLEET_CONF_DIR="$G/conf" FAKE_FID="$FID" \
+    FLEET_CRED_FID_WAIT=0 ${CRED:+FLEET_WORKER_CRED="$CRED"} ${WRAP:+FLEET_SESSION_WRAP="$WRAP"} python3 "$WORK/bin/fleet-mcp.py" --cred "$1"
 }
 # py <code> [args] — run python with fleet-mcp.py imported as m (FLEET_CONF_DIR = the sandbox's)
 py() {
@@ -550,6 +551,52 @@ refused() { # refused <label> <expected text> — reads $G/r
 : > "$LOG"; : > "$G/calls.log"
 EXPIRED=$(py 'c = m.cred_verify(sys.argv[1]); c["exp"] = 1000; print(m.cred_sign(c, m.cred_key()))' "$CRED")
 call 80 spawn '{"issue":5}' | CRED=$EXPIRED gsrv "$G/r"; refused "an expired credential" "expired"
+
+# Past exp while the session's WRAPPER runs (a long session — a fresh server or the
+# --call road holds only the launch's credential): it holds, by the wrapper's pid +
+# start time, however old; the wrapper gone, or its pid reused, it does not.
+sleep 600 >/dev/null 2>&1 & JW=$!
+LIVE=$(CRED='' WRAP=$JW gcred mint) || fail "J: --cred mint with a wrapper failed"
+py 'c = m.cred_verify(sys.argv[1]); assert c["wrap"] == int(sys.argv[2]) and c["wst"] == m.proc_start(sys.argv[2]), c' "$LIVE" "$JW" \
+  || fail "J: the credential does not name its wrapper (pid + start time)"
+OLD=$(py 'c = m.cred_verify(sys.argv[1]); c.update(iat=c["iat"] - 40 * 86400, exp=c["iat"] - 39 * 86400); print(m.cred_sign(c, m.cred_key()))' "$LIVE")
+: > "$LOG"; : > "$G/calls.log"
+call 82 spawn '{"issue":5}' | CRED=$OLD gsrv "$G/lv"
+[ "$(verdict "$G/lv" 82)" = ok ] || fail "J: a 39-day-expired credential whose wrapper runs was refused" "$(cat "$G/lv")"
+grep -q "tool=spawn via=cred who=11111111-2222-4333-8444-555555555555/$FID" "$G/calls.log" \
+  || fail "J: the live-wrapper call is not logged as the session" "$(cat "$G/calls.log")"
+py 'm.HELD["cred"] = sys.argv[1]; m.cred_renew(); c = m.cred_verify(m.HELD["cred"])
+assert c["exp"] > m.time.time() + 23 * 3600 and c["nonce"] == m.cred_verify(sys.argv[1], check_exp=False)["nonce"], c' "$OLD" \
+  || fail "J: renewal gave up on an expired credential whose wrapper runs"
+ok "J past exp, wrapper alive: holds 39 days on (no total age), renewal re-signs it"
+sleep 600 >/dev/null 2>&1 & JR=$!
+REUSED=$(py 'c = m.cred_verify(sys.argv[1]); c.update(wrap=int(sys.argv[2]), wst=m.proc_start(sys.argv[2]) - 3600, exp=1000); print(m.cred_sign(c, m.cred_key()))' "$LIVE" "$JR")
+: > "$LOG"; : > "$G/calls.log"
+call 80 spawn '{"issue":5}' | CRED=$REUSED gsrv "$G/r"; refused "an expired credential whose wrapper pid now belongs to a later process" "expired"
+kill "$JR" 2>/dev/null; wait "$JR" 2>/dev/null
+# an older credential (no wrap claim): the pane's @session_wrap, if it predates the credential
+NOW_LEGACY=$(py 'c = m.cred_verify(sys.argv[1]); [c.pop(k) for k in ("wrap", "wst")]; c.update(iat=int(m.time.time()), exp=1000); print(m.cred_sign(c, m.cred_key()))' "$LIVE")
+call 83 spawn '{"issue":5}' | CRED=$NOW_LEGACY FAKE_WRAP=$JW gsrv "$G/lg"
+[ "$(verdict "$G/lg" 83)" = ok ] || fail "J: an older expired credential whose pane's wrapper predates it was refused" "$(cat "$G/lg")"
+: > "$LOG"; : > "$G/calls.log"
+HOUR_OLD=$(py 'c = m.cred_verify(sys.argv[1]); [c.pop(k) for k in ("wrap", "wst")]; c.update(iat=int(m.time.time()) - 3600, exp=1000); print(m.cred_sign(c, m.cred_key()))' "$LIVE")
+call 80 spawn '{"issue":5}' | CRED=$HOUR_OLD FAKE_WRAP=$JW gsrv "$G/r"; refused "an older credential minted before the pane's wrapper started" "expired"
+ok "J an older credential: held by the pane's wrapper only when that process predates it"
+# revoked at exit though expired; the line outlives exp while the wrapper runs
+CRED=$OLD WRAP=$JW gcred revoke || fail "J: --cred revoke refused an expired credential"
+call 80 spawn '{"issue":5}' | CRED=$OLD gsrv "$G/r"; refused "an expired, revoked credential whose wrapper runs" "revoked"
+py 'import json; n = json.loads(m.b64d(sys.argv[1].split(".")[1]))["nonce"]
+line = next(l for l in m.revoked_path().read_text().splitlines() if l.startswith(n))
+assert m.revoked_keep(line, int(m.time.time())), line
+assert not m.revoked_keep("%s 1:1 1000" % n, int(m.time.time())) and not m.revoked_keep("%s 1000" % n, int(m.time.time()))' "$OLD" \
+  || fail "J: the revoked line of a live wrapper is not kept past its exp"
+kill "$JW" 2>/dev/null; wait "$JW" 2>/dev/null
+sleep 600 >/dev/null 2>&1 & JD=$!
+GONE=$(CRED='' WRAP=$JD gcred mint) || fail "J: --cred mint with a wrapper failed"
+GONE=$(py 'c = m.cred_verify(sys.argv[1]); c["exp"] = 1000; print(m.cred_sign(c, m.cred_key()))' "$GONE")
+kill "$JD" 2>/dev/null; wait "$JD" 2>/dev/null
+: > "$LOG"; : > "$G/calls.log"
+call 80 spawn '{"issue":5}' | CRED=$GONE gsrv "$G/r"; refused "an expired credential whose wrapper has exited" "expired"
 FORGED=$(env FLEET_CONF_DIR="$G/other" python3 -c "import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location('m', '$WORK/bin/fleet-mcp.py'); m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -588,7 +635,7 @@ ok "J no credential: runs as before, logged via=marker"
 
 # The credential is in no file the run left behind — the call log, the key dir,
 # the revoked list, every tmux option set, every reply.
-for c in "$CRED" "$EXPIRED"; do
+for c in "$CRED" "$EXPIRED" "$LIVE" "$OLD"; do
   hits=$(grep -rlF "${c##*.}" "$WORK" 2>/dev/null)
   [ -z "$hits" ] || fail "J: the credential leaked into a file" "$hits"
 done

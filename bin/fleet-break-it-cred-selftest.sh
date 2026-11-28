@@ -15,6 +15,8 @@
 #                                                   probeDue (go test TestProbeOnce) — issue #4207
 #   cred-session-expire                             bin/fleet-cred-proxy.py (hub pass renewal, live fcp1),
 #                                                   bin/fleet-session-cred.sh (--wrap)
+#   cred-session-week                               bin/fleet-cred-proxy.py (live_session: the wrapper's
+#                                                   pid + start time, live-meta.json; no total age)
 #   cred-pass-lapsed                                bin/fleet-cred-proxy.py (HubPasses: a lapsed pass renewed
 #                                                   on the next request; HUB_RENEW_GRACE)
 #   cred-relay-hub-restart                          extras/cred-relay/fleet-relay-check.py (the relay's
@@ -547,6 +549,34 @@ drill_cred_session_expire() {
   code=$(cred_req "$tok" "$CD/r4")
   [ "$code" = 401 ] || { WHY="its session is over, yet the expired fcp1 still works ($code)"; return 1; }
   WHAT="会话中途凭据到期：入口通行证由代理续签（会话还拿着旧的照常 200），本地会话凭据随会话续期；会话结束即失效"
+}
+
+# cred-session-week: a session alive past FLEET_CRED_PROXY_RENEW_MAX_SECS (the old
+# total-age cap: every session went 401 on day 8) keeps its fcp1 while its wrapper
+# runs — known by pid + start time, so the wrapper's pid handed to a LATER process
+# (the wrapper SIGKILLed, no revoke) is refused. Scaled: stamp 2s, cap 1s.
+drill_cred_session_week() {
+  CAP=20
+  cred_rig week trusted reachable || return 1
+  local tok code t0 w r
+  export FLEET_CRED_PROXY_TTL=2 FLEET_CRED_PROXY_RENEW_MAX_SECS=1
+  cred_serve || { unset FLEET_CRED_PROXY_TTL FLEET_CRED_PROXY_RENEW_MAX_SECS; return 1; }
+  unset FLEET_CRED_PROXY_TTL FLEET_CRED_PROXY_RENEW_MAX_SECS
+  sleep 600 & w=$!; printf '%s\n' "$w" >> "$WORK/cred-pids"
+  tok=$(cred_ctl mint --account a1 --sid s-week --wrap "$w" 2>&1) || { WHY="mint --wrap: $tok"; return 1; }
+  sleep 7     # past its stamp AND past stamp + RENEW_MAX, and later than the mint + START_SLACK
+  t0=$(now)
+  code=$(cred_req "$tok" "$CD/r1")
+  SECS=$(since "$t0")
+  [ "$code" = 200 ] || { WHY="a session whose wrapper still runs, past stamp + RENEW_MAX: wanted 200, got $code $(cat "$CD/r1")"; return 1; }
+  # the wrapper's pid now names a process that started after the mint (a reused pid)
+  sleep 600 & r=$!; printf '%s\n' "$r" >> "$WORK/cred-pids"
+  python3 -c 'import json, sys; p = sys.argv[1]; d = json.load(open(p)); d["s-week"] = int(sys.argv[2]); json.dump(d, open(p, "w"))' \
+    "$CD/cred-proxy/live.json" "$r"
+  code=$(cred_req "$tok" "$CD/r2")
+  [ "$code" = 401 ] || { WHY="the wrapper's pid reused by a later process kept the credential alive ($code)"; return 1; }
+  kill "$w" "$r" 2>/dev/null; wait "$w" "$r" 2>/dev/null
+  WHAT="会话活过「盖章 + 续期上限」：包装进程（pid + 启动时间）还在就 200，不设总寿命；pid 被晚启动的进程复用即 401"
 }
 
 # cred-sep-sudo-root (issue #2135): the operator types what fleet-credsep.sh

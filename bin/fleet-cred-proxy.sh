@@ -295,7 +295,7 @@ case "$cmd" in
     rc=$(python3 -I "$PY" --state "$STATE" route --provider claude --json 2>/dev/null)
     rx=$(python3 -I "$PY" --state "$STATE" route --provider codex --json 2>/dev/null)
     FCD_MS=$(python3 -I "$BIN/fleet-credsep.py" machine status --json 2>/dev/null) \
-    FCD_ST="$st" FCD_RC="$rc" FCD_RX="$rx" FCD_HOST="${FLEET_HOST:-0}" python3 -I - <<'DOC'
+    FCD_EXPIRY_WARN="${FLEET_CRED_EXPIRY_WARN_SECS:-172800}" FCD_ST="$st" FCD_RC="$rc" FCD_RX="$rx" FCD_HOST="${FLEET_HOST:-0}" python3 -I - <<'DOC'
 import json, os, time
 def j(k):
     try:
@@ -344,8 +344,27 @@ if rn.get("err") and rn.get("last_err", 0) >= rn.get("last_ok", 0):
     parts.append("通行证续签失败 %d 次，最近 %d 秒前：%s"
                  % (rn["err"], int(time.time() - rn["last_err"]), rn.get("err_why", "")))
 else:
-    parts.append("续签 正常（入口通行证 %d 次 · 本机会话凭据 %d 个续期 · 持有 %d 张）"
-                 % (rn.get("ok", 0), rn.get("local", 0), st.get("hub_passes", 0)))
+    parts.append("续签 正常（入口通行证 %d 次 · 本机会话凭据 %d 个续期 · 持有 %d 张%s）"
+                 % (rn.get("ok", 0), rn.get("local", 0), st.get("hub_passes", 0),
+                    " · %d 个会话随包装进程续期、不设期限" % (st.get("local_creds") or {}).get("proven", 0)
+                    if (st.get("local_creds") or {}).get("proven") else ""))
+# the local session credentials: one that renews by its wrapper's identity has no
+# end; one whose wrapper cannot be proven (no start time readable) still ends at
+# FLEET_CRED_PROXY_RENEW_MAX_SECS past its stamp — said before it does, never a
+# surprise 401 (the session cannot swap the credential: it must be reopened)
+lc = st.get("local_creds") or {}
+if lc.get("unproven"):
+    hard = int(lc.get("hard_exp") or 0)
+    left = hard - time.time() if hard else 0
+    warn = int(os.environ.get("FCD_EXPIRY_WARN") or 2 * 86400)
+    when = ("最早 %.1f 小时后" % (left / 3600) if left > 0 else "已过") if hard else "时间未知"
+    msg = "%d 个会话凭据认不出包装进程（读不出启动时间），只能续到盖章后 %d 天，%s硬过期 —— 到期前 fleet-migrate.sh 重开" % (
+        lc["unproven"], int(lc.get("max_secs") or 0) // 86400, when)
+    if not hard or left < warn:
+        lv = "WARN"
+        notes.append(msg)
+    else:
+        parts.append(msg)
 # the usage report (issue #3407): a login whose usage never reaches the hub
 # meters nobody, and used to say so nowhere
 bg = st.get("budget") or {}
