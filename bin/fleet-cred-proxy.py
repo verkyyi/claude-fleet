@@ -3445,7 +3445,7 @@ def rl_reading(provider, headers, now=None):
         # primary is the short window; trust the minutes when both say otherwise
         if wins[0][0] is not None and wins[1][0] is not None and wins[0][0] > wins[1][0]:
             wins.reverse()
-        (m5, p5, r5), (m7, p7, r7) = wins
+        (w5, p5, r5), (w7, p7, r7) = wins
     else:
         k5 = "anthropic-ratelimit-unified-5h-utilization"
         p5 = _num(h.get(k5))
@@ -3462,7 +3462,7 @@ def rl_reading(provider, headers, now=None):
     rs = lambda r: str(int(r)) if r is not None and r > 0 else "-"
     out = {"rl5h": pc(p5), "rl7d": pc(p7), "rl_reset5": rs(r5), "rl_reset7": rs(r7)}
     if provider == "codex":   # each window's length, for the hub's copy (its pick checks the windows)
-        for k, m in (("win5", m5), ("win7", m7)):
+        for k, m in (("win5", w5), ("win7", w7)):
             if m is not None and m > 0:
                 out[k] = str(int(m))
     return out
