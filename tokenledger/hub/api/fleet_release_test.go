@@ -309,6 +309,33 @@ func TestReleasePruneKeepsNewestAndStable(t *testing.T) {
 	}
 }
 
+// No Keep set: the store keeps ReleaseKeep (3) — the stable chain from the
+// pointer back — and the stable, though the oldest, is never pruned.
+func TestReleasePruneDefaultKeepsThree(t *testing.T) {
+	if ReleaseKeep != 3 {
+		t.Fatalf("ReleaseKeep %d, want 3", ReleaseKeep)
+	}
+	r := newReleaseRig(t)
+	must(t, r.rs.Source.Refresh(context.Background())) // stable = shaA
+	files := map[string][]byte{"bin/x": []byte("x")}
+	must(t, r.rs.publish(shaA, files, nil, time.Now().Add(-100*time.Hour), release.Seal{}))
+	var shas []string
+	for i := 0; i < 6; i++ {
+		sha := fmt.Sprintf("%040d", i+1)
+		shas = append(shas, sha)
+		must(t, r.rs.publish(sha, files, nil, time.Now().Add(-time.Duration(6-i)*time.Hour), release.Seal{}))
+	}
+	r.rs.prune()
+	if !r.rs.Has(shaA) {
+		t.Error("the current stable was pruned")
+	}
+	for i, sha := range shas {
+		if want := i >= 3; r.rs.Has(sha) != want {
+			t.Errorf("release %d kept=%v, want %v", i, r.rs.Has(sha), want)
+		}
+	}
+}
+
 // No store: every release route is a 404 — the hub as before.
 func TestReleaseOffIs404(t *testing.T) {
 	s := &Server{}

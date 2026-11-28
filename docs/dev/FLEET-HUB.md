@@ -602,7 +602,8 @@ pinned installer in `CCQUOTA_FLEET_RELEASE_ARTIFACTS` (Claude Code, Codex), a
 sha256 for each in `manifest.json` and an ed25519 signature over it with
 `CCQUOTA_FLEET_RELEASE_KEY` (its own Secret; `ccquota release keygen --out F`).
 Kept in `CCQUOTA_FLEET_RELEASE_DIR` (the cluster's OSS bucket, mounted), newest
-10, the current stable never pruned. Which release is stable is the store's own
+`CCQUOTA_FLEET_RELEASE_KEEP` (default 3; unset, not a number or < 1 = 3 — 10
+filled the hub's disk on 2026-11-26), the current stable never pruned. Which release is stable is the store's own
 pointer `<dir>/stable` (`{"sha","seq"}`, one rename), moved only once that release
 is built and **sealed**: every stable carries `prev` (the stable it replaced) and
 `seq` (+1 per move — a rollback is a new move) under the signature, so a machine's

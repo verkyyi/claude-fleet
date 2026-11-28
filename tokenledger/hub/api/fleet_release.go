@@ -37,7 +37,8 @@ import (
 // Claude Code / Codex installers the operator pinned (the artifacts dir), a
 // sha256 for each and its ed25519 signature over the lot. Kept on the hub's
 // volume — the cluster's OSS bucket mounted, in production — newest
-// ReleaseKeep (10), never the current stable.
+// Keep (CCQUOTA_FLEET_RELEASE_KEEP, default ReleaseKeep = 3), never the
+// current stable.
 //
 //	GET /v1/fleet/release/key                   the signing public key
 //	GET /v1/fleet/release/artifacts             the artifact names a build now carries
@@ -75,8 +76,10 @@ import (
 // every stable release carries its place on that chain under the signature:
 // prev (the stable it replaced) and seq (+1 per move).
 
-// ReleaseKeep is how many releases the store keeps.
-const ReleaseKeep = 10
+// ReleaseKeep is how many releases the store keeps when Keep is unset
+// (CCQUOTA_FLEET_RELEASE_KEEP). A release carries every pinned installer, so
+// each is GBs: 10 filled the hub's disk on 2026-11-26 and evicted its pods.
+const ReleaseKeep = 3
 
 // releaseBuildTime bounds one build (a GitHub tarball + the copies).
 const releaseBuildTime = 8 * time.Minute // room for a Claude Code fetch (claude-fleet#2631)
@@ -96,7 +99,7 @@ type ReleaseStore struct {
 	Platforms     []string           // <os>-<arch> a release must carry release.json's pins for (default release.DefaultPlatforms)
 	NPMRegistries []string           // where a missing Claude Code is fetched from (default DefaultNPMRegistries)
 	Client        *http.Client       // the fetches' client (tests); nil = one per call
-	Keep          int                // default ReleaseKeep
+	Keep          int                // CCQUOTA_FLEET_RELEASE_KEEP; <1 = ReleaseKeep
 	Publish       *PublishAuth       // who may POST …/publish (claude-fleet#2772); nil = the route is off
 	// OnPromote runs (in its own goroutine) each time the stable pointer moves
 	// — Server.BroadcastRelease tells every node at once (claude-fleet#3146).

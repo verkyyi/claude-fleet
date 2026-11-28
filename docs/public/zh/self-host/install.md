@@ -98,6 +98,7 @@ docker run --rm --user "$(id -u)" -v "$PWD:/out" --entrypoint ccquota \
 
 | 键 | 说明 |
 |---|---|
+| `CCQUOTA_FLEET_RELEASE_KEEP` | 升级包留几个（含当前 stable，stable 永不删）；不设、不是数字或小于 1 都按 3。每个包几 G，别留太多 |
 | `CCQUOTA_DB_URL` | 用 Postgres 而不是 SQLite：`postgres://用户:密码@主机:5432/库?sslmode=require` |
 | `CCQUOTA_FLEET_UPSTREAM_HUB` | 跟另一个入口（例如官方入口）发的版本走，不问 GitHub；要和 `CCQUOTA_FLEET_RELEASE_DIR`、`CCQUOTA_FLEET_RELEASE_ROOT` 一起设。见 [§4.3](#43-自己决定跟哪一版) |
 | `CCQUOTA_FLEET_STABLE_REPO` | 去 GitHub 跟哪个仓库的 `stable`；**只有设了才问 GitHub**，不设就不问。见 [§4.3](#43-自己决定跟哪一版) |

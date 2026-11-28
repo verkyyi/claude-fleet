@@ -98,6 +98,7 @@ Optional:
 
 | Key | Notes |
 |---|---|
+| `CCQUOTA_FLEET_RELEASE_KEEP` | How many upgrade packages to keep (the current stable included and never deleted); unset, not a number or below 1 means 3. Each package is several GB, so keep few |
 | `CCQUOTA_DB_URL` | Postgres instead of SQLite: `postgres://user:password@host:5432/db?sslmode=require` |
 | `CCQUOTA_FLEET_UPSTREAM_HUB` | Follow another hub's releases (the official hub, say) instead of GitHub; set together with `CCQUOTA_FLEET_RELEASE_DIR` and `CCQUOTA_FLEET_RELEASE_ROOT`. See [§4.3](#43-choosing-which-version-to-follow) |
 | `CCQUOTA_FLEET_STABLE_REPO` | Whose `stable` to look up on GitHub; **GitHub is asked only when this is set**. See [§4.3](#43-choosing-which-version-to-follow) |

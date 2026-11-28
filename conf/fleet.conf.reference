@@ -2722,6 +2722,10 @@ FLEET_GLOBAL_MAX_SESSIONS=0
 #                                 (unset = no node releases, machines never update)
 #   CCQUOTA_FLEET_RELEASE_DIR     where releases are kept · 成对: required once
 #                                 RELEASE_KEY is set (the hub refuses to start)
+#   CCQUOTA_FLEET_RELEASE_KEEP    how many releases the store keeps, the stable
+#                                 chain first · 可选 (unset, not a number or
+#                                 < 1 = 3; the current stable and a release
+#                                 being built / signed are never pruned)
 #   CCQUOTA_FLEET_RELEASE_NPM     npm registries a release's pinned Claude Code
 #                                 is fetched from, space-separated, tried in
 #                                 order · 可选 (unset = registry.npmjs.org, then
